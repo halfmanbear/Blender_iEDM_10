@@ -1,51 +1,90 @@
-EDM model files - Blender Import/(Export) Addon
-===============================================
+# EDM model files – Blender Import Addon
 
-This is a **HIGHLY EXPERIMENTAL**, totally **UNOFFICIAL** attempt to build a
-blender addon to allow importing/exporting of `.EDM` model files, as used in
-the flight simulator DCS world. It has been engineered by careful studying of
-the binary file format, intuition, research, much guesswork, and many, many
-crashes of the model viewer.
+Designed to work with Blender 4.5 LTS: https://www.blender.org/download/releases/4-5/
 
-Firstly, an important note:
+Designed to work in conjunction with the official Eagle Dynamics  
+`io_scene_edm` (exporter) plugin for Blender version 259871:  
+https://mods.eagle.ru/blender_plugin/io_scene_edm-259871.zip
+Press `n` in blender to access the official `EDM Export` Sidebar tab where you can access the Object Properties menu.
 
-> **This tool may only be used for private purposes and may in no way be used 
-> for extracting models which may directly or indirectly be used for commercial
-> gain or promotion of any commercial product i.a games, films, media, or artwork.**
+This is a **HIGHLY EXPERIMENTAL**, totally **UNOFFICIAL** Blender addon to import  
+`.EDM` model files as used by the flight simulator **DCS World**.
 
-e.g. it should be obvious that this is for modding for DCS world and any
-intellectual property of ED *remains* the intellectual property of ED.
+The importer has been developed through careful study of the EDM binary format,  
+comparison against reference `.blend` outputs generated via the official exporter,  
+reverse-engineering of exporter-side behavior, and extensive automated testing.
 
-In its current state, it allows simple importing functionality whilst the fine
-details of the file structure are worked out, and basic exporting. Much of the
-data is reasonably easy to interpret, but translating the concepts to Blender
-is still a WIP. Also, there may be advanced modelling features used in DCS
-world modules that the author does not own, but a universal importer is less a
-goal than understanding the file format well enough to build a simple
-exporter.
+While the EDM file format is now largely understood, the translation of EDM scene  
+semantics into Blender is still under active development and refinement.  
+Some behaviors exhibited by the official exporter and the resulting reference `.blend` files  
+rely on internal heuristics and exporter-side knowledge that are **not fully encoded in the EDM v10 format itself**  
+(e.g. original mesh naming).
 
-What Works
-----------
+## Legal & Usage Disclaimer
 
-- Parsing and reading raw data for every .edm file included in DCS world (this
-  is reading only, not importing into blender)
-- Basic importing of geometry with diffuse texture layers - textures are
-  assumed to be in the same folder or a subfolder named 'textures'
-- Importing simple rotation, translation and visibility animations
-- Connectors, and UI integration to mark empties as such
-- Exporting basic meshes with simple animations and single diffuse textures
+This project is an **unofficial, third-party importer** for `.EDM` files used by **DCS World** and is **not affiliated with, endorsed by, or supported by Eagle Dynamics** in any way.
 
-What Doesn't Work
------------------
-- Exporting anything in a hierarchy is WIP and really fails badly
-- Scale animation, and non-quaternion rotation animation isn't exported
-- Bone-based animations are not handled at all
-- Multiple argument animations per object - decisions on the best way to 
-  represent this in Blender need to be made (NLA? Custom Action attributes?)
-- Complex translation of material layers, including specular, bump maps etc
-- Not all geometry ends up properly placed when importing
+All `.EDM` files, models, textures, and related assets from DCS World remain the  
+**intellectual property of Eagle Dynamics and/or their respective rights holders** and are subject to the DCS World End User License Agreement (EULA).
 
-Further Information
--------------------
-For further information and installation instructions, please see the
-documentation at https://ndevenish.github.io/Blender_ioEDM/
+This tool is intended solely for:
+
+- Personal, private use  
+- Mod development and technical research for DCS World  
+- **Preservation, maintenance, and future-proofing of player-created mods and user files** (including community-created content that may otherwise become unusable in future DCS releases)  
+- Diagnostics, debugging, and learning purposes  
+
+**You may not use this tool or any extracted assets for:**
+
+- Commercial purposes  
+- Redistribution of proprietary Eagle Dynamics assets  
+- Use in other games, engines, films, media, or artwork  
+- Any activity that violates the DCS World EULA or applicable copyright law  
+
+There is currently **no official `.EDM` importer provided by Eagle Dynamics**.  
+This project exists to support modding workflows, long-term preservation of community-created content, and technical understanding of the format, but it cannot grant any rights to use or redistribute proprietary content.
+
+If you are creating mods for DCS World, you are responsible for ensuring that your usage complies with Eagle Dynamics’ terms and the permissions of any third-party asset creators.
+
+When in doubt: **do not extract, convert, or reuse assets you do not have explicit permission to use.**
+
+---
+
+## What Works
+
+- Parsing and reading raw data from EDM v10 files  
+- Importing visual geometry 
+- Importing full object hierarchies (empties, armatures, mesh parenting)  
+- Accurate reconstruction of:
+  - World and local transforms (location, rotation, scale)
+  - Animation controller nodes (rotation, translation, scale, visibility)
+- Correct handling of split render nodes and vertex buffer compaction  
+- Material and shader reconstruction using the official ED shader node types  
+- Multi-UV channel support (including baked lightmaps where present)  
+- Headless import parity testing against reference `.blend` files generated by the official exporter  
+
+---
+
+## Known Limitations
+
+- **Exact original mesh object names cannot be recovered** from EDM v10 alone.  
+  The official exporter strips this information, and reconstructed names rely on importer-side heuristics.
+- Quad reconstruction from triangulated EDM geometry is heuristic-based and may not be 100% deterministic.
+- Some advanced exporter-side conventions are inferred and may not yet be perfectly matched in all edge cases.
+- Bone orientation heuristics are applied to improve visual parity but may differ in rare skeletal setups.
+
+---
+
+## What Is Still In Progress
+
+- Final refinement of quad-merging heuristics for perfect topology parity  
+- Edge-case naming consistency for generic Blender object names  
+- Further validation against less common EDM feature combinations  
+- Continued documentation of EDM format behavior and importer design decisions  
+
+---
+
+## Further Information
+
+For installation instructions and technical documentation, see:  
+https://ndevenish.github.io/Blender_ioEDM/

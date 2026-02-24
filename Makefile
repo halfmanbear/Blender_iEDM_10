@@ -1,5 +1,5 @@
 all:
 
 zip:
-	rm io_EDM.zip
-	zip -r io_EDM.zip io_EDM -x '*/__pycache__/*'
+	rm iEDM_10.zip
+	zip -r iEDM_10.zip iEDM_10 -x '*/__pycache__/*'

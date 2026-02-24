@@ -6,5 +6,5 @@ EDMENV
 .DS_Store
 tests/*.png
 *.blend1
-io_EDM.zip
+iEDM_10.zip
 docs/_build
