@@ -1,8 +1,3 @@
-
-
-# from .typereader import Property, allow_properties, reads_type
-# from collections import namedtuple
-
 from .typereader import reads_type
 from .typereader import get_type_reader as _tr_get_type_reader
 from .basereader import BaseReader
@@ -116,7 +111,7 @@ class EDMFile(object):
     self.version = reader.read_ushort()
     assert self.version in [8, 10], "Unexpected .EDM file version = {}".format(self.version)
     if self.version == 10:
-      print("Warning: Version 10 not as well understood")
+      print("Warning: Version 10 in Alpha")
     reader.version = self.version
 
     if reader.v10:
@@ -199,7 +194,6 @@ class EDMFile(object):
       if not tail_bytes:
         print(f"Tail parse: no remaining bytes at {tail_start}")
       if tail_bytes:
-        import struct
         floats = struct.unpack("<{}f".format(len(tail_bytes)//4), tail_bytes[:len(tail_bytes)//4*4])
         mats = []
         for i in range(0, len(floats)-15, 16):
@@ -572,27 +566,42 @@ class ArgAnimationNode(Node, AnimatingNode):
     return self
 
   def write(self, stream):
-    super(ArgAnimationNode, self).write(stream)
-    self.base.write(stream)
-    # Write the positional animation data
-    stream.write_uint(len(self.posData))
-    for arg, keyframes in self.posData:
-      stream.write_uint(arg)
-      stream.write_uint(len(keyframes))
-      for frame in keyframes:
-        stream.write_double(frame.frame)
-        stream.write_vec3d(frame.value)
-
-    stream.write_uint(len(self.rotData))
-    for arg, keyframes in self.rotData:
-      stream.write_uint(arg)
-      stream.write_uint(len(keyframes))
-      for frame in keyframes:
-        stream.write_double(frame.frame)
-        stream.write_quaternion(frame.value)
-
-    stream.write_uint(len(self.scaleData))
-    assert not self.scaleData, "Not implemented"
+      super(ArgAnimationNode, self).write(stream)
+      self.base.write(stream)
+      # Position args
+      stream.write_uint(len(self.posData))
+      for arg, keyframes in self.posData:
+          stream.write_uint(arg)
+          stream.write_uint(len(keyframes))
+          for k in keyframes:
+              stream.write_double(k.frame)
+              stream.write_vec3d(k.value)
+      # Rotation args
+      stream.write_uint(len(self.rotData))
+      for arg, keyframes in self.rotData:
+          stream.write_uint(arg)
+          stream.write_uint(len(keyframes))
+          for k in keyframes:
+              stream.write_double(k.frame)
+              stream.write_quaternion(k.value)
+      # Scale args (matches read: (arg, (keys4, keys3)))
+      stream.write_uint(len(self.scaleData))
+      for arg, (keys4, keys3) in self.scaleData:
+          stream.write_uint(arg)
+          # First set: 4-component scale keys
+          stream.write_uint(len(keys4))
+          for k in keys4:
+              stream.write_double(k.frame)
+              # ScaleKey.read(stream, 4) -> 4 doubles
+              for v in k.value:
+                  stream.write_double(v)
+          # Second set: 3-component scale keys
+          stream.write_uint(len(keys3))
+          for k in keys3:
+              stream.write_double(k.frame)
+              # ScaleKey.read(stream, 3) -> 3 doubles
+              for v in k.value:
+                  stream.write_double(v)
 
 
   def audit(self):
@@ -711,7 +720,7 @@ class PositionKey(object):
   def __repr__(self):
     return "Key(frame={}, value={})".format(self.frame, repr(self.value))
 
-@reads_type("model::Key<key::SCALE>")
+#@reads_type("model::Key<key::SCALE>")
 class ScaleKey(object):
   @classmethod
   def read(cls, stream, entrylength):
