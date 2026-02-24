@@ -24,15 +24,24 @@ class PropertiesSet(OrderedDict):
   def write(self, writer):
     writer.write_uint(len(self))
     for key, value in self.items():
-      if type(value) == float:
+      if isinstance(value, bool):
+        # bool is a subclass of int; write as uint to avoid misclassification
+        writer.write_string("model::Property<unsigned int>")
+        writer.write_string(key)
+        writer.write_uint(int(value))
+      elif isinstance(value, float):
         writer.write_string("model::Property<float>")
         writer.write_string(key)
         writer.write_float(value)
-      elif type(value) == int:
+      elif isinstance(value, int):
         writer.write_string("model::Property<unsigned int>")
         writer.write_string(key)
         writer.write_uint(value)
-      elif type(value) == Vector:
+      elif isinstance(value, str):
+        writer.write_string("model::Property<const char*>")
+        writer.write_string(key)
+        writer.write_string(value)
+      elif isinstance(value, Vector):
         typeName = "model::Property<osg::Vec{}f>".format(len(value))
         writer.write_string(typeName)
         writer.write_string(key)

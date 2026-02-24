@@ -94,6 +94,7 @@ class EDMFile(object):
         self._read(reader)
       except Exception:
         print("ERROR at {}".format(reader.tell()))
+        reader.close()
         raise
     else:
       self.version = version
@@ -111,7 +112,7 @@ class EDMFile(object):
     self.version = reader.read_ushort()
     assert self.version in [8, 10], "Unexpected .EDM file version = {}".format(self.version)
     if self.version == 10:
-      print("Warning: Version 10 in Alpha")
+      logger.info("Reading EDM version 10 file")
     reader.version = self.version
 
     if reader.v10:
@@ -150,7 +151,7 @@ class EDMFile(object):
 
     # Read the renderable objects
     objects = _read_main_object_dictionary(reader)
-    print(f"DEBUG: EDM object categories: {list(objects.keys())}")
+    logger.debug("EDM object categories: %s", list(objects.keys()))
     self.connectors = objects.get("CONNECTORS", [])
     self.shellNodes = objects.get("SHELL_NODES", [])
     self.lightNodes = objects.get("LIGHT_NODES", [])
@@ -192,7 +193,7 @@ class EDMFile(object):
       # Read all remaining bytes directly from the stream.
       tail_bytes = reader.stream.read()
       if not tail_bytes:
-        print(f"Tail parse: no remaining bytes at {tail_start}")
+        logger.debug("Tail parse: no remaining bytes at %d", tail_start)
       if tail_bytes:
         floats = struct.unpack("<{}f".format(len(tail_bytes)//4), tail_bytes[:len(tail_bytes)//4*4])
         mats = []
@@ -281,7 +282,7 @@ class EDMFile(object):
       _index[rn.forTypeName] += 1
       try:
         _index += rn.audit()
-      except:
+      except Exception:
         raise RuntimeError("Trouble reading audit from {}".format(type(rn)))
 
     return _index
@@ -946,7 +947,7 @@ class RenderNode(BaseNode):
       """Returns an array of renderNode objects. If there is no splitting to be
       done, it will just return [self]. Otherwise, each entry is to be counted
       as a separate renderNode object."""
-      print(f"DEBUG: Splitting RenderNode {self.name}")
+      logger.debug("Splitting RenderNode %s", self.name)
 
       if self.parentData is None:
         raise RuntimeError("Attempting to split renderNode without parent data - has it already been split?")
@@ -954,14 +955,14 @@ class RenderNode(BaseNode):
       
       # If one parent, no splitting to be done. Just assign our parent index.
       if len(self.parentData) == 1:
-        print(f"DEBUG: Single parent for {self.name}")
+        logger.debug("Single parent for %s", self.name)
         self.parent = self.parentData[0][0]
         self.damage_argument = self.parentData[0][1]
         return [self]
 
       # We have more than one parent object. Do some splitting.
       total_indices = len(self.indexData)
-      print(f"DEBUG: Multiple parents ({len(self.parentData)}) for {self.name}, total_indices={total_indices}")
+      logger.debug("Multiple parents (%d) for %s, total_indices=%d", len(self.parentData), self.name, total_indices)
 
       # V10 variants often encode parent attachments with idxTo == 0 for every
       # entry (i.e. not a V8-style coverage table). Some files then encode an
@@ -984,7 +985,7 @@ class RenderNode(BaseNode):
       # Require either the strong legacy signal (all damageArg == -1) or actual
       # owner variation across vertices before treating this as owner-encoded.
       if all_zero_idx_to and owner_values is not None and (all_damage_neg1 or len(set(owner_values)) > 1):
-        print(f"DEBUG: V10 owner-encoded split detected for {self.name}")
+        logger.debug("V10 owner-encoded split detected for %s", self.name)
         shared_parent = self.parentData[0][0]
         children = []
         for owner_idx, pd in enumerate(self.parentData):

@@ -448,22 +448,6 @@ def _enable_official_visibility_wrapper_transform_passthrough():
             _dbg_narrow_ident_flag = bool(obj.get("_iedm_narrow_identity_passthrough", False))
           except Exception:
             _dbg_narrow_ident_flag = False
-        if _dbg_name.startswith("Omni_r001"):
-          try:
-            _p = getattr(obj, "parent", None)
-            _pt = getattr(_p, "type", None) if _p else None
-            _pn = getattr(_p, "name", None) if _p else None
-            print("[iEDM][OMNI_TRACE] obj={} type={} parent={} parent_type={} vis={} ident={} nident={}".format(
-              _dbg_name,
-              getattr(obj, "type", None),
-              _pn,
-              _pt,
-              _dbg_flag,
-              _dbg_ident_flag,
-              _dbg_narrow_ident_flag,
-            ))
-          except Exception:
-            pass
         if obj is not None and _dbg_flag:
           # Importer sets this flag only on preserved renderless visibility wrapper empties.
           return parent
@@ -1241,14 +1225,8 @@ def _anim_vector_to_blender(v):
 
 
 def _anim_quaternion_to_blender(q):
-  # See _anim_vector_to_blender(): legacy plain-root v10 non-skeletal assets can
-  # still require Y-up -> Z-up conversion for arg animation payloads.
-  if _edm_version >= 10 and globals().get("_v10_is_legacy_y_up", False):
-    # F-117-style plain-root v10 assets appear to store rotation key quaternions
-    # in the same local basis expected by the official animation export path,
-    # while position/scale keys still need legacy Y-up conversion.
-    return q if hasattr(q, "to_matrix") else Quaternion(q)
-  # Other v10 arg animation payloads are authored in Blender-space already.
+  # V10 arg animation quaternions (both legacy plain-root and standard) are
+  # already in Blender-space; only v8 needs Y-up -> Z-up conversion.
   if _edm_version >= 10:
     return q if hasattr(q, "to_matrix") else Quaternion(q)
   return quaternion_to_blender(q)
@@ -1731,13 +1709,7 @@ def build_graph(edmFile):
   return graph
 
 
-_SEMANTIC_NAME_MAP = {
-  "Txt": "Text",
-  "Monk": "Suzanne",
-  "Monke": "Plane.001",
-  "Props": "Plane.002",
-  "Walls": "Plane",
-}
+_SEMANTIC_NAME_MAP = {}
 
 
 def _push_action_to_nla(ob, action):
@@ -1761,7 +1733,7 @@ def _assign_collections(graph):
 
   Rules:
   - ShellNode / SegmentsNode meshes and their ancestor empties -> "Collision"
-  - RenderNode meshes that have a Blender parent (animated) -> "Vechicle"
+  - RenderNode meshes that have a Blender parent (animated) -> "Vehicle"
   - RenderNode meshes without a Blender parent (root-level) -> "Texture_Animation"
   - Other nodes (SkinNode, NumberNode, LightNode, FakeLight) stay in Scene Collection
   - Empties follow the category of their children
@@ -1775,7 +1747,7 @@ def _assign_collections(graph):
       scene.collection.children.link(col)
     return col
 
-  col_vehicle = _get_or_create_col("Vechicle")
+  col_vehicle = _get_or_create_col("Vehicle")
   col_collision = _get_or_create_col("Collision")
   col_tex_anim = _get_or_create_col("Texture_Animation")
 
@@ -2027,11 +1999,11 @@ def process_node(node):
   if node.blender and isinstance(node.render, SkinNode):
     _bind_skin_object(node.blender, node.render)
 
-    if not node.blender:
-      node.blender = node.parent.blender if node.parent else None
-      return
+  if not node.blender:
+    node.blender = node.parent.blender if node.parent else None
+    return
 
-    node._is_primary = True
+  node._is_primary = True
 
   # --- (2) Parent in a “parity-safe” way: identity parent inverse ---
   if node.parent and node.parent.blender and node.parent.blender != node.blender:
@@ -2382,14 +2354,21 @@ def process_node(node):
   _debug_dump_node_transform(node)
 
   if isinstance(node.transform, LodNode):
-    yield
-    assert node.blender.type == "EMPTY"
-    node.blender.edm.is_lod_root = True
-    for (start, end), child in zip(node.transform.level, node.children):
-      child.blender.edm.lod_min_distance = start
-      child.blender.edm.lod_max_distance = end
-      child.blender.edm.nouse_lod_distance = end > 1e6
-      
+    node._lod_post_children = True
+
+
+def _process_lod_post_children(node):
+  """Apply LodNode properties after children have been processed."""
+  if not getattr(node, "_lod_post_children", False):
+    return
+  assert node.blender.type == "EMPTY"
+  node.blender.edm.is_lod_root = True
+  for (start, end), child in zip(node.transform.level, node.children):
+    child.blender.edm.lod_min_distance = start
+    child.blender.edm.lod_max_distance = end
+    child.blender.edm.nouse_lod_distance = end > 1e6
+
+
 def _apply_shadeless(mat):
   """Make a material 'shadeless' by routing the Base Color texture to Emission Color
   on the Principled BSDF node, so it renders without lighting."""
@@ -3592,6 +3571,9 @@ def read_file(filename, options=None):
   # Walk through every node, and do the node processing
   graph.walk_tree(process_node)
 
+  # Post-children pass: apply LodNode properties after children are created.
+  graph.walk_tree(_process_lod_post_children)
+
   # Diagnostic: count EDM nodes vs created Blender objects
   _print_import_diagnostics(edm, graph)
 
@@ -3844,16 +3826,6 @@ def create_arganimation_actions(node):
     zero_mat = (mat_bl @ q1m_raw @ aabS_raw)
   else:
     zero_mat = (mat_bl @ q1m @ aabS)
-  try:
-    if str(getattr(node, "name", "") or "") == "Box110":
-      print("[iEDM][ANIM_TRACE] node={} args={}".format(node.name, list(node.get_all_args())))
-      for _label, _mat in (("base_mat", base_mat), ("mat_bl", mat_bl), ("zero_mat", zero_mat)):
-        print("[iEDM][ANIM_TRACE] node={} {}".format(node.name, _label))
-        for _r in range(4):
-          _row = " ".join("{: .3f}".format(float(_mat[_r][_c])) for _c in range(4))
-          print("[iEDM][ANIM_TRACE_ROW] node={} {} row{}={}".format(node.name, _label, _r, _row))
-  except Exception:
-    pass
   node.zero_transform_local_matrix = zero_mat
   dcLoc, dcRot, dcScale = zero_mat.decompose()
   node.zero_transform_matrix = zero_mat
@@ -4129,26 +4101,7 @@ def apply_node_transform(node, obj):
     ))
 
   def _trace_interest(stage, local_mat):
-    try:
-      nname = str(getattr(node, "name", "") or "")
-      oname = str(getattr(obj, "name", "") or "")
-      if not any(t in nname or t in oname for t in ("STICK_HANDLE", "Pylon1", "Box110", "Object1093498489")):
-        return
-      parent = getattr(obj, "parent", None)
-      pname = getattr(parent, "name", None) if parent else None
-      ptype = getattr(parent, "type", None) if parent else None
-      print("[iEDM][XFORM_TRACE] stage={} node={} obj={} parent={} parent_type={}".format(
-        stage, nname, oname, pname, ptype
-      ))
-      if local_mat is not None:
-        try:
-          for r in range(4):
-            row = " ".join("{: .3f}".format(float(local_mat[r][c])) for c in range(4))
-            print("[iEDM][XFORM_TRACE_ROW] stage={} row{}={}".format(stage, r, row))
-        except Exception:
-          pass
-    except Exception:
-      pass
+    pass
 
   def _set_local_matrix(local_mat):
     # Preserve exact local matrices where possible; decompose/recompose can

@@ -181,12 +181,15 @@ class Material(object):
     return self
 
   def write(self, writer):
-    #  'TEXTURES', 'UNIFORMS', 'ANIMATED_UNIFORMS'])
-    writer.write_uint(10)
+    # Count entries dynamically to avoid mismatch when optional fields are absent.
+    entry_count = 9  # BLENDING, DEPTH_BIAS, TEXTURE_COORDINATES_CHANNELS,
+                     # MATERIAL_NAME, NAME, SHADOWS, TEXTURES, UNIFORMS,
+                     # ANIMATED_UNIFORMS
+    if self.vertex_format:
+      entry_count += 1
+    writer.write_uint(entry_count)
     writer.write_string("BLENDING")
     writer.write_uchar(self.blending)
-    # writer.write_string("CULLING")
-    # writer.write_uchar(self.culling)
     writer.write_string("DEPTH_BIAS")
     writer.write_uint(self.depth_bias)
     if self.vertex_format:

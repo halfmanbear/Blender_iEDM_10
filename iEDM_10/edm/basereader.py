@@ -22,6 +22,13 @@ class BaseReader(object):
     self.stream = open(filename, "rb")
     self.version = None
 
+  def __enter__(self):
+    return self
+
+  def __exit__(self, exc_type, exc_val, exc_tb):
+    self.close()
+    return False
+
   def tell(self):
     return self.stream.tell()
 
