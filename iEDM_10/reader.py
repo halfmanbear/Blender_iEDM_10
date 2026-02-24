@@ -21,6 +21,22 @@ import os
 import itertools
 import math
 
+_SUFFIX_RE = re.compile(r"\.\d{3}$")  # matches ".000" to ".999" at end
+
+_PREFIXES = (
+    "Cylinder", "Fspot", "Omni", "Object", "Line", "Flame",
+    "BANO_", "light_bano_spot_", "Formation_Lights_",
+    "f18c", "F18C_aoa", "forsag", "oreol", "Stv_",
+    "lamp_off", "banno_", "RN_", "N_", "KIL_", "kil_",
+    "pilot_", "Pilot_", "Cockpit_Glass", "Cockpit_part",
+    "Texturte_Cockpit", "Texture_Cockpit",
+    "Plane", "merge", "Merge",
+    "RefuelingProbe_", "Refueling_Probe", "Line_bano_",
+    "Box", "Cube", "f29_", "f_", "Pilon_", "Pylon",
+    "Wing", "Flap", "Aileron", "Fin", "Stab", "Rudder",
+    "Slat", "AirBrake", "Air_Brake", "chehly",
+)
+
 FRAME_SCALE = 200
 
 # Global variable to track EDM version for coordinate system handling
@@ -116,64 +132,11 @@ def _is_connector_transform(tfnode, blender_obj=None):
   return _is_connector_object(blender_obj)
 
 
-def _is_narrow_safe_identity_helper_name(name):
-  """Narrow whitelist for duplicate-suffix helper wrappers that are usually
-  exporter-introduced no-op splits around lights/helpers and safe to bypass.
-  """
-  s = str(name or "")
-  if len(s) > 4 and s[-4] == "." and s[-3:].isdigit():
-    s = s[:-4]
-  return (
-    s.startswith("Cylinder")
-    or s.startswith("Fspot")
-    or s.startswith("Omni")
-    or s.startswith("Object")
-    or s.startswith("Line")
-    or s.startswith("Flame")
-    or s.startswith("BANO_")
-    or s.startswith("light_bano_spot_")
-    or s.startswith("Formation_Lights_")
-    or s.startswith("f18c")
-    or s.startswith("F18C_aoa")
-    or s.startswith("forsag")
-    or s.startswith("oreol")
-    or s.startswith("Stv_")
-    or s.startswith("lamp_off")
-    or s.startswith("banno_")
-    or s.startswith("RN_")
-    or s.startswith("N_")
-    or s.startswith("KIL_")
-    or s.startswith("kil_")
-    or s.startswith("pilot_")
-    or s.startswith("Pilot_")
-    or s.startswith("Cockpit_Glass")
-    or s.startswith("Cockpit_part")
-    or s.startswith("Texturte_Cockpit")
-    or s.startswith("Plane")
-    or s.startswith("merge")
-    or s.startswith("Merge")
-    or s.startswith("RefuelingProbe_")
-    or s.startswith("Refueling_Probe")
-    or s.startswith("Line_bano_")
-    or s.startswith("Box")
-    or s.startswith("Cube")
-    or s.startswith("Plane")
-    or s.startswith("Texturte_Cockpit")
-    or s.startswith("f29_")
-    or s.startswith("f_")
-    or s.startswith("Pilon_")
-    or s.startswith("Pylon")
-    or s.startswith("Wing")
-    or s.startswith("Flap")
-    or s.startswith("Aileron")
-    or s.startswith("Fin")
-    or s.startswith("Stab")
-    or s.startswith("Rudder")
-    or s.startswith("Slat")
-    or s.startswith("AirBrake")
-    or s.startswith("Air_Brake")
-    or s.startswith("chehly")
-  )
+def _is_narrow_safe_identity_helper_name(name) -> bool:
+    """Whitelist helper wrappers that are safe to bypass."""
+    s = str(name or "")
+    s = _SUFFIX_RE.sub("", s)  # strip exporter ".###" suffix if present
+    return s.startswith(_PREFIXES)
 
 
 def _strip_anim_prefix(name):
@@ -1288,7 +1251,6 @@ def _anim_quaternion_to_blender(q):
   # Other v10 arg animation payloads are authored in Blender-space already.
   if _edm_version >= 10:
     return q if hasattr(q, "to_matrix") else Quaternion(q)
-  return quaternion_to_blender(q)
   return quaternion_to_blender(q)
 
 
