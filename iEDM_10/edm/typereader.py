@@ -119,7 +119,6 @@ def readQuaternion(stream):
 @allow_properties
 @reads_type("const char*")
 def readConstChar(stream):
-  assert stream.version != 10, "Need manual verification as to how v10 string properties are written"
   return stream.read_string()
 
 @reads_type("model::ArgumentProperty")

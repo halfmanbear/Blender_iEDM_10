@@ -5,14 +5,14 @@ from .mathtypes import Vector
 
 class PropertiesSet(OrderedDict):
   @classmethod
-  def read(cls, stream, count=True):
+  def read(cls, stream, count=True, preserve_animated=False):
     data = cls()
     length = stream.read_uint()
     for _ in range(length):
       prop = stream.read_named_type()
       # Handle regular and animated properties sets the same
       if hasattr(prop, "keys"):
-        data[prop.name] = prop.keys
+        data[prop.name] = prop if preserve_animated else prop.keys
       else:
         data[prop.name] = prop.value
     # This only counts towards the general count if we had data

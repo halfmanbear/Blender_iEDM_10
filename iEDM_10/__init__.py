@@ -1,12 +1,12 @@
 
 bl_info = {
-  'name': "Import: .EDM model files",
+  'name': "EDM File Importer 10.0",
   'description': "Importing of .EDM model files",
-  'author': "Nicholas Devenish",
-  'version': (0,3,0),
-  'blender': (3, 4, 0),
-  'location': "File > Import/Export > .EDM Files",
-  'category': 'Import-Export',
+  'author': "Nicholas Devenish - (Rework by HalfManBear)",
+  'version': (0,4,0),
+  'blender': (4, 5, 6),
+  'location': "File > Import > .EDM Files",
+  'category': 'Import',
 }
 
 try:
@@ -15,17 +15,13 @@ try:
   def register():
     from .io_operators import register as importer_register
     from .rna import register as rna_register
-    from .panels import register as panels_register
     rna_register()
-    panels_register()
     importer_register()
 
   def unregister():
     from .io_operators import unregister as importer_unregister
     from .rna import unregister as rna_unregister
-    from .panels import unregister as panels_unregister
     importer_unregister()
-    panels_unregister()
     rna_unregister()
 
   if __name__ == "__main__":

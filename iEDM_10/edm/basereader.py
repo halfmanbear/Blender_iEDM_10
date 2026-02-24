@@ -116,10 +116,7 @@ class BaseReader(object):
 
   def read_list(self, reader):
     """Reads a length-prefixed list of something"""
-    if self.v10:
-      length = self.read_uint_be()
-    else:
-      length = self.read_uint()
+    length = self.read_uint()
     entries = []
     for index in range(length):
       entries.append(reader(self))

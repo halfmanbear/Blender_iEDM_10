@@ -7,7 +7,7 @@ from .typereader import reads_type
 from .typereader import get_type_reader as _tr_get_type_reader
 from .basereader import BaseReader
 
-from .material_types import VertexFormat, Material, Texture
+from .material_types import VertexFormat, Material, Texture, ShadowSettings
 from .propertiesset import PropertiesSet
 
 from collections import namedtuple, OrderedDict, Counter
@@ -92,16 +92,16 @@ def _read_main_object_dictionary(stream):
   return objects
 
 class EDMFile(object):
-  def __init__(self, filename=None):
+  def __init__(self, filename=None, version=8):
     if filename:
       reader = TrackingReader(filename)
       try:
         self._read(reader)
-      except:
+      except Exception:
         print("ERROR at {}".format(reader.tell()))
         raise
     else:
-      self.version = 8
+      self.version = version
       self.indexA = {}
       self.indexB = {}
       self.root = None
@@ -122,8 +122,11 @@ class EDMFile(object):
     if reader.v10:
       stringsize = reader.read_uint()
       sdata = reader.read(stringsize)
-      # Split by null byte and filter out empty strings
-      reader.strings = [x.decode("windows-1251") for x in sdata.split(b'\x00') if x]
+      # Split by null byte, keeping empty strings (they are valid table entries)
+      parts = sdata.split(b'\x00')
+      if parts and not parts[-1]:
+        parts = parts[:-1]  # strip trailing empty from final null terminator
+      reader.strings = [x.decode("windows-1251") for x in parts]
     else:
       reader.strings = None
 
@@ -133,20 +136,26 @@ class EDMFile(object):
     self.root = reader.read_named_type()
 
     self.nodes = reader.read_list(reader.read_named_type)
-    self.transformRoot = self.nodes[0]
+    if self.nodes:
+        self.transformRoot = self.nodes[0]
+    else:
+        self.transformRoot = None
+        # Handle empty nodes list gracefully if possible, or raise error if critical
+        print("Warning: EDM file has no transform nodes.")
 
     # Read the node parenting data
     for (node, parent) in zip(self.nodes, reader.read_ints(len(self.nodes))):
       if parent == -1:
         node.parent = None
         continue
-      if parent > len(self.nodes):
+      if parent >= len(self.nodes):
         raise IOError("Invalid node parent data")
 
       node.set_parent(self.nodes[parent])
 
     # Read the renderable objects
     objects = _read_main_object_dictionary(reader)
+    print(f"DEBUG: EDM object categories: {list(objects.keys())}")
     self.connectors = objects.get("CONNECTORS", [])
     self.shellNodes = objects.get("SHELL_NODES", [])
     self.lightNodes = objects.get("LIGHT_NODES", [])
@@ -159,6 +168,57 @@ class EDMFile(object):
       else:
         self.renderNodes.append(node)
 
+    # v10 stores NumberNode mesh payloads in a trailing post-section after the
+    # main object dictionary. Bind payload blocks onto NumberNode placeholders.
+    if reader.v10:
+      number_nodes = [n for n in self.renderNodes if isinstance(n, NumberNode)]
+      if number_nodes:
+        payload_error = False
+        for n in number_nodes:
+          # Bail out safely if payload is not available/parseable.
+          pos = reader.tell()
+          try:
+            n.read_v10_payload(reader)
+          except Exception as exc:
+            payload_error = True
+            reader.seek(pos)
+            print("Warning: Could not parse NumberNode post payload: {}".format(exc))
+            break
+        if payload_error:
+          for n in number_nodes:
+            if not getattr(n, "_post_payload_read", False):
+              n.parent = None
+
+    # v10 also carries an extra trailing block (after all objects) that holds
+    # additional matrices; empirically these act as inverse bind/local offsets
+    # for arg animation nodes. Parse and attach them if present.
+    if reader.v10:
+      tail_start = reader.tell()
+      # Read all remaining bytes directly from the stream.
+      tail_bytes = reader.stream.read()
+      if not tail_bytes:
+        print(f"Tail parse: no remaining bytes at {tail_start}")
+      if tail_bytes:
+        import struct
+        floats = struct.unpack("<{}f".format(len(tail_bytes)//4), tail_bytes[:len(tail_bytes)//4*4])
+        mats = []
+        for i in range(0, len(floats)-15, 16):
+          chunk = floats[i:i+16]
+          mat = Matrix([chunk[0:4], chunk[4:8], chunk[8:12], chunk[12:16]]).transposed()
+          mats.append(mat)
+        arg_nodes = [n for n in self.nodes if isinstance(n, ArgAnimationNode)]
+        if mats and arg_nodes:
+          # Heuristic: tail often stores [base, inverse] per arg; when count permits,
+          # use the second half as the inverse/bind offset.
+          offset = len(arg_nodes) if len(mats) >= 2 * len(arg_nodes) else 0
+          for i, n in enumerate(arg_nodes):
+            idx = i + offset
+            if idx < len(mats):
+              n.base.bmat_inv = mats[idx]
+
+      # ensure file is consumed
+      reader.seek(tail_start + len(tail_bytes))
+
     # Verify we are at the end of the file without unconsumed data.
     endPos = reader.tell()
     if len(reader.read(1)) != 0:
@@ -168,9 +228,32 @@ class EDMFile(object):
     # Set up parents and other links (e.g. material, bone...)
     for node in itertools.chain(self.connectors, self.shellNodes, self.lightNodes, self.renderNodes):
       if hasattr(node, "parent") and node.parent is not None:
-        node.set_parent(self.nodes[node.parent])
+        if isinstance(node.parent, int):
+            if 0 <= node.parent < len(self.nodes):
+                node.set_parent(self.nodes[node.parent])
+            else:
+                print(f"Warning: Node {node} has invalid parent index {node.parent}")
+        else:
+             # Already resolved or unexpected type
+             pass
+      elif type(node).__name__ == 'SegmentsNode':
+        # SegmentsNodes don't have a parent in the file - attach to root
+        if self.nodes:
+            node.set_parent(self.nodes[0])
+        else:
+            print("Warning: SegmentsNode has no root to attach to")
+      # Owner-encoded split RenderNodes keep a shared control parent index.
+      # Resolve it to the actual transform node so importer code can map
+      # mesh-local coordinates from shared parent space.
+      if hasattr(node, "shared_parent") and isinstance(node.shared_parent, int):
+        if 0 <= node.shared_parent < len(self.nodes):
+          node.shared_parent = self.nodes[node.shared_parent]
       if hasattr(node, "material"):
-        node.material = self.root.materials[node.material]
+        if 0 <= node.material < len(self.root.materials):
+            node.material = self.root.materials[node.material]
+        else:
+            print(f"Warning: Invalid material index {node.material} for node {node}")
+            node.material = None
       if hasattr(node, "bones"):
         node.bones = [self.nodes[x] for x in node.bones]
         # If we have bones we have no single 'parent'. Stick it on the root.
@@ -209,21 +292,19 @@ class EDMFile(object):
 
     return _index
 
-  def write(self, writer):
-    # Generate the file index with an audit
-    _allIndex = self.audit()
-    indexA = {k: v for k, v in _allIndex.items() if k in _all_IndexA}
-    indexB = {k: v for k, v in _allIndex.items() if k in _all_IndexB}
-
-    # Do the writing
-    writer.write(b'EDM')
-    writer.write_ushort(8)
-    _write_index(writer, indexA)
-    _write_index(writer, indexB)
+  def _write_body(self, writer, indexA, indexB):
+    """Writes the body of the EDM file (everything after version/string table)"""
+    # For v10, write empty indices (they seem to not be used in v10 format)
+    if self.version == 10:
+      _write_index(writer, {})
+      _write_index(writer, {})
+    else:
+      _write_index(writer, indexA)
+      _write_index(writer, indexB)
 
     # Write the Root node
     writer.write_named_type(self.root)
-    
+
     # For each parent node, set it's index
     for i, node in enumerate(self.nodes):
       node.index = i
@@ -234,7 +315,7 @@ class EDMFile(object):
 
     # Write the parent data for the nodes
     writer.write_int(-1)
-    # Everything without a parent has 0 as it's parent
+    # Everything without a parent has 0 as it's parent
     for node in self.nodes[1:]:
       if node.parent:
         writer.write_uint(node.parent.index)
@@ -258,6 +339,39 @@ class EDMFile(object):
       for node in nodes:
         writer.write_named_type(node)
 
+  def write(self, writer):
+    # Generate the file index with an audit
+    _allIndex = self.audit()
+    indexA = {k: v for k, v in _allIndex.items() if k in _all_IndexA}
+    indexB = {k: v for k, v in _allIndex.items() if k in _all_IndexB}
+
+    # Write EDM header
+    writer.write(b'EDM')
+    writer.write_ushort(self.version)
+
+    # For v10, do a collection pass to build string table
+    if self.version == 10:
+      import io
+      print("Building v10 string table...")
+
+      # Save the real stream and use a dummy stream for collection
+      real_stream = writer.stream
+      writer.stream = io.BytesIO()  # Dummy stream - data gets discarded
+      writer.string_collect_mode = True
+      self._write_body(writer, indexA, indexB)
+      writer.string_collect_mode = False
+      writer.stream = real_stream  # Restore real stream
+
+      # Write the string table
+      string_data = writer.get_string_table_data()
+      writer.write_uint(len(string_data))
+      writer.write(string_data)
+      print(f"String table: {len(writer.string_table)} unique strings, {len(string_data)} bytes")
+
+    # Now write the actual data
+    self._write_body(writer, indexA, indexB)
+
+
 class GraphNode(object):
   def __init__(self):
     self.parent = None
@@ -270,7 +384,8 @@ class GraphNode(object):
     if self.parent and not isinstance(self.parent, int):
       self.parent.children.remove(self)
     self.parent = parent
-    self.parent.children.append(self)
+    if self.parent is not None:
+        self.parent.children.append(self)
 
   def add_child(self, child):
     if child in self.children:
@@ -292,7 +407,11 @@ class BaseNode(GraphNode):
   @classmethod
   def read(cls, stream):
     node = cls()
-    node.name = stream.read_string(lookup=False)
+    name = stream.read_string(lookup=False)
+    # v10: official exporter sometimes wraps inline node names in single quotes
+    if name.startswith("'") and name.endswith("'") and len(name) >= 2:
+        name = name[1:-1]
+    node.name = name
     node.version = stream.read_uint()
     node.props = PropertiesSet.read(stream, count=False)
     return node
@@ -304,7 +423,7 @@ class BaseNode(GraphNode):
     return c
 
   def write(self, writer):
-    writer.write_string(self.name)
+    writer.write_string(self.name, lookup=False)  # Node names are always inline, even in v10
     writer.write_uint(self.version)
     self.props.write(writer)
 
@@ -333,10 +452,7 @@ class RootNode(BaseNode):
     self.boundingBoxMin = stream.read_vec3d()
     self.boundingBoxMax = stream.read_vec3d()
     self.unknownB = [stream.read_vec3d() for _ in range(4)]
-    if stream.v10:
-      material_count = stream.read_uint_be()
-    else:
-      material_count = stream.read_uint()
+    material_count = stream.read_uint()
     self.materials = [Material.read(stream) for i in range(material_count)]
     stream.materials = self.materials
     self.unknownC = stream.read_uint()
@@ -352,7 +468,10 @@ class RootNode(BaseNode):
   def write(self, writer):
     super(RootNode, self).write(writer)
 
-    writer.write_uchar(0)
+    # Only write unknownA for version 2 (matches read logic)
+    if self.props.get("__VERSION__") == 2:
+      writer.write_uchar(getattr(self, 'unknownA', 0))
+
     writer.write_vecd(self.boundingBoxMin)
     writer.write_vecd(self.boundingBoxMax)
     # Don't fully understand this bit; seems to sometimes be min, max again then high, low.
@@ -800,7 +919,8 @@ class RenderNode(BaseNode):
 
     # Rebuild the parentdata
     writer.write_uint(1)
-    writer.write_uint(self.parent.index)
+    parent_index = self.parent.index if self.parent else 0
+    writer.write_uint(parent_index)
     writer.write_int(-1)
 
     _write_vertex_data(self.vertexData, writer)
@@ -814,42 +934,167 @@ class RenderNode(BaseNode):
     return c
 
   def split(self):
-    """Returns an array of renderNode objects. If there is no splitting to be
-    done, it will just return [self]. Otherwise, each entry is to be counted
-    as a separate renderNode object. Attempting to resplit is undefined."""
+      """Returns an array of renderNode objects. If there is no splitting to be
+      done, it will just return [self]. Otherwise, each entry is to be counted
+      as a separate renderNode object."""
+      print(f"DEBUG: Splitting RenderNode {self.name}")
 
-    if self.parentData is None:
-      raise RuntimeError("Attempting to split renderNode without parent data - has it already been split?")
-    assert len(self.parentData) >= 1, "Should never have a RenderNode without parent data"
-    
-    # If one parent, no splitting to be done. Just assign our parent index.
-    if len(self.parentData) == 1:
-      self.parent = self.parentData[0][0]
-      self.damage_argument = self.parentData[0][1]
-      return [self]
+      if self.parentData is None:
+        raise RuntimeError("Attempting to split renderNode without parent data - has it already been split?")
+      assert len(self.parentData) >= 1, "Should never have a RenderNode without parent data"
+      
+      # If one parent, no splitting to be done. Just assign our parent index.
+      if len(self.parentData) == 1:
+        print(f"DEBUG: Single parent for {self.name}")
+        self.parent = self.parentData[0][0]
+        self.damage_argument = self.parentData[0][1]
+        return [self]
 
-    # We have more than one parent object. Do some splitting.
-    # Make sure we cover the full length of the index array
-    assert self.parentData[-1][-2] == len(self.indexData), "Split rendernode does not cover whole index range"
+      # We have more than one parent object. Do some splitting.
+      total_indices = len(self.indexData)
+      print(f"DEBUG: Multiple parents ({len(self.parentData)}) for {self.name}, total_indices={total_indices}")
 
-    start = 0
-    children = []
-    for i, (parent, idxTo, damageArg) in enumerate(self.parentData):
-      node = RenderNode()
-      node.version = self.version
-      node.name = "{}_{}".format(self.name, i)
-      node.name_unknown = True
-      node.props = self.props
-      node.material = self.material
-      node.parent = parent
-      node.indexData = self.indexData[start:idxTo]
-      node.damage_argument = damageArg
-      # Give them all the whole vertex subarray for now
-      node.vertexData = self.vertexData
-      start = idxTo
-      children.append(node)
+      # V10 variants often encode parent attachments with idxTo == 0 for every
+      # entry (i.e. not a V8-style coverage table). Some files then encode an
+      # owner index per vertex; others intend the geometry to be reused for
+      # each parent entry (typically different damage arguments / control nodes).
+      all_zero_idx_to = bool(self.parentData) and all(len(pd) == 3 and pd[1] == 0 for pd in self.parentData)
+      all_damage_neg1 = bool(self.parentData) and all(len(pd) == 3 and pd[2] == -1 for pd in self.parentData)
+      owner_values = None
+      if all_zero_idx_to and self.vertexData:
+        try:
+          raw_owner_values = [int(round(v[3])) for v in self.vertexData]
+          nOwners = len(self.parentData)
+          out_of_range = sum(1 for o in raw_owner_values if not (0 <= o < nOwners))
+          if out_of_range:
+            print(f"Info: {self.name} has {out_of_range} vertices with out-of-range owner, clamping to [0, {nOwners - 1}]")
+          owner_values = [max(0, min(nOwners - 1, o)) for o in raw_owner_values]
+        except Exception:
+          owner_values = None
 
-    return children
+      # Require either the strong legacy signal (all damageArg == -1) or actual
+      # owner variation across vertices before treating this as owner-encoded.
+      if all_zero_idx_to and owner_values is not None and (all_damage_neg1 or len(set(owner_values)) > 1):
+        print(f"DEBUG: V10 owner-encoded split detected for {self.name}")
+        shared_parent = self.parentData[0][0]
+        children = []
+        for owner_idx, pd in enumerate(self.parentData):
+          parent = pd[0]
+          node = RenderNode()
+          node.version = self.version
+          node.name = "{}_{}".format(self.name, owner_idx)
+          node.name_unknown = True
+          node.props = self.props
+          node.material = self.material
+          node.parent = parent
+          node.damage_argument = pd[2]
+          node.vertexData = self.vertexData
+          # V10 owner-encoded split metadata: geometry coordinates are shared
+          # across all owners relative to the same control-space parent.
+          node.shared_parent = shared_parent
+          node.owner_index = owner_idx
+          node.split_owner_encoded = True
+          # Preserve original triangle boundaries. Filtering the flat index
+          # stream and then regrouping in triples mixes vertices from
+          # different source triangles and corrupts geometry/pivots.
+          tri_indices = []
+          mixed_owner_tris = 0
+          for i in range(0, len(self.indexData), 3):
+            tri = self.indexData[i:i+3]
+            if len(tri) != 3:
+              continue
+            tri_owners = [owner_values[ix] for ix in tri]
+            if tri_owners[0] == tri_owners[1] == tri_owners[2] == owner_idx:
+              tri_indices.extend(tri)
+              continue
+            # Fallback for malformed data: assign mixed-owner triangles to
+            # the majority owner to avoid holes.
+            if tri_owners.count(owner_idx) >= 2:
+              mixed_owner_tris += 1
+              tri_indices.extend(tri)
+          # if mixed_owner_tris:
+          #   print(f"Info: {self.name} owner {owner_idx} absorbed {mixed_owner_tris} mixed-owner triangles")
+          node.indexData = tri_indices
+          children.append(node)
+        return children
+
+      # V10 zero-coverage tables without usable owner variation should preserve
+      # all parent attachments by reusing the full geometry on each child.
+      if all_zero_idx_to:
+        print(f"Info: V10 zero-coverage attachment split for {self.name}; duplicating geometry across {len(self.parentData)} parents")
+        children = []
+        for i, (parent, _val1, val2) in enumerate(self.parentData):
+          node = RenderNode()
+          node.version = self.version
+          node.name = "{}_{}".format(self.name, i)
+          node.name_unknown = True
+          node.props = self.props
+          node.material = self.material
+          node.parent = parent
+          node.indexData = self.indexData
+          node.damage_argument = val2
+          node.vertexData = self.vertexData
+          children.append(node)
+        return children
+      
+      # --- FIX START: V10/Mod Compatibility Logic ---
+      # Check if the last entry covers the whole range (Standard V8 behavior)
+      last_val1 = self.parentData[-1][1] # Usually idxTo (End Index)
+      last_val2 = self.parentData[-1][2] # Usually damageArg
+
+      swap_columns = False
+      force_fallback = False
+
+      # Scenario A: Standard mismatch (The warning you saw)
+      if last_val1 != total_indices:
+          # Scenario B: Columns are swapped? (val2 is the count, val1 is damage/0)
+          if last_val2 == total_indices:
+              print(f"Info: Detected V10 data swap for {self.name}. Swapping interpretation.")
+              swap_columns = True
+          # Scenario C: Both are wrong or 0? Force render.
+          elif last_val1 == 0:
+               print(f"Warning: {self.name} has 0 coverage. Forcing geometry to first node to prevent invisible mesh.")
+               force_fallback = True
+          else:
+               print(f"Warning: Split mismatch {self.name}: covered {last_val1} vs total {total_indices}")
+      # --- FIX END ---
+
+      start = 0
+      children = []
+      
+      for i, (parent, val1, val2) in enumerate(self.parentData):
+        node = RenderNode()
+        node.version = self.version
+        node.name = "{}_{}".format(self.name, i)
+        node.name_unknown = True
+        node.props = self.props
+        node.material = self.material
+        node.parent = parent
+        
+        # Apply logic determined above
+        if force_fallback:
+            # If falling back, give EVERYTHING to the first node, others get empty
+            if i == 0:
+                idxTo = total_indices
+            else:
+                idxTo = total_indices # or start, effectively empty
+            damageArg = val2
+        elif swap_columns:
+            idxTo = val2
+            damageArg = val1
+        else:
+            idxTo = val1
+            damageArg = val2
+
+        node.indexData = self.indexData[start:idxTo]
+        node.damage_argument = damageArg
+        
+        # Give them all the whole vertex subarray for now
+        node.vertexData = self.vertexData
+        start = idxTo
+        children.append(node)
+
+      return children
 
 @reads_type("model::ShellNode")
 class ShellNode(BaseNode):
@@ -871,7 +1116,9 @@ class ShellNode(BaseNode):
 
   def write(self, writer):
     super(ShellNode, self).write(writer)
-    writer.write_uint(self.parent.index)
+    # Write parent index, or 0 if no parent
+    parent_index = self.parent.index if self.parent else 0
+    writer.write_uint(parent_index)
     self.vertex_format.write(writer)
     _write_vertex_data(self.vertexData, writer)
     _write_index_data(self.indexData, len(self.vertexData), writer)
@@ -919,6 +1166,13 @@ class SegmentsNode(BaseNode):
     c["model::SegmentsNode::Segments"] += len(self.data)
     return c
 
+  def write(self, writer):
+    super(SegmentsNode, self).write(writer)
+    writer.write_uint(self.unknown)
+    writer.write_uint(len(self.data))
+    for segment in self.data:
+      writer.write_floats(segment)
+
 @reads_type("model::BillboardNode")
 class BillboardNode(Node):
   @classmethod
@@ -935,7 +1189,9 @@ class LightNode(BaseNode):
     self = super(LightNode, cls).read(stream)
     self.parent = stream.read_uint()
     self.unknown = [stream.read_uchar()]
-    self.lightProps = PropertiesSet.read(stream, count=False)
+    # Preserve animation argument ids for light properties so importer can map
+    # curves and EDMProps args exactly for official exporter round-trips.
+    self.lightProps = PropertiesSet.read(stream, count=False, preserve_animated=True)
     self.unknown.append(stream.read_uchar())
     return self
 
@@ -954,21 +1210,81 @@ class FakeSpotLightsNode(BaseNode):
     controlNodeCount = stream.read_uint()
 
     self.parentData = []
+    self.parentData_float_offsets = []
     for _ in range(controlNodeCount):
+      _u0 = stream.read_uint()
+      _u1 = stream.read_uint()
+      _vec_pos = stream.tell()
+      _vec = stream.read_floats(3)
+      self.parentData_float_offsets.append(_vec_pos)
       self.parentData.append([
-          stream.read_uint(),
-          stream.read_uint(),
-          stream.read_floats(3)
+          _u0,
+          _u1,
+          _vec
         ])
     # Control node seems to follow same rules as RenderNode
     if controlNodeCount:
       stream.mark_type_read('model::FSLNControlNode', controlNodeCount-1)
 
     dataCount = stream.read_uint()
-    self.data = [stream.read(65) for _ in range(dataCount)]
+    self.raw_data = [stream.read(65) for _ in range(dataCount)]
     stream.mark_type_read("model::FakeSpotLight", dataCount)
 
-    # print(dataCount)
+    # Parse raw 65-byte entries: 8 doubles (64 bytes) + 1 byte flag
+    # Layout: pos(3) + dir(3) + size(1) + unknown(1) + flag(1 byte)
+    self.data = []
+    for raw in self.raw_data:
+      doubles = struct.unpack_from('<8d', raw, 0)
+      flag = raw[64]
+      self.data.append({
+        'position': doubles[0:3],
+        'direction': doubles[3:6],
+        'size': doubles[6],
+        'unknown': doubles[7],
+        'flag': flag,
+      })
+
+    # Some v10 FakeSpotLightsNode records carry an extra trailing direction
+    # vector (3 floats) after the light entries. If we leave it unread the
+    # parser desynchronizes and the next v10 string-table lookup sees 1.0
+    # (0x3f800000) as a bogus string index.
+    self.trailing_direction = None
+    self.trailing_direction_offset = None
+    if getattr(stream, "v10", False):
+      pos = stream.tell()
+      try:
+        next_u = stream.read_uint()
+      except Exception:
+        next_u = None
+      finally:
+        stream.seek(pos)
+
+      if next_u is not None and getattr(stream, "strings", None):
+        looks_like_next_type = (
+          0 <= next_u < len(stream.strings)
+          and isinstance(stream.strings[next_u], str)
+          and stream.strings[next_u].startswith("model::")
+        )
+        if not looks_like_next_type:
+          tpos = stream.tell()
+          try:
+            trailing = stream.read_floats(3)
+            next_after = stream.read_uint()
+            looks_aligned_after = (
+              0 <= next_after < len(stream.strings)
+              and isinstance(stream.strings[next_after], str)
+              and stream.strings[next_after].startswith("model::")
+            )
+            if looks_aligned_after:
+              self.trailing_direction = trailing
+              self.trailing_direction_offset = tpos
+              # Keep the next token unread; we only wanted a look-ahead probe.
+              stream.seek(tpos + 12)
+            else:
+              stream.seek(tpos)
+          except Exception:
+            stream.seek(tpos)
+
     return self
 
   def prepare(self, nodes, materials):
@@ -982,6 +1298,7 @@ class FakeOmniLightsNode(BaseNode):
     self = super(FakeOmniLightsNode, cls).read(stream)
     self.data_start = stream.read_uints(5)
     count = stream.read_uint()
+    # Each FakeOmniLight: 6 doubles = [x, y, z, size, uv_lb_packed, uv_rt_packed]
     self.data = [stream.read_doubles(6) for _ in range(count)]
     stream.mark_type_read("model::FakeOmniLight", count)
     return self
@@ -995,11 +1312,88 @@ class FakeALSNode(BaseNode):
   def read(cls, stream):
     self = super(FakeALSNode, cls).read(stream)
     # batumi.edm 1138915 x 340
-    stream.read_uints(3)
+    als_header = stream.read_uints(3)
     count = stream.read_uint()
-    self.data = [stream.read(80) for _ in range(count)]
+    self.raw_data = [stream.read(80) for _ in range(count)]
     stream.mark_type_read("model::FakeALSLight", count)
+
+    # Parse raw 80-byte entries: 10 doubles
+    # Layout: pos(3) + remaining(7) — positions are first 3 doubles
+    self.data = []
+    for raw in self.raw_data:
+      doubles = struct.unpack_from('<10d', raw, 0)
+      self.data.append({
+        'position': doubles[0:3],
+        'extra': doubles[3:10],
+      })
+
     return self
 
   def prepare(self, nodes, materials):
     pass
+
+@reads_type("model::NumberNode")
+class NumberNode(BaseNode):
+  category = NodeCategory.render
+
+  @classmethod
+  def read(cls, stream):
+    # Reads the standard BaseNode header (Name, Version, Props)
+    self = super(NumberNode, cls).read(stream)
+    # Placeholder record used by v10 files; geometry/payload can follow later.
+    self.value = stream.read_float()
+    self.parent = None
+    self.material = None
+    self.vertexData = []
+    self.indexData = []
+    self.unknown_indexPrefix = 5
+    self.damage_argument = -1
+    self.number_params_raw = None
+    self._post_payload_read = False
+    return self
+
+  def read_v10_payload(self, stream):
+    """Read post-object payload used by v10 NumberNode records."""
+    # Different v10 files appear to swap these first two uints
+    # (unknown_start/material). Pick the material candidate that best matches
+    # known NumberNode material signatures when possible.
+    u0 = stream.read_uint()
+    u1 = stream.read_uint()
+    self.unknown_start = u0
+    self.material = u1
+
+    mats = getattr(stream, "materials", None)
+    if mats:
+      valid0 = 0 <= u0 < len(mats)
+      valid1 = 0 <= u1 < len(mats)
+
+      if valid0 and not valid1:
+        self.material = u0
+        self.unknown_start = u1
+      elif valid0 and valid1 and u0 != u1:
+        def _score_material(idx):
+          mat = mats[idx]
+          textures = getattr(mat, "textures", None) or []
+          score = len(textures)
+          if any(getattr(tex, "index", -1) == 3 for tex in textures):
+            score += 100
+          if getattr(mat, "material_name", "") == "def_material":
+            score += 5
+          return score
+
+        if _score_material(u0) > _score_material(u1):
+          self.material = u0
+          self.unknown_start = u1
+
+    self.parent = stream.read_uint()
+    self.damage_argument = stream.read_int()
+    self.vertexData = _read_vertex_data(stream, "__gv_bytes")
+    self.unknown_indexPrefix, self.indexData = _read_index_data(stream, classification="__gi_bytes")
+    self.number_params_raw = (
+      stream.read_int(),
+      stream.read_int(),
+      stream.read_int(),
+      stream.read_int(),
+      stream.read_float(),
+    )
+    self._post_payload_read = True

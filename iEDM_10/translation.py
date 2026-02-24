@@ -151,7 +151,16 @@ class TranslationGraph(object):
   def remove_node(self, node):
     assert node in self.nodes, "Node not in graph"
     assert node.parent, "Invalid node: No parent. Cannot remove root node."
-    node.parent.children.remove(node)
+    
+    parent = node.parent
+    # Preserve sibling ordering by splicing children at removed node index.
+    insert_at = parent.children.index(node)
+    parent.children.pop(insert_at)
+    for child in list(node.children):
+        child.parent = parent
+        parent.children.insert(insert_at, child)
+        insert_at += 1
+
     node.parent = None
     node.graph = None
     self.nodes.remove(node)
@@ -174,6 +183,14 @@ class TranslationGraph(object):
 
 # Helpful, but not necessarily related directly to reading or writing,
 # construction helpers    
+
+  def get_all_render_nodes(self):
+    """Returns a list of all render nodes in the graph"""
+    render_nodes = []
+    for node in self.nodes:
+        if node.render:
+            render_nodes.append(node.render)
+    return render_nodes
 
   @classmethod
   def from_blender_objects(cls, blender_objects):

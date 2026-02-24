@@ -6,8 +6,20 @@ from .typereader import AnimatedProperty, ArgumentProperty
 from .mathtypes import Vector
 from .propertiesset import PropertiesSet
 
-# The known vertex channels
-_vertex_channels = {"position": 0, "normal": 1, "tex0": 4, "bones": 21}
+# Known vertex channels observed in official exporter output and real EDM assets.
+# Keep this map broad enough to avoid dropping recognized payload layouts.
+_vertex_channels = {
+  "position": 0,
+  "normal": 1,
+  "tangent": 2,
+  "bitangent": 3,
+  "tex0": 4,
+  "tex1": 5,
+  "tex2": 6,
+  "bones": 21,
+  "color0": 24,
+  "color1": 25,
+}
 
 Texture = namedtuple("Texture", ["index", "name", "matrix"])
 
@@ -76,12 +88,12 @@ class VertexFormat(object):
 
   def write(self, writer):
     writer.write_uint(len(self.data))
-    writer.write(self.data)
+    writer.write_uchars(self.data)
 
 def _read_material_texture(reader):
   index = reader.read_uint()
   reader.read_int() # unknown
-  name = reader.read_string(lookup=False)
+  name = reader.read_string()
   reader.read_uints(4) # unknown
   matrix = reader.read_matrixf()
   return Texture(index, name, matrix)
@@ -102,6 +114,7 @@ def _read_texture_coordinates_channels(stream):
 _material_entry_lookup = {
   "BLENDING": lambda x: x.read_uchar(),
   "CULLING" : lambda x: x.read_uchar(),
+  "DECAL": lambda x: x.read_uchar(),   # <--- ADD THIS LINE
   "DEPTH_BIAS": lambda x: x.read_uint(),
   "TEXTURE_COORDINATES_CHANNELS": _read_texture_coordinates_channels,
   "MATERIAL_NAME": lambda x: x.read_string(),
@@ -128,7 +141,7 @@ class ShadowSettings(object):
   @property
   def value(self):
     return (1 if self.cast else 0) + \
-           (2 if self.recieve else 0) + \
+           (2 if self.receive else 0) + \
            (4 if self.cast_only else 0)
 
   def __repr__(self):
