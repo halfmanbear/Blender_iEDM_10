@@ -50,10 +50,8 @@ _transform_debug = {"enabled": False, "filter": None, "limit": 200, "emitted": 0
 _mesh_origin_mode = "APPROX"
 _official_material_bridge = None
 _bone_import_ctx = None
-_v10_root_children_already_blender_space = False
 _v10_is_legacy_y_up = False
 _legacy_v10_parent_compose = False
-_force_v10_root_children_already_blender_space = None
 _file_has_bones = False
 
 # Keep light conversion constants in sync with official exporter behavior.
@@ -73,39 +71,9 @@ def _is_child_of_file_root(node):
 
 
 def _to_blender_local_matrix(node, mat, apply_root_basis_fix=True):
-  # If the EDM already contains the official v10 root basis-fix node as its file root,
-  # do NOT apply _ROOT_BASIS_FIX again to its children (double-rotation).
-  if apply_root_basis_fix and _is_child_of_file_root(node):
-    if _edm_version >= 10:
-      if globals().get("_file_has_root_basis_fix", False):
-        return mat
-      if globals().get("_v10_root_children_already_blender_space", False):
-        return mat
-    return _ROOT_BASIS_FIX @ mat
+  # v10+ coordinate conversion is now handled via a master root object 
+  # carrying _ROOT_BASIS_FIX. Individual nodes should not apply it again.
   return mat
-
-
-def _should_use_full_local_basis_convert_for_top_empty(node, obj):
-  """Narrow FA-18-style fix: some plain-root v10 skeletal top-level empties carry
-  local transforms in EDM basis. Convert the full local basis (R * M * R^-1)
-  instead of only applying the root global basis fix.
-  """
-  if _edm_version < 10:
-    return False
-  if not globals().get("_v10_root_children_already_blender_space", False):
-    return False
-  if not globals().get("_file_has_bones", False):
-    return False
-  if not _is_child_of_file_root(node):
-    return False
-  if obj is None:
-    return False
-  if getattr(obj, "type", None) != "EMPTY":
-    return False
-  # Avoid armature-bone attached helpers; those use a different export path.
-  if getattr(obj, "parent_bone", None):
-    return False
-  return True
 
 
 def _is_connector_object(obj):
@@ -1481,8 +1449,22 @@ def build_graph(edmFile):
 
   # --- Pre-compute local/world matrices in Blender space for graph simplification ---
   graph.root._is_graph_root = True
-  graph.root._local_bl = Matrix.Identity(4)
-  graph.root._world_bl = Matrix.Identity(4)
+  
+  # For V10+, the graph root carries the global basis fix.
+  m_root_edm = Matrix.Identity(4)
+  root_tf = graph.root.transform
+  if root_tf:
+    if hasattr(root_tf, "matrix"):
+      m_root_edm = Matrix(root_tf.matrix)
+    elif hasattr(root_tf, "base") and hasattr(root_tf.base, "matrix"):
+      m_root_edm = Matrix(root_tf.base.matrix)
+
+  if _edm_version >= 10:
+    graph.root._local_bl = _ROOT_BASIS_FIX @ m_root_edm
+  else:
+    graph.root._local_bl = Matrix.Identity(4)
+    
+  graph.root._world_bl = graph.root._local_bl.copy()
 
   for node in graph.nodes:
     if node == graph.root:
@@ -1508,13 +1490,10 @@ def build_graph(edmFile):
         m_edm = m_edm @ m_rn
 
     # Convert to Blender space for graph decisions.
-    # For V10, use _to_blender_local_matrix (identity for non-root, _ROOT_BASIS_FIX for root children).
+    # For V10, use _to_blender_local_matrix (identity for ALL nodes).
     # For V8, use full axis swap.
     if _edm_version >= 10:
-        if tf:
-            node._local_bl = _to_blender_local_matrix(tf, m_edm, apply_root_basis_fix=True)
-        else:
-            node._local_bl = m_edm.copy()   # IMPORTANT: no matrix_to_blender for V10
+        node._local_bl = _to_blender_local_matrix(tf, m_edm, apply_root_basis_fix=False)
     else:
         node._local_bl = matrix_to_blender(m_edm)
 
@@ -2176,22 +2155,6 @@ def process_node(node):
           pass
 
       if _edm_version >= 10:
-        # (3) Apply mesh-space basis fix ONCE per mesh datablock.
-        #
-        # Geometry-style v10 split-control assets keep `_v10_root_children_already_blender_space=False`
-        # and rely on the older root-child-only behavior (visual canary path).
-        #
-        # For Geometry-style v10 split-control assets we only apply the root basis fix
-        # to direct root-child render meshes. Keeping that narrower behavior avoids
-        # over-rotating assets whose child render meshes are already in Blender-space.
-        if node.blender.type == "MESH" and node.blender.data:
-          mesh = node.blender.data
-          if not mesh.get("_iedm_root_basis_fixed", False):
-            apply_mesh_basis_fix = _is_child_of_file_root(node)
-            if apply_mesh_basis_fix:
-              _transform_mesh_data(node.blender, _ROOT_BASIS_FIX)
-              mesh["_iedm_root_basis_fixed"] = True
-
         # If a visibility wrapper is acting as a control node, keep mesh aligned.
         if (
           node.parent and isinstance(node.parent.transform, ArgVisibilityNode) and node.parent.blender
@@ -3463,67 +3426,20 @@ def read_file(filename, options=None):
   # Store version in scene for export
   bpy.context.scene.edm_version = edm.version
 
-  # --- (3) Detect whether the EDM already contains the official v10 root basis-fix node ---
-  # If it does, we MUST NOT apply _ROOT_BASIS_FIX again to the children-of-file-root.
   global _file_has_root_basis_fix
-  global _v10_root_children_already_blender_space
   global _file_has_bones
   global _v10_is_legacy_y_up
+  
   _file_has_root_basis_fix = False
-  _v10_root_children_already_blender_space = False
   _v10_is_legacy_y_up = False
   _file_has_bones = bool(has_bones)
-  try:
-    if _edm_version >= 10 and edm.nodes:
-      tf0 = edm.nodes[0]
-      if isinstance(tf0, TransformNode) and hasattr(tf0, "matrix"):
-        m0 = Matrix(tf0.matrix)
-        # Loose compare: float noise is possible, but this is usually exact in your DOTs.
-        _file_has_root_basis_fix = (m0 - _ROOT_BASIS_FIX).magnitude < 1e-9
-  except Exception:
-    _file_has_root_basis_fix = False
 
-  if _file_has_root_basis_fix:
-    print("Info: EDM already contains v10 root basis-fix transform; importer will not re-apply _ROOT_BASIS_FIX to root children.")
-
-  # Some v10 files (including the FA-18 test asset) use a plain model::Node as
-  # file root and store root-child transforms already in Blender space. Applying
-  # _ROOT_BASIS_FIX to those children rotates/permutes Y/Z on re-export.
-  try:
-    if plain_root_v10:
-      _v10_root_children_already_blender_space = True
-      
-      # Geometry-style v10 split control-node assets still need root basis fix
-      # even with a plain model::Node file root.
-      if auto_geometry_safe_v10_split:
-        _v10_root_children_already_blender_space = False
-        print("Info: v10 plain-root split control-node asset detected; importer will apply _ROOT_BASIS_FIX to root-child transforms.")
-      elif not has_bones:
-        # F-117 case: Plain root, no bones.
-        # Original is Z-up (Blender space). We must NOT rotate it (Identity import).
-        # But Exporter doesn't swap it correctly, so we force a Root Wrapper (Y->Z)
-        # to map Z-up children to Y-up EDM.
-        _v10_root_children_already_blender_space = True
-        _v10_is_legacy_y_up = True
-        print("Info: v10 plain-root non-skeletal asset detected; importer will force wrapper and identity import.")
-
-  except Exception:
-    _v10_root_children_already_blender_space = False
-
-  if _v10_root_children_already_blender_space:
-    print("Info: v10 file root is plain model::Node; importer will not apply _ROOT_BASIS_FIX to root-child transforms.")
-
-  try:
-    _forced_plain_root_basis = globals().get("_force_v10_root_children_already_blender_space", None)
-  except Exception:
-    _forced_plain_root_basis = None
-  if _forced_plain_root_basis is not None:
-    _v10_root_children_already_blender_space = bool(_forced_plain_root_basis)
-    print(
-      "Info: Test override set _v10_root_children_already_blender_space={}.".format(
-        _v10_root_children_already_blender_space
-      )
-    )
+  # For ALL .edm files, we MUST apply _ROOT_BASIS_FIX (the inverse of the DCS 
+  # Y-up coordinate swap) to the root children so that they import into Blender 
+  # as Z-up. When re-exported, io_scene_edm will apply its ROOT_TRANSFORM_MATRIX 
+  # (which is the forward DCS swap) and restore the file to its original state, 
+  # whether it was originally exported from 3ds Max (with a root swap matrix) 
+  # or from Blender (with optimized meshes in Y-up space).
 
   # Import bounding box / user box empties if requested.
   import_bbox = bool(options.get("import_bounding_box", False))
@@ -3545,7 +3461,13 @@ def read_file(filename, options=None):
   # transform payload.
   root_tf = getattr(graph.root, "transform", None)
   has_root_transform_payload = isinstance(root_tf, (TransformNode, AnimatingNode))
-  if has_root_transform_payload or _v10_is_legacy_y_up:
+  
+  # For V10+, we ALWAYS create a root Blender object to carry the global 
+  # coordinate basis fix. This ensures that ALL elements in the file (even 
+  # those attached directly to the file root) are correctly rotated.
+  force_root_obj = (_edm_version >= 10)
+
+  if has_root_transform_payload or _v10_is_legacy_y_up or force_root_obj:
     root_name = getattr(root_tf, "name", "") or ""
     if not root_name.strip():
       root_name = "_EDMFileRoot"
@@ -3555,13 +3477,20 @@ def read_file(filename, options=None):
     bpy.context.collection.objects.link(root_obj)
     graph.root.blender = root_obj
 
-    # Apply the root node transform (process_node() skips the root) only when
-    # the root actually carries transform data.
-    if has_root_transform_payload:
+    # For V10, apply the global basis fix to the root object.
+    # If the root carries its own transform (e.g. 3ds Max/Blender_ioEDM swap),
+    # multiply them so they cancel out to Identity in Blender space.
+    if _edm_version >= 10:
+      m_root = Matrix.Identity(4)
+      if hasattr(root_tf, "matrix"):
+        m_root = Matrix(root_tf.matrix)
+      elif hasattr(root_tf, "base") and hasattr(root_tf.base, "matrix"):
+        m_root = Matrix(root_tf.base.matrix)
+      
+      # Apply the fix: Blender_World = _ROOT_BASIS_FIX * EDM_Root_Matrix
+      root_obj.matrix_basis = _ROOT_BASIS_FIX @ m_root
+    elif has_root_transform_payload:
       apply_node_transform(root_tf, graph.root.blender)
-    
-    if _v10_is_legacy_y_up:
-        graph.root.blender.matrix_world = _ROOT_BASIS_FIX
   else:
     graph.root.blender = None
 
@@ -4130,14 +4059,11 @@ def apply_node_transform(node, obj):
     is_connector_obj = _is_connector_transform(node, obj)
     raw_local_mat = Matrix(node.matrix)
     _trace_interest("TransformNode.raw", raw_local_mat)
-    if _should_use_full_local_basis_convert_for_top_empty(node, obj):
-      local_mat = matrix_to_blender(raw_local_mat)
-    else:
-      local_mat = _to_blender_local_matrix(
-        node,
-        raw_local_mat,
-        apply_root_basis_fix=True,
-      )
+    local_mat = _to_blender_local_matrix(
+      node,
+      raw_local_mat,
+      apply_root_basis_fix=True,
+    )
     _trace_interest("TransformNode.converted", local_mat)
     if is_connector_obj:
       # Remove the exporter's fixed 90-degree X rotation instead of stripping all rotation.
