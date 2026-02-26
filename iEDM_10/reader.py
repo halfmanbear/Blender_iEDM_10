@@ -40,7 +40,7 @@ _PREFIXES = (
 FRAME_SCALE = 200
 
 # Global variable to track EDM version for coordinate system handling
-_edm_version = 8
+_edm_version = 10
 # Official EDM exports wrap scene space in a root basis fix matrix.
 _ROOT_BASIS_FIX = Matrix(((1, 0, 0, 0),
                           (0, 0, -1, 0),
@@ -50,7 +50,6 @@ _transform_debug = {"enabled": False, "filter": None, "limit": 200, "emitted": 0
 _mesh_origin_mode = "APPROX"
 _official_material_bridge = None
 _bone_import_ctx = None
-_v10_is_legacy_y_up = False
 _legacy_v10_parent_compose = False
 _file_has_bones = False
 
@@ -70,10 +69,16 @@ def _is_child_of_file_root(node):
   return parent is not None and getattr(parent, "parent", None) is None
 
 
-def _to_blender_local_matrix(node, mat, apply_root_basis_fix=True):
-  # v10+ coordinate conversion is now handled via a master root object 
-  # carrying _ROOT_BASIS_FIX. Individual nodes should not apply it again.
-  return mat
+def _ob_local_is_identity(o, eps=1e-6):
+  """Return True if o.matrix_local is (approximately) the identity matrix."""
+  try:
+    m = o.matrix_local
+    return all(
+      abs(float(m[r][c]) - (1.0 if r == c else 0.0)) <= eps
+      for r in range(4) for c in range(4)
+    )
+  except Exception:
+    return False
 
 
 def _is_connector_object(obj):
@@ -1181,23 +1186,11 @@ def _debug_fmt_trs(mat):
   return _debug_fmt_vec3(loc), _debug_fmt_rot_deg(rot), _debug_fmt_vec3(scale)
 
 def _anim_vector_to_blender(v):
-  # Some plain-root v10 non-skeletal assets (e.g. F-117 path) still store arg
-  # animation payloads in legacy EDM Y-up basis even though static transforms are
-  # imported via the plain-root legacy-y-up path.
-  if _edm_version >= 10 and globals().get("_v10_is_legacy_y_up", False):
-    return vector_to_blender(v)
-  # Other v10 arg animation payloads are authored in Blender-space already.
-  if _edm_version >= 10:
-    return Vector(v)
-  return vector_to_blender(v)
+  return Vector(v)
 
 
 def _anim_quaternion_to_blender(q):
-  # V10 arg animation quaternions (both legacy plain-root and standard) are
-  # already in Blender-space; only v8 needs Y-up -> Z-up conversion.
-  if _edm_version >= 10:
-    return q if hasattr(q, "to_matrix") else Quaternion(q)
-  return quaternion_to_blender(q)
+  return q if hasattr(q, "to_matrix") else Quaternion(q)
 
 
 def _is_neg90_x_basis_matrix(mat, eps=1e-3):
@@ -1236,13 +1229,7 @@ def _anim_base_quaternion_q1_to_blender(node, q):
 def _anim_scale_components(value):
   if len(value) < 3:
     return (1.0, 1.0, 1.0)
-  if _edm_version >= 10 and globals().get("_v10_is_legacy_y_up", False):
-    return (value[0], value[2], value[1])
-  # V10 scale keys are already Blender XYZ.
-  if _edm_version >= 10:
-    return (value[0], value[1], value[2])
-  # Legacy EDM: Y-up -> Blender Z-up
-  return (value[0], value[2], value[1])
+  return (value[0], value[1], value[2])
 
 
 def _expected_local_matrix(tfnode, blender_obj=None):
@@ -1250,11 +1237,7 @@ def _expected_local_matrix(tfnode, blender_obj=None):
     return None
   if isinstance(tfnode, TransformNode):
     is_connector = _is_connector_transform(tfnode, blender_obj)
-    local_mat = _to_blender_local_matrix(
-      tfnode,
-      Matrix(tfnode.matrix),
-      apply_root_basis_fix=True,
-    )
+    local_mat = Matrix(tfnode.matrix)
     if is_connector:
       # Remove the exporter's fixed 90-degree X rotation instead of stripping all rotation.
       local_mat = local_mat @ Matrix.Rotation(math.radians(-90.0), 4, "X")
@@ -1490,12 +1473,8 @@ def build_graph(edmFile):
         m_edm = m_edm @ m_rn
 
     # Convert to Blender space for graph decisions.
-    # For V10, use _to_blender_local_matrix (identity for ALL nodes).
-    # For V8, use full axis swap.
-    if _edm_version >= 10:
-        node._local_bl = _to_blender_local_matrix(tf, m_edm, apply_root_basis_fix=False)
-    else:
-        node._local_bl = matrix_to_blender(m_edm)
+    # For V10, no per-node axis conversion; V8 uses a full axis swap.
+    node._local_bl = m_edm
 
   # Calculate world matrices recursively
   _visited_world = set()
@@ -2031,17 +2010,6 @@ def process_node(node):
         has_one_child = len(getattr(node, "children", []) or []) == 1
         has_blender_dup_suffix = (len(ob_name) > 4 and ob_name[-4] == "." and ob_name[-3:].isdigit())
         not_bone_related = not isinstance(node.transform, (Bone, ArgAnimatedBone))
-        def _ob_local_is_identity(o, eps=1e-6):
-          try:
-            m = o.matrix_local
-            for r in range(4):
-              for c in range(4):
-                tgt = 1.0 if r == c else 0.0
-                if abs(float(m[r][c]) - tgt) > eps:
-                  return False
-            return True
-          except Exception:
-            return False
         if (
           is_static_tf
           and is_renderless_empty
@@ -2186,17 +2154,6 @@ def process_node(node):
       parent_is_vis = isinstance(getattr(node.parent, "transform", None), ArgVisibilityNode)
       render_cls_name = type(node.render).__name__
       is_fake_light_render = render_cls_name in {"FakeOmniLightsNode", "FakeSpotLightsNode"}
-      def _ob_local_is_identity(o, eps=1e-6):
-        try:
-          m = o.matrix_local
-          for r in range(4):
-            for c in range(4):
-              tgt = 1.0 if r == c else 0.0
-              if abs(float(m[r][c]) - tgt) > eps:
-                return False
-          return True
-        except Exception:
-          return False
       if (
         has_parent
         and _ob_local_is_identity(ob)
@@ -2222,17 +2179,6 @@ def process_node(node):
       is_anim_tf = isinstance(node.transform, AnimatingNode)
       render_cls_name = type(node.render).__name__
       is_fake_light_render = render_cls_name in {"FakeOmniLightsNode", "FakeSpotLightsNode"}
-      def _ob_local_is_identity(o, eps=1e-6):
-        try:
-          m = o.matrix_local
-          for r in range(4):
-            for c in range(4):
-              tgt = 1.0 if r == c else 0.0
-              if abs(float(m[r][c]) - tgt) > eps:
-                return False
-          return True
-        except Exception:
-          return False
       if parent_is_vis and is_fake_light_render and (not is_anim_tf) and _ob_local_is_identity(ob):
         ob["_iedm_identity_passthrough"] = True
         ob["_iedm_narrow_identity_passthrough"] = True
@@ -2359,8 +2305,8 @@ def _recenter_mesh_object_to_geometry(obj):
   """Move mesh object origin to local bounds center, preserving world mesh."""
   if obj.type != "MESH" or not obj.data or not obj.data.vertices:
     return
-  min_v = Vector((1e30, 1e30, 1e30))
-  max_v = Vector((-1e30, -1e30, -1e30))
+  min_v = Vector((float('inf'), float('inf'), float('inf')))
+  max_v = Vector((float('-inf'), float('-inf'), float('-inf')))
   for v in obj.data.vertices:
     min_v.x = min(min_v.x, v.co.x)
     min_v.y = min(min_v.y, v.co.y)
@@ -3426,12 +3372,7 @@ def read_file(filename, options=None):
   # Store version in scene for export
   bpy.context.scene.edm_version = edm.version
 
-  global _file_has_root_basis_fix
   global _file_has_bones
-  global _v10_is_legacy_y_up
-  
-  _file_has_root_basis_fix = False
-  _v10_is_legacy_y_up = False
   _file_has_bones = bool(has_bones)
 
   # For ALL .edm files, we MUST apply _ROOT_BASIS_FIX (the inverse of the DCS 
@@ -3467,7 +3408,7 @@ def read_file(filename, options=None):
   # those attached directly to the file root) are correctly rotated.
   force_root_obj = (_edm_version >= 10)
 
-  if has_root_transform_payload or _v10_is_legacy_y_up or force_root_obj:
+  if has_root_transform_payload or force_root_obj:
     root_name = getattr(root_tf, "name", "") or ""
     if not root_name.strip():
       root_name = "_EDMFileRoot"
@@ -3578,18 +3519,6 @@ def create_visibility_actions(visNode):
 
 def add_position_fcurves(action, keys, transform_left, transform_right):
   "Adds position fcurve data to an animation action"
-  if _edm_version < 10:
-    frame_values = [x.frame for x in keys]
-    minFrame = min(frame_values)
-    maxFrame = max(frame_values)
-    frameRange = maxFrame - minFrame
-    if frameRange > 0:
-      frameScale = float(FRAME_SCALE) / frameRange
-      frameOffset = -minFrame * frameScale
-    else:
-      frameScale = 1.0
-      frameOffset = FRAME_SCALE / 2.0
-
   # Create an fcurve for every component (reuse existing if present)
   curves = []
   for i in range(3):
@@ -3600,11 +3529,8 @@ def add_position_fcurves(action, keys, transform_left, transform_right):
 
   # Loop over every keyframe in this animation
   for framedata in keys:
-    if _edm_version >= 10:
-      frame = _anim_frame_to_scene_frame(framedata.frame)
-    else:
-      frame = int(frameScale * framedata.frame + frameOffset)
-    
+    frame = _anim_frame_to_scene_frame(framedata.frame)
+
     # Calculate the position transformation (convert keyframe from EDM Y-up to Blender Z-up)
     newPosMat = transform_left @ Matrix.Translation(_anim_vector_to_blender(framedata.value)) @ transform_right
     newPos = newPosMat.decompose()[0]
@@ -3616,18 +3542,6 @@ def add_position_fcurves(action, keys, transform_left, transform_right):
 
 def add_rotation_fcurves(action, keys, transform_left, transform_right):
   "Adds rotation fcurve action to an animation action"
-  if _edm_version < 10:
-    frame_values = [x.frame for x in keys]
-    minFrame = min(frame_values)
-    maxFrame = max(frame_values)
-    frameRange = maxFrame - minFrame
-    if frameRange > 0:
-      frameScale = float(FRAME_SCALE) / frameRange
-      frameOffset = -minFrame * frameScale
-    else:
-      frameScale = 1.0
-      frameOffset = FRAME_SCALE / 2.0
-
   # Keep rotation keys in quaternion form so official exporter can consume
   # them directly without Euler re-conversion drift.
   curves = []
@@ -3640,10 +3554,7 @@ def add_rotation_fcurves(action, keys, transform_left, transform_right):
   # Loop over every keyframe in this animation
   previous_quat = None
   for framedata in keys:
-    if _edm_version >= 10:
-      frame = _anim_frame_to_scene_frame(framedata.frame)
-    else:
-      frame = int(frameScale * framedata.frame + frameOffset)
+    frame = _anim_frame_to_scene_frame(framedata.frame)
     
     # Calculate the rotation transformation (convert keyframe from EDM Y-up to Blender Z-up)
     newRotQuat = transform_left @ _anim_quaternion_to_blender(framedata.value) @ transform_right
@@ -3660,18 +3571,6 @@ def add_scale_fcurves(action, keys):
   "Adds scale fcurve action to an animation action"
   if not keys:
     return
-  if _edm_version < 10:
-    frame_values = [x.frame for x in keys]
-    minFrame = min(frame_values)
-    maxFrame = max(frame_values)
-    frameRange = maxFrame - minFrame
-    if frameRange > 0:
-      frameScale = float(FRAME_SCALE) / frameRange
-      frameOffset = -minFrame * frameScale
-    else:
-      frameScale = 1.0
-      frameOffset = FRAME_SCALE / 2.0
-
   curves = []
   for i in range(3):
     curve = action.fcurves.find("scale", index=i)
@@ -3680,10 +3579,7 @@ def add_scale_fcurves(action, keys):
     curves.append(curve)
 
   for framedata in keys:
-    if _edm_version >= 10:
-      frame = _anim_frame_to_scene_frame(framedata.frame)
-    else:
-      frame = int(frameScale * framedata.frame + frameOffset)
+    frame = _anim_frame_to_scene_frame(framedata.frame)
     value = framedata.value
     comps = _anim_scale_components(value)
 
@@ -3696,8 +3592,6 @@ def create_arganimation_actions(node):
   "Creates a set of actions to represent an ArgAnimationNode"
   actions = []
 
-  legacy_v10_anim_basis = bool(_edm_version >= 10 and globals().get("_v10_is_legacy_y_up", False))
-
   # Work out the transformation chain for this object.
   # V10 arg transform payloads are already authored in Blender-local terms,
   # except top-level nodes which include the file root basis wrapper.
@@ -3705,29 +3599,15 @@ def create_arganimation_actions(node):
   aabT_raw = Matrix.Translation(Vector(node.base.position))
   q1_raw = node.base.quat_1 if hasattr(node.base.quat_1, "to_matrix") else Quaternion(node.base.quat_1)
   q1m_raw = q1_raw.to_matrix().to_4x4()
-  base_mat = _to_blender_local_matrix(node, Matrix(node.base.matrix))
-  # Keep basis inverse for future debugging but do not premultiply; Blender
-  # scene dump shows base pose stored in base_mat.
+  base_mat = Matrix(node.base.matrix)
   mat_bl = base_mat
-  if legacy_v10_anim_basis:
-    # F-117-style plain-root v10 assets import static transforms under a root
-    # wrapper, but arg payload vectors/quats need local-basis conversion for the
-    # exporter to re-emit correct EDM animation axes.
-    aabS = aabS_raw
-    aabT = Matrix.Translation(_anim_vector_to_blender(node.base.position))
-    q1m = _anim_base_quaternion_q1_to_blender(node, node.base.quat_1).to_matrix().to_4x4()
-    q1 = q1m.to_quaternion()
-    q1_rot = q1_raw
-    mat_anim = mat_bl
-    matQuat = mat_bl.decompose()[1]
-  else:
-    aabS = aabS_raw
-    aabT = Matrix.Translation(_anim_vector_to_blender(node.base.position))
-    q1m = _anim_base_quaternion_q1_to_blender(node, node.base.quat_1).to_matrix().to_4x4()
-    q1 = q1m.to_quaternion()
-    q1_rot = q1
-    mat_anim = mat_bl
-    matQuat = mat_bl.decompose()[1]
+  aabS = aabS_raw
+  aabT = Matrix.Translation(_anim_vector_to_blender(node.base.position))
+  q1m = _anim_base_quaternion_q1_to_blender(node, node.base.quat_1).to_matrix().to_4x4()
+  q1 = q1m.to_quaternion()
+  q1_rot = q1
+  mat_anim = mat_bl
+  matQuat = mat_bl.decompose()[1]
 
   # With:
   #   aabT = Matrix.Translation(argNode.base.position)
@@ -3751,10 +3631,7 @@ def create_arganimation_actions(node):
   # Reconstruct the neutral local transform from the same chain used at export.
   # We include the full mat_bl (with translation) in zero_mat so the Blender Object
   # is placed correctly (handling the 'Static' part of the split transform).
-  if legacy_v10_anim_basis:
-    zero_mat = (mat_bl @ q1m_raw @ aabS_raw)
-  else:
-    zero_mat = (mat_bl @ q1m @ aabS)
+  zero_mat = (mat_bl @ q1m @ aabS)
   node.zero_transform_local_matrix = zero_mat
   dcLoc, dcRot, dcScale = zero_mat.decompose()
   node.zero_transform_matrix = zero_mat
@@ -3987,9 +3864,8 @@ def create_segments(segments_node):
     v1 = Vector((segment[0], segment[1], segment[2]))
     v2 = Vector((segment[3], segment[4], segment[5]))
 
-    if _edm_version < 10:
-      v1 = vector_to_blender(v1)
-      v2 = vector_to_blender(v2)
+    v1 = Vector(v1)
+    v2 = Vector(v2)
 
     # Add vertices
     verts.extend([v1, v2])
@@ -4059,11 +3935,7 @@ def apply_node_transform(node, obj):
     is_connector_obj = _is_connector_transform(node, obj)
     raw_local_mat = Matrix(node.matrix)
     _trace_interest("TransformNode.raw", raw_local_mat)
-    local_mat = _to_blender_local_matrix(
-      node,
-      raw_local_mat,
-      apply_root_basis_fix=True,
-    )
+    local_mat = raw_local_mat
     _trace_interest("TransformNode.converted", local_mat)
     if is_connector_obj:
       # Remove the exporter's fixed 90-degree X rotation instead of stripping all rotation.
@@ -4135,13 +4007,10 @@ def _create_mesh(vertexData, indexData, vertexFormat):
 
   # Create the BMesh vertices, optionally with normals
   for i, vtx in enumerate(new_vertices):
-    pos_raw = Vector(vtx[x] for x in posIndex)
-    # V10 geometry payloads are already authored in Blender-space.
-    pos = pos_raw if _edm_version >= 10 else vector_to_blender(pos_raw)
+    pos = Vector(vtx[x] for x in posIndex)
     vert = bm.verts.new(pos)
     if normIndex and vertex_normals is not None:
-      norm_raw = Vector(vtx[x] for x in normIndex)
-      norm = norm_raw if _edm_version >= 10 else vector_to_blender(norm_raw)
+      norm = Vector(vtx[x] for x in normIndex)
       if norm.length_squared > 1e-12:
         norm.normalize()
       vert.normal = norm

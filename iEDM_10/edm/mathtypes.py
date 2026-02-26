@@ -57,24 +57,10 @@ def world_matrix_to_blender(matrix):
   """Converts a WORLD matrix (pre-multiplied global swap)."""
   return _R @ matrix
 
-#def matrix_to_edm(matrix):
-#  return _R_inv @ matrix @ _R
-
-#def world_matrix_to_edm(matrix):
-#  return _R_inv @ matrix
-
 def quaternion_to_blender(q):
   """Convert quaternion from EDM Y-up to Blender Z-up."""
   return (_R @ q.to_matrix().to_4x4() @ _R_inv).to_quaternion()
 
-#def quaternion_to_edm(q):
-#  """Convert quaternion from Blender Z-up to EDM Y-up."""
-#  return (_R_inv @ q.to_matrix().to_4x4() @ _R).to_quaternion()
-
 def vector_to_blender(v):
-  """Swaps axes from EDM (Y-up) to Blender (Z-up)."""
-  # Must match _R @ Vector(v)
-  return Vector([v[0], -v[2], v[1]])
-
-#def vector_to_edm(v):
-#  return Vector([v[0], v[2], -v[1]])
+  """EDM v10 data already uses Blender's Z-up axes."""
+  return Vector(v)
