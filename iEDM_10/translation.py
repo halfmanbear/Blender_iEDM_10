@@ -206,11 +206,15 @@ class TranslationGraph(object):
         assert node is not self.root, "Cannot insert above root"
 
         # Create the new node attached to the old parent
+        parent = node.parent
+        index = parent.children.index(node)
         newNode = TranslationNode()
-        self.attach_node(newNode, node.parent)
+        self.attach_node(newNode, parent)
+        parent.children.remove(newNode)
+        parent.children.insert(index, newNode)
 
         # Move the node off its original parent onto the new node
-        node.parent.children.remove(node)
+        parent.children.remove(node)
         newNode.children.append(node)
         node.parent = newNode
 
@@ -230,10 +234,6 @@ class TranslationGraph(object):
 
         # Walk up the graphs to get all 'root' objects
         roots = set(get_root_object(x) for x in blender_objects)
-
-        # If you later want validation / debug, keep this:
-        # all_nodes = set(get_all_parents(blender_objects))
-        # Otherwise, it was unused, so it is intentionally removed.
 
         nodeObjectMap = {}
 

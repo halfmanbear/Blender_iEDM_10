@@ -3,6 +3,22 @@
 from collections import OrderedDict, Counter
 from .mathtypes import Vector
 
+
+def _property_type_name(value):
+  """Return the EDM type string for a property value."""
+  if isinstance(value, bool):
+    return "model::Property<unsigned int>"
+  if isinstance(value, float):
+    return "model::Property<float>"
+  if isinstance(value, int):
+    return "model::Property<unsigned int>"
+  if isinstance(value, str):
+    return "model::Property<const char*>"
+  if isinstance(value, Vector):
+    return "model::Property<osg::Vec{}f>".format(len(value))
+  raise IOError("Unknown property type {}/{}".format(value, type(value)))
+
+
 class PropertiesSet(OrderedDict):
   @classmethod
   def read(cls, stream, count=True, preserve_animated=False):
@@ -21,45 +37,25 @@ class PropertiesSet(OrderedDict):
 
     return data
 
+  _SCALAR_WRITERS = {
+    "model::Property<unsigned int>": lambda w, v: w.write_uint(int(v)),
+    "model::Property<float>":        lambda w, v: w.write_float(v),
+    "model::Property<const char*>":  lambda w, v: w.write_string(v),
+  }
+
   def write(self, writer):
     writer.write_uint(len(self))
     for key, value in self.items():
-      if isinstance(value, bool):
-        # bool is a subclass of int; write as uint to avoid misclassification
-        writer.write_string("model::Property<unsigned int>")
-        writer.write_string(key)
-        writer.write_uint(int(value))
-      elif isinstance(value, float):
-        writer.write_string("model::Property<float>")
-        writer.write_string(key)
-        writer.write_float(value)
-      elif isinstance(value, int):
-        writer.write_string("model::Property<unsigned int>")
-        writer.write_string(key)
-        writer.write_uint(value)
-      elif isinstance(value, str):
-        writer.write_string("model::Property<const char*>")
-        writer.write_string(key)
-        writer.write_string(value)
-      elif isinstance(value, Vector):
-        typeName = "model::Property<osg::Vec{}f>".format(len(value))
-        writer.write_string(typeName)
-        writer.write_string(key)
+      type_name = _property_type_name(value)
+      writer.write_string(type_name)
+      writer.write_string(key)
+      if isinstance(value, Vector):
         writer.write_vecf(value)
       else:
-        raise IOError("Don't know how to write property {}/{}".format(value, type(value)))
+        self._SCALAR_WRITERS[type_name](writer, value)
 
   def audit(self):
     c = Counter()
-    for entry in self.values():
-      if isinstance(entry, Vector):
-        c["model::Property<osg::Vec{}f>".format(len(entry))] += 1
-      elif isinstance(entry, int):
-        c["model::Property<unsigned int>"] += 1
-      elif isinstance(entry, float):
-        c["model::Property<float>"] += 1
-      elif isinstance(entry, str):
-        c["model::Property<const char*>"] += 1
-      else:
-        raise IOError("Do not know how to audit uniform property {}".format(entry))
+    for value in self.values():
+      c[_property_type_name(value)] += 1
     return c
