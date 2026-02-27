@@ -43,9 +43,13 @@ def matrix_to_sequence(mat):
 def sequence_to_quaternion(seq):
   return Quaternion((seq[3], seq[0], seq[1], seq[2]))
 
-# Coordinate conversion matrices: EDM uses Y-up, Blender uses Z-up.
+# Coordinate conversion matrices used for EDM matrix/quaternion transforms.
+# EDM stores matrices/quaternions in Y-up space; Blender uses Z-up.
 # _R converts a point from EDM (Y-up) to Blender (Z-up).
 # _R_inv converts a point from Blender (Z-up) to EDM (Y-up).
+# Note: EDM v10 position vectors are already stored in Blender's Z-up axes,
+# so vector_to_blender is a passthrough. The matrix/quaternion helpers below
+# still perform the basis-change for rotation data.
 _R = Matrix(((1,0,0,0),(0,0,-1,0),(0,1,0,0),(0,0,0,1)))      # Y-up -> Z-up
 _R_inv = Matrix(((1,0,0,0),(0,0,1,0),(0,-1,0,0),(0,0,0,1)))  # Z-up -> Y-up
 
@@ -62,5 +66,5 @@ def quaternion_to_blender(q):
   return (_R @ q.to_matrix().to_4x4() @ _R_inv).to_quaternion()
 
 def vector_to_blender(v):
-  """EDM v10 data already uses Blender's Z-up axes."""
+  """EDM v10 position vectors are already in Blender's Z-up axes — no conversion needed."""
   return Vector(v)
