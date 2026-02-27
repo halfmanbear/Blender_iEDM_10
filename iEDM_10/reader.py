@@ -61,7 +61,12 @@ _BLENDER_LAMP_WEAK_COEFFICIENT = 1.0 / 2.9
 
 def _anim_frame_to_scene_frame(frame_value):
   """Map EDM normalized animation frame [-1..1] to scene frame [0..FRAME_SCALE]."""
-  return int(round((float(frame_value) + 1.0) * FRAME_SCALE / 2.0))
+  try:
+    val = int(round((float(frame_value) + 1.0) * FRAME_SCALE / 2.0))
+    # Clamp to 32-bit int for safety
+    return min(2147483647, max(-2147483648, val))
+  except (OverflowError, ValueError):
+    return 0
 
 
 def _is_child_of_file_root(node):
@@ -1391,6 +1396,10 @@ def build_graph(edmFile):
   # Keep transform and render nodes separate in general, but absorb simple
   # connector-helper chains to avoid creating implementation-detail empties.
   def _absorb_connector_helper(node):
+    return # DISABLED: absorbing the Connector render payload into its parent TransformNode
+           # prevents _collapse_chains from recognising that node as a "Connector Transform"
+           # dummy child, leaving a spurious model:TransformNode wrapping model:Connector
+           # objects in the Blender scene. Leave disabled so _collapse_chains can handle it.
     if node.type != "TRANSFORM":
       return
     if node.render or len(node.children) != 1:
@@ -1415,6 +1424,12 @@ def build_graph(edmFile):
       return
     child = node.children[0]
     if child.type != "RENDER":
+      return
+    # Don't absorb Connector render nodes — absorbing them gives the parent
+    # TransformNode a render payload, which prevents _collapse_chains from
+    # treating it as a collapsible "Connector Transform" dummy child, leaving
+    # a spurious model:TransformNode wrapping model:Connector in the scene.
+    if isinstance(child.render, Connector):
       return
     # Only collapse static TransformNodes.
     # Collapsing ArgAnimationNode changes the basis frame for animations if the
@@ -1823,6 +1838,7 @@ def _create_user_box_from_root(root):
 
 def process_node(node):
   """Processes a single node of the transform graph"""
+  _used_shared_parent_fallback = False
   # Root node has no processing
   if node.parent is None:
     return
@@ -2103,6 +2119,12 @@ def process_node(node):
   if _is_render_only_positioning:
     shared_parent = getattr(node.render, "shared_parent", None)
     _used_shared_parent_fallback = False
+    
+    # Parity: Always factor in shared_parent transform for V10 chunks.
+    if shared_parent is not None:
+      apply_node_transform(shared_parent, node.blender, used_shared_parent=True)
+      _used_shared_parent_fallback = True
+
     if shared_parent is not None and node.parent and node.parent.blender:
       src = getattr(shared_parent, "_blender_obj", None)
       dst = node.parent.blender
@@ -2117,7 +2139,7 @@ def process_node(node):
         # the exporter control node does not become an identity wrapper under v_*.
         try:
           if getattr(shared_parent, "category", None) is NodeCategory.transform:
-            apply_node_transform(shared_parent, node.blender)
+            apply_node_transform(shared_parent, node.blender, used_shared_parent=True)
             _used_shared_parent_fallback = True
         except Exception:
           pass
@@ -2244,7 +2266,7 @@ def process_node(node):
               nla_pushed += 1
           node.blender.animation_data.action = None if nla_pushed > 0 else actions[0]
 
-    apply_node_transform(node.transform, node.blender)
+    apply_node_transform(node, node.blender, used_shared_parent=_used_shared_parent_fallback)
 
     if node.blender.type == "EMPTY":
       distFromScale = node.blender.scale - Vector((1, 1, 1))
@@ -2259,6 +2281,37 @@ def process_node(node):
     node.blender.animation_data.action = vis_actions[0]
 
   _compact_visibility_identity_intermediate(node)
+
+  # Diagnostic: Dump all numeric/vector attributes of the EDM node to Blender
+  # This allows the user to see what is being ignored by the parser.
+  if node.blender:
+    def _dump_diag(target, prefix="EDM_RAW_"):
+      for attr in dir(target):
+        if attr.startswith("_") or attr == "blender" or attr == "children" or attr == "parent":
+          continue
+        val = getattr(target, attr)
+        if isinstance(val, (int, float, str, bool)):
+          try:
+            node.blender[prefix + attr] = val
+          except (OverflowError, ValueError):
+            pass
+        elif isinstance(val, (list, tuple)) and len(val) <= 16:
+          try:
+            # Try to store as property (Blender supports arrays)
+            node.blender[prefix + attr] = val
+          except Exception:
+            pass
+
+    if node.transform:
+      _dump_diag(node.transform, "EDM_TF_")
+      if hasattr(node.transform, "base"):
+          _dump_diag(node.transform.base, "EDM_BASE_")
+    if node.render:
+      _dump_diag(node.render, "EDM_RN_")
+    
+    # Store the importer's calculated Blender local matrix
+    if hasattr(node, "_local_bl"):
+      node.blender["IEDM_LOCAL_BL_MAT"] = [v for row in node._local_bl for v in row]
 
   _debug_dump_node_transform(node)
 
@@ -3141,8 +3194,9 @@ def _bind_skin_object(mesh_obj, skin_node):
     arm_mod = mesh_obj.modifiers.new(name="Armature", type="ARMATURE")
   arm_mod.object = arm_obj
 
-  # Parent skinned mesh to armature so the exporter's tree walk finds it
-  # under current_armature context (required for build_skin to work).
+  # Parity: Keep original hierarchy parent if one exists. Reparenting to the 
+  # armature root (the legacy path) breaks local transform inheritance from 
+  # ancestors like wings or pylons.
   if mesh_obj.parent is None:
     mesh_obj.parent = arm_obj
 
@@ -3150,22 +3204,17 @@ def _bind_skin_object(mesh_obj, skin_node):
   if nverts == 0:
     return
 
-  # Mesh vertices are compacted to sorted(set(indexData)) in _create_mesh.
-  used_indices = sorted(set(getattr(skin_node, "indexData", [])))
-  if not used_indices:
-    used_indices = list(range(min(nverts, len(getattr(skin_node, "vertexData", [])))))
-  if len(used_indices) < nverts:
-    used_indices.extend([used_indices[-1]] * (nverts - len(used_indices)))
-
+  # For SkinNode, the mesh data was built using the full original vertexData 
+  # pool (no compaction) to maintain 1:1 parity with the EDM bone weights.
   slice21 = _channel_slices_from_vertex_format(skin_node.material.vertex_format).get(21)
   per_vertex_group_count = [0] * nverts
   used_bone_indices = set()
 
   for vi in range(nverts):
-    src_idx = used_indices[vi] if vi < len(used_indices) else vi
-    if src_idx >= len(skin_node.vertexData):
+    # Skinned meshes use the original EDM vertex index directly.
+    if vi >= len(skin_node.vertexData):
       continue
-    src = skin_node.vertexData[src_idx]
+    src = skin_node.vertexData[vi]
     weights = []
     if slice21:
       weights = [float(x) for x in src[slice21[0]:slice21[1]]]
@@ -3431,7 +3480,7 @@ def read_file(filename, options=None):
       # Apply the fix: Blender_World = _ROOT_BASIS_FIX * EDM_Root_Matrix
       root_obj.matrix_basis = _ROOT_BASIS_FIX @ m_root
     elif has_root_transform_payload:
-      apply_node_transform(root_tf, graph.root.blender)
+      apply_node_transform(graph.root, graph.root.blender, used_shared_parent=False)
   else:
     graph.root.blender = None
 
@@ -3600,6 +3649,12 @@ def create_arganimation_actions(node):
   q1_raw = node.base.quat_1 if hasattr(node.base.quat_1, "to_matrix") else Quaternion(node.base.quat_1)
   q1m_raw = q1_raw.to_matrix().to_4x4()
   base_mat = Matrix(node.base.matrix)
+  
+  # Parity Fix: ArgAnimatedBone has an extra boneTransform that must be 
+  # included in the static part of the animation chain.
+  if type(node).__name__ == "ArgAnimatedBone" and hasattr(node, "boneTransform"):
+    base_mat = base_mat @ Matrix(node.boneTransform)
+
   mat_bl = base_mat
   aabS = aabS_raw
   aabT = Matrix.Translation(_anim_vector_to_blender(node.base.position))
@@ -3629,9 +3684,19 @@ def create_arganimation_actions(node):
   #             Rotates geometry into file-space      |     |      |     |
   #                                           |       |     |      |     |
   # Reconstruct the neutral local transform from the same chain used at export.
-  # We include the full mat_bl (with translation) in zero_mat so the Blender Object
-  # is placed correctly (handling the 'Static' part of the split transform).
-  zero_mat = (mat_bl @ q1m @ aabS)
+  # Parity Fix: Include aabT (base position) in the static transform. 
+  # This correctly places the animation controller empty in Blender.
+  zero_mat = (mat_bl @ aabT @ q1m @ aabS)
+  
+  bmat_inv = getattr(node, "bmat_inv", None)
+  if bmat_inv is not None:
+    # bmat_inv is often a coordinate system correction (e.g. 3ds Max vs Blender)
+    # for that specific animation node.
+    try:
+      zero_mat = zero_mat @ bmat_inv.inverted()
+    except Exception:
+      pass
+
   node.zero_transform_local_matrix = zero_mat
   dcLoc, dcRot, dcScale = zero_mat.decompose()
   node.zero_transform_matrix = zero_mat
@@ -3662,7 +3727,15 @@ def create_arganimation_actions(node):
     # Double Translation on export (TransformNode + ArgAnimationNode both translating).
     leftPosition = (mat_anim @ aabT).to_3x3().to_4x4()
     
+    # Factor in bmat_inv to the animation basis if present.
     rightPosition = q1m @ aabS
+    if bmat_inv is not None:
+      try:
+        rightPosition = rightPosition @ bmat_inv.inverted()
+        # Rotation basis also needs correction
+        leftRotation = leftRotation @ bmat_inv.to_quaternion().inverted()
+      except Exception:
+        pass
 
     # Build the f-curves for the action
     for pos in posData:
@@ -3885,9 +3958,14 @@ def create_segments(segments_node):
 
   return ob
 
-def apply_node_transform(node, obj):
-  """Assigns the transform to a given node"""
-  assert node.category is NodeCategory.transform
+def apply_node_transform(node, obj, used_shared_parent=False):
+  """Assigns the transform to a given node. node can be a TranslationNode or raw EDM node."""
+  # Unpack TranslationNode if provided
+  tnode = node if hasattr(node, "transform") else None
+  tfnode = tnode.transform if tnode else node
+  
+  if tfnode is None:
+    return
 
   obj.rotation_mode = "XYZ"
 
@@ -3895,7 +3973,7 @@ def apply_node_transform(node, obj):
     if not _transform_debug.get("enabled"):
       return
     needle = _transform_debug.get("filter")
-    node_name = getattr(node, "name", "") or type(node).__name__
+    node_name = getattr(tfnode, "name", "") or type(tfnode).__name__
     if needle:
       n = needle.lower()
       if n not in node_name.lower() and n not in obj.name.lower():
@@ -3905,13 +3983,7 @@ def apply_node_transform(node, obj):
       node_name, source_label, obj.name, _debug_fmt_vec3(loc), _debug_fmt_rot_deg(rot), _debug_fmt_vec3(scale)
     ))
 
-  def _trace_interest(stage, local_mat):
-    pass
-
   def _set_local_matrix(local_mat):
-    # Preserve exact local matrices where possible; decompose/recompose can
-    # introduce axis/sign drift (notably for root-level v10 transforms with
-    # basis wrappers and non-uniform scaling).
     try:
       obj.matrix_basis = local_mat
       return
@@ -3919,9 +3991,9 @@ def apply_node_transform(node, obj):
       pass
     loc, rot, scale = local_mat.decompose()
     obj.location = loc
+    obj.rotation_mode = "XYZ"
     obj.rotation_euler = rot.to_euler('XYZ')
     obj.scale = scale
-
 
   def _compose_with_parent_if_enabled(local_mat):
     if _legacy_v10_parent_compose and obj.parent is not None and _edm_version >= 10:
@@ -3931,56 +4003,57 @@ def apply_node_transform(node, obj):
         return local_mat
     return local_mat
 
-  if isinstance(node, TransformNode):
-    is_connector_obj = _is_connector_transform(node, obj)
-    raw_local_mat = Matrix(node.matrix)
-    _trace_interest("TransformNode.raw", raw_local_mat)
-    local_mat = raw_local_mat
-    _trace_interest("TransformNode.converted", local_mat)
+  # 1. Base Transform from Node.transform
+  final_local = Matrix.Identity(4)
+  if isinstance(tfnode, TransformNode):
+    is_connector_obj = _is_connector_transform(tfnode, obj)
+    local_mat = Matrix(tfnode.matrix)
     if is_connector_obj:
-      # Remove the exporter's fixed 90-degree X rotation instead of stripping all rotation.
       local_mat = local_mat @ Matrix.Rotation(math.radians(-90.0), 4, "X")
     final_local = _compose_with_parent_if_enabled(local_mat)
-    _trace_interest("TransformNode.final", final_local)
-    _debug_set_trace("TransformNode.matrix", final_local)
-    _set_local_matrix(final_local)
-  elif isinstance(node, AnimatingNode):
-    # Use zero_transform computed in create_arganimation_actions, which
-    # uses the full transform chain (base.matrix @ T(pos) @ R(q1) @ S).
-    # Set matrix_basis directly from the node's own local transform — no
-    # parent pre-multiplication. matrix_parent_inverse stays Identity so
-    # matrix_local = matrix_basis = local_mat.
-    if hasattr(node, "zero_transform_local_matrix"):
-      local_mat = node.zero_transform_local_matrix
-      final_local = _compose_with_parent_if_enabled(local_mat)
-      _trace_interest("Animating.zero_local", final_local)
-      _debug_set_trace("zero_transform_local_matrix", final_local)
-      _set_local_matrix(final_local)
-    elif hasattr(node, "zero_transform_matrix"):
-      final_local = _compose_with_parent_if_enabled(node.zero_transform_matrix)
-      _debug_set_trace("zero_transform_matrix", final_local)
-      _set_local_matrix(final_local)
-    elif hasattr(node, "zero_transform"):
-      loc, rot, scale = node.zero_transform
-      tuple_mat = Matrix.LocRotScale(loc, rot, scale)
-      final_local = _compose_with_parent_if_enabled(tuple_mat)
-      _debug_set_trace("zero_transform(tuple)", final_local)
-      _set_local_matrix(final_local)
-    elif not isinstance(node, ArgVisibilityNode):
-      # Vis nodes don't have transforms, but otherwise they should
-      print("Warning: Transform {} has no zero-tranform".format(node))
+  elif isinstance(tfnode, AnimatingNode):
+    if hasattr(tfnode, "zero_transform_local_matrix"):
+      final_local = _compose_with_parent_if_enabled(tfnode.zero_transform_local_matrix)
+    elif hasattr(tfnode, "zero_transform_matrix"):
+      final_local = _compose_with_parent_if_enabled(tfnode.zero_transform_matrix)
+    elif hasattr(tfnode, "zero_transform"):
+      loc, rot, scale = tfnode.zero_transform
+      final_local = _compose_with_parent_if_enabled(Matrix.LocRotScale(loc, rot, scale))
+
+  # 2. Inherit RenderNode local offset if present
+  # In EDM, RenderNodes can have their own pos/matrix separate from the transform node.
+  render = tnode.render if tnode else None
+  if render:
+    m_rn = Matrix.Identity(4)
+    if hasattr(render, "pos"):
+      m_rn = Matrix.Translation(Vector(render.pos[:3]))
+    elif hasattr(render, "matrix"):
+      m_rn = Matrix(render.matrix)
+    
+    if not m_rn.is_identity:
+      final_local = final_local @ m_rn
+
+  _set_local_matrix(final_local)
+  _debug_set_trace(type(tfnode).__name__, final_local)
 
 
-def _create_mesh(vertexData, indexData, vertexFormat):
+def _create_mesh(vertexData, indexData, vertexFormat, compact=True):
   """Creates a blender mesh object from vertex, index and format data"""
 
-  # Build compact per-part meshes from referenced vertices only.
-  # Keeping full shared pools (e.g. 3k+ verts for every split chunk) causes
-  # exporter merge/reindex behavior to diverge from official blend exports.
-  used_indices = sorted(set(indexData))
-  new_vertices = [vertexData[i] for i in used_indices]
-  index_lookup = {old_idx: new_idx for new_idx, old_idx in enumerate(used_indices)}
-  new_indices = [index_lookup[i] for i in indexData]
+  if compact:
+    # Build compact per-part meshes from referenced vertices only.
+    # Keeping full shared pools (e.g. 3k+ verts for every split chunk) causes
+    # exporter merge/reindex behavior to diverge from official blend exports.
+    used_indices = sorted(set(indexData))
+    new_vertices = [vertexData[i] for i in used_indices]
+    index_lookup = {old_idx: new_idx for new_idx, old_idx in enumerate(used_indices)}
+    new_indices = [index_lookup[i] for i in indexData]
+  else:
+    # For skinned meshes, we MUST use the full vertex pool to keep indices
+    # in sync with the bone weights.
+    new_vertices = vertexData
+    new_indices = indexData
+
   # Make sure we have the right number of indices...
   assert len(new_indices) % 3 == 0
 
@@ -4110,8 +4183,13 @@ def _map_animated_uniforms_to_edmprops(ob, node):
       continue
     edmprops_field = _ANIMATED_UNIFORM_TO_EDMPROPS.get(name)
     if edmprops_field and hasattr(ob.EDMProps, edmprops_field):
-      if prop.argument >= 0:
-        setattr(ob.EDMProps, edmprops_field, int(prop.argument))
+      if prop.argument is not None and prop.argument >= 0:
+        try:
+          # Clamp to 32-bit signed int limit for Blender's IntProperty
+          val = min(2147483647, int(prop.argument))
+          setattr(ob.EDMProps, edmprops_field, val)
+        except (OverflowError, ValueError):
+          pass
 
 
 def create_object(node):
@@ -4130,8 +4208,10 @@ def create_object(node):
   if not node.indexData:
     return None
 
-  # Create the mesh
-  mesh = _create_mesh(node.vertexData, node.indexData, vertexFormat)
+  # Create the mesh. Skinned meshes must NOT use compaction as their vertex
+  # weights rely on the original EDM vertex indices.
+  compact = not isinstance(node, SkinNode)
+  mesh = _create_mesh(node.vertexData, node.indexData, vertexFormat, compact=compact)
   mesh.name = node.name
 
   # Owner-channel extraction needs index remap from source vertexData to mesh points.
@@ -4237,7 +4317,12 @@ def _set_edmprop(obj, prop_name, value):
   edm_props = obj.EDMProps
   if hasattr(edm_props, prop_name):
     try:
+      # Clamp integers to 32-bit signed limit for Blender's IntProperty
+      if isinstance(value, int):
+        value = min(2147483647, max(-2147483648, value))
       setattr(edm_props, prop_name, value)
+    except (OverflowError, ValueError):
+      pass
     except Exception:
       pass
 
