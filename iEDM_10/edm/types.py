@@ -110,9 +110,9 @@ class EDMFile(object):
   def _read(self, reader):
     reader.read_constant(b'EDM')
     self.version = reader.read_ushort()
-    assert self.version in [8, 10], "Unexpected .EDM file version = {}".format(self.version)
-    if self.version == 10:
-      logger.info("Reading EDM version 10 file")
+    if self.version != 10:
+      raise IOError("Unsupported EDM version {}; only v10 is supported".format(self.version))
+    logger.info("Reading EDM version 10 file")
     reader.version = self.version
 
     if reader.v10:
@@ -178,7 +178,9 @@ class EDMFile(object):
           except Exception as exc:
             payload_error = True
             reader.seek(pos)
-            print("Warning: Could not parse NumberNode post payload: {}".format(exc))
+            logger.warning("NumberNode post-payload parse failed (%s: %s); "
+                           "skipping remaining NumberNode payloads.",
+                           type(exc).__name__, exc)
             break
         if payload_error:
           for n in number_nodes:
@@ -205,6 +207,9 @@ class EDMFile(object):
         if mats and arg_nodes:
           # Heuristic: tail often stores [base, inverse] per arg; when count permits,
           # use the second half as the inverse/bind offset.
+          # TODO: bmat_inv is stored here but not yet consumed by the importer.
+          # These are likely inverse bind matrices for the animation system;
+          # implement their use when the dual-quaternion skinning path is added.
           offset = len(arg_nodes) if len(mats) >= 2 * len(arg_nodes) else 0
           for i, n in enumerate(arg_nodes):
             idx = i + offset
@@ -515,6 +520,9 @@ class ArgAnimationBase(object):
     self.matrix = matrix or Matrix()
     self.position = position or Vector()
     self.quat_1 = quat_1 or Quaternion((1,0,0,0))
+    # quat_2 is the second component of a dual-quaternion (used for blend
+    # skinning), but its semantics are not yet implemented in the importer.
+    # It is preserved here so the write path can round-trip it faithfully.
     self.quat_2 = quat_2 or Quaternion((1,0,0,0))
     self.scale = scale or Vector((1,1,1))
   @classmethod
@@ -761,7 +769,7 @@ class LodNode(Node):
   def read(cls, stream):
     self = super(LodNode, cls).read(stream)
     count = stream.read_uint()
-    self.level = [tuple(math.sqrt(x) for x in stream.read_doubles(2)) for x in range(count)]
+    self.level = [tuple(math.sqrt(v) for v in stream.read_doubles(2)) for _ in range(count)]
     stream.mark_type_read("model::LodNode::Level", count)
     return self
   def audit(self):

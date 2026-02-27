@@ -87,7 +87,7 @@ class ImportEDM(Operator, ImportHelper):
           "import_user_box": self.import_user_box,
         })
     except Exception as e:
-        self.report({'ERROR'}, "Failed to import EDM: {}".format(e))
+        self.report({'ERROR'}, "Failed to import EDM: {}: {}".format(type(e).__name__, e))
         import traceback
         traceback.print_exc()
         return {'CANCELLED'}
