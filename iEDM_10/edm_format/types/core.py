@@ -1,15 +1,15 @@
-from .typereader import reads_type
-from .typereader import get_type_reader as _tr_get_type_reader
-from .basereader import BaseReader
+from ..typereader import reads_type
+from ..typereader import get_type_reader as _tr_get_type_reader
+from ..basereader import BaseReader
 
-from .material_types import VertexFormat, Material, Texture, ShadowSettings
-from .propertiesset import PropertiesSet
+from ..material_types import VertexFormat, Material, Texture, ShadowSettings
+from ..propertiesset import PropertiesSet
 
 from collections import namedtuple, OrderedDict, Counter
 import itertools
 import struct
 
-from .mathtypes import Vector, sequence_to_matrix, Matrix, Quaternion
+from ..mathtypes import Vector, sequence_to_matrix, Matrix, Quaternion
 
 from abc import ABC
 from enum import Enum
@@ -31,8 +31,69 @@ class AnimatingNode(ABC):
 
 
 # All possible entries for indexA and indexB
-_all_IndexA = {'model::TransformNode', 'model::FakeOmniLightsNode', 'model::SkinNode', 'model::Connector', 'model::ShellNode', 'model::SegmentsNode', 'model::FakeSpotLightsNode', 'model::BillboardNode', 'model::ArgAnimatedBone', 'model::RootNode', 'model::Node', 'model::ArgAnimationNode', 'model::LightNode', 'model::LodNode', 'model::Bone', 'model::RenderNode', 'model::ArgVisibilityNode'}
-_all_IndexB = {'model::Key<key::ROTATION>', 'model::Property<float>', 'model::ArgAnimationNode::Position', '__pointers', 'model::FakeOmniLight', 'model::Key<key::SCALE>', 'model::AnimatedProperty<osg::Vec3f>', 'model::Key<key::VEC3F>', 'model::Property<osg::Vec2f>', 'model::Property<osg::Vec3f>', 'model::ArgAnimationNode::Rotation', 'model::ArgVisibilityNode::Range', 'model::Key<key::POSITION>', 'model::AnimatedProperty<osg::Vec2f>', 'model::Key<key::FLOAT>', '__ci_bytes', '__gv_bytes', 'model::ArgVisibilityNode::Arg', 'model::AnimatedProperty<float>', 'model::RNControlNode', 'model::SegmentsNode::Segments', '__gi_bytes', '__cv_bytes', 'model::Property<unsigned int>', 'model::Key<key::VEC2F>', 'model::ArgAnimationNode::Scale', 'model::LodNode::Level', 'model::PropertiesSet', 'model::FakeSpotLight'}
+_all_IndexA = {'model::TransformNode', 'model::FakeOmniLightsNode', 'model::AnimatedFakeOmniLightsNode', 'model::SkinNode', 'model::Connector', 'model::ShellNode', 'model::ShellSkinNode', 'model::TreeShellNode', 'model::SegmentsNode', 'model::FakeSpotLightsNode', 'model::AnimatedFakeSpotLightsNode', 'model::FakeSpotLights3Node', 'model::BillboardNode', 'model::ArgAnimatedBone', 'model::RootNode', 'model::TmpNumberRoot', 'model::Node', 'model::ArgAnimationNode', 'model::LightNode', 'model::LodNode', 'model::Bone', 'model::RenderNode', 'model::ArgVisibilityNode'}
+_all_IndexB = {'model::Key<key::ROTATION>', 'model::Property<float>', 'model::ArgAnimationNode::Position', '__pointers', 'model::FakeOmniLight', 'model::Key<key::SCALE>', 'model::AnimatedProperty<osg::Vec3f>', 'model::AnimatedProperty<osg::Vec4f>', 'model::Key<key::VEC3F>', 'model::Key<key::VEC4F>', 'model::Property<osg::Vec2f>', 'model::Property<osg::Vec3f>', 'model::Property<osg::Vec4f>', 'model::ArgAnimationNode::Rotation', 'model::ArgVisibilityNode::Range', 'model::Key<key::POSITION>', 'model::AnimatedProperty<osg::Vec2f>', 'model::Key<key::FLOAT>', '__ci_bytes', '__gv_bytes', 'model::ArgVisibilityNode::Arg', 'model::AnimatedProperty<float>', 'model::RNControlNode', 'model::SegmentsNode::Segments', '__gi_bytes', '__cv_bytes', 'model::Property<unsigned int>', 'model::Key<key::VEC2F>', 'model::ArgAnimationNode::Scale', 'model::LodNode::Level', 'model::PropertiesSet', 'model::FakeSpotLight'}
+
+
+def _next_v10_token_looks_like_type(stream):
+  """Best-effort probe to see if next uint is a v10 type-name table index."""
+  if not getattr(stream, "v10", False) or not getattr(stream, "strings", None):
+    return None
+  pos = stream.tell()
+  try:
+    idx = stream.read_uint()
+  except Exception:
+    stream.seek(pos)
+    return None
+  stream.seek(pos)
+  if not (0 <= idx < len(stream.strings)):
+    return False
+  token = stream.strings[idx]
+  return isinstance(token, str) and token.startswith("model::")
+
+
+def _read_with_layout_fallback(stream, readers):
+  """Try alternative reader layouts from the same stream offset."""
+  start = stream.tell()
+  best = None
+  errors = []
+  for layout, reader in readers:
+    stream.seek(start)
+    try:
+      node = reader(stream)
+      looks_aligned = _next_v10_token_looks_like_type(stream)
+      if looks_aligned is True:
+        setattr(node, "_layout_variant", layout)
+        return node
+      if best is None:
+        best = node
+        setattr(best, "_layout_variant", layout)
+    except Exception as exc:
+      errors.append((layout, exc))
+  if best is not None:
+    return best
+  stream.seek(start)
+  error_summary = ", ".join("{}: {}".format(name, type(exc).__name__) for name, exc in errors)
+  raise IOError("All fallback readers failed ({})".format(error_summary))
+
+
+def _scan_to_next_v10_type_token(stream, max_bytes=16384):
+  """Find next likely model:: token index in v10 string table on 4-byte boundaries."""
+  if not getattr(stream, "v10", False) or not getattr(stream, "strings", None):
+    return None
+  pos = stream.tell()
+  data = stream.read(max_bytes)
+  stream.seek(pos)
+  if not data:
+    return None
+  for off in range(0, len(data) - 3, 4):
+    idx = struct.unpack_from("<I", data, off)[0]
+    if not (0 <= idx < len(stream.strings)):
+      continue
+    token = stream.strings[idx]
+    if isinstance(token, str) and token.startswith("model::"):
+      return off
+  return None
 
 
 def get_type_reader(name):
@@ -495,6 +556,16 @@ class RootNode(BaseNode):
 class Node(BaseNode):
   category = NodeCategory.transform
 
+@reads_type("model::TmpNumberRoot")
+class TmpNumberRoot(Node):
+  """Observed in exporter metadata; layout appears transform-like."""
+  @classmethod
+  def read(cls, stream):
+    return _read_with_layout_fallback(stream, [
+      ("transform", TransformNode.read),
+      ("node", Node.read),
+    ])
+
 @reads_type("model::TransformNode")
 class TransformNode(Node):
   @classmethod
@@ -531,6 +602,9 @@ class ArgAnimationBase(object):
     self.matrix = stream.read_matrixd()
     self.position = stream.read_vec3d()
     self.quat_1 = stream.read_quaternion()
+    # Record the file offset of quat_2 so binary patchers can overwrite it.
+    if hasattr(stream, 'tell'):
+      self._quat_2_file_offset = stream.tell()
     self.quat_2 = stream.read_quaternion()
     self.scale = stream.read_vec3d()
     return self
@@ -803,615 +877,3 @@ class Connector(BaseNode):
     stream.write_uint(self.data)
 
 
-def _read_index_data(stream, classification=None):
-  "Performs the common index-reading operation"
-  dtPos = stream.tell()
-  dataType = stream.read_uchar()
-  entries = stream.read_uint()
-  unknown = stream.read_uint()
-
-  if dataType == 0:
-    data = stream.read_uchars(entries)
-    _bytes = entries
-  elif dataType == 1:
-    data = stream.read_ushorts(entries)
-    _bytes = entries * 2
-  elif dataType == 2:
-    data = stream.read_uints(entries)
-    _bytes = entries * 4
-  else:
-    raise IOError("Don't know how to read index data type {} @ {}".format(int(dataType), dtPos))
-
-  if classification:
-    stream.mark_type_read(classification, _bytes)
-
-  return (unknown, data)
-
-def _write_index_data(indexData, vertexDataLength, writer):
-  # Index data
-  if vertexDataLength < 256:
-    writer.write_uchar(0)
-    iWriter = writer.write_uchars
-  elif vertexDataLength < 2**16:
-    writer.write_uchar(1)
-    iWriter = writer.write_ushorts
-  elif vertexDataLength < 2**32:
-    writer.write_uchar(2)
-    iWriter = writer.write_uints
-  else:
-    raise IOError("Do not know how to write index arrays with {} members".format(vertexDataLength))
-
-  writer.write_uint(len(indexData))
-  writer.write_uint(5)
-  iWriter(indexData)
-
-def _read_vertex_data(stream, classification=None):
-  count = stream.read_uint()
-  stride = stream.read_uint()
-  vtxData = stream.read_floats(count*stride)
-
-  # If given a classification, mark it off
-  if classification:
-    stream.mark_type_read(classification, count*stride*4)
-
-  # Group the vertex data according to stride
-  vtxData = [vtxData[i:i+stride] for i in range(0, len(vtxData), stride)]
-  return vtxData
-
-def _write_vertex_data(data, writer):
-  writer.write_uint(len(data))
-  writer.write_uint(len(data[0]))
-  flat_data = list(itertools.chain(*data))
-  writer.write_floats(flat_data)
-
-def _read_parent_data(stream):
-    # Read the parent section
-  parentCount = stream.read_uint()
-  stream.mark_type_read("model::RNControlNode", parentCount-1)
-
-  if parentCount == 1:
-    return [[stream.read_uint(), stream.read_int()]]
-  else:
-    parentData = []
-    for _ in range(parentCount):
-      node = stream.read_uint()
-      ranges = list(stream.read_ints(2))
-      parentData.append((node, ranges[0], ranges[1]))
-    return parentData
-
-def _render_audit(self, verts="__gv_bytes", inds="__gi_bytes"):
-  c = Counter()
-  c[verts] += 4 * len(self.vertexData) * len(self.vertexData[0])
-  # c["__gi_bytes"] += 
-  if len(self.vertexData) < 256:
-    c[inds] += len(self.indexData)
-  elif len(self.vertexData) < 2**16:
-    c[inds] += len(self.indexData) * 2
-  elif len(self.vertexData) < 2**32:
-    c[inds] += len(self.indexData) * 4
-  else:
-    raise IOError("Do not know how to write index arrays with {} members".format(len(self.indexData)))
-  return c
-
-@reads_type("model::RenderNode")
-class RenderNode(BaseNode):
-  category = NodeCategory.render
-
-  def __init__(self, name=None):
-    super(RenderNode, self).__init__(name)
-    self.version = 1
-    self.children = []
-    self.unknown_start = 0
-    self.material = None
-    self.parentData = None
-    self.parent = None
-    self.vertexData = []
-    self.unknown_indexPrefix = 5
-    self.indexData = []
-    # If e.g. split then we don't know the real name
-    self.name_unknown = False
-
-  def __repr__(self):
-    return "<RenderNode \"{}\">".format(self.name)
-
-  @classmethod
-  def read(cls, stream):
-    self = super(RenderNode, cls).read(stream)
-    self.unknown_start = stream.read_uint()
-    self.material = stream.read_uint()
-
-    self.parentData = _read_parent_data(stream)
-
-    # Read the vertex and index data
-    self.vertexData = _read_vertex_data(stream, "__gv_bytes")
-    self.unknown_indexPrefix, self.indexData = _read_index_data(stream, classification="__gi_bytes")
-
-    return self
-
-  def write(self, writer):
-    super(RenderNode, self).write(writer)
-    writer.write_uint(0)
-    if not isinstance(self.material, int):
-      self.material = self.material.index
-    writer.write_uint(self.material)
-
-    # Rebuild the parentdata
-    writer.write_uint(1)
-    parent_index = self.parent.index if self.parent else 0
-    writer.write_uint(parent_index)
-    writer.write_int(-1)
-
-    _write_vertex_data(self.vertexData, writer)
-    _write_index_data(self.indexData, len(self.vertexData), writer)
-
-  def audit(self):
-    c = _render_audit(self)
-    # We may, or may not, have any extra parent data at the moment.
-    if self.parentData and len(self.parentData) > 1:
-      c["model::RNControlNode"] += len(self.parentData)-1
-    return c
-
-  def split(self):
-      """Returns an array of renderNode objects. If there is no splitting to be
-      done, it will just return [self]. Otherwise, each entry is to be counted
-      as a separate renderNode object."""
-      logger.debug("Splitting RenderNode %s", self.name)
-
-      if self.parentData is None:
-        raise RuntimeError("Attempting to split renderNode without parent data - has it already been split?")
-      assert len(self.parentData) >= 1, "Should never have a RenderNode without parent data"
-      
-      # If one parent, no splitting to be done. Just assign our parent index.
-      if len(self.parentData) == 1:
-        logger.debug("Single parent for %s", self.name)
-        self.parent = self.parentData[0][0]
-        self.damage_argument = self.parentData[0][1]
-        return [self]
-
-      # We have more than one parent object. Do some splitting.
-      total_indices = len(self.indexData)
-      logger.debug("Multiple parents (%d) for %s, total_indices=%d", len(self.parentData), self.name, total_indices)
-
-      # V10 variants often encode parent attachments with idxTo == 0 for every
-      # entry (i.e. not a V8-style coverage table). Some files then encode an
-      # owner index per vertex; others intend the geometry to be reused for
-      # each parent entry (typically different damage arguments / control nodes).
-      all_zero_idx_to = bool(self.parentData) and all(len(pd) == 3 and pd[1] == 0 for pd in self.parentData)
-      all_damage_neg1 = bool(self.parentData) and all(len(pd) == 3 and pd[2] == -1 for pd in self.parentData)
-      owner_values = None
-      if all_zero_idx_to and self.vertexData:
-        try:
-          raw_owner_values = [int(round(v[3])) for v in self.vertexData]
-          nOwners = len(self.parentData)
-          out_of_range = sum(1 for o in raw_owner_values if not (0 <= o < nOwners))
-          if out_of_range:
-            print(f"Info: {self.name} has {out_of_range} vertices with out-of-range owner, clamping to [0, {nOwners - 1}]")
-          owner_values = [max(0, min(nOwners - 1, o)) for o in raw_owner_values]
-        except Exception:
-          owner_values = None
-
-      # Require either the strong legacy signal (all damageArg == -1) or actual
-      # owner variation across vertices before treating this as owner-encoded.
-      if all_zero_idx_to and owner_values is not None and (all_damage_neg1 or len(set(owner_values)) > 1):
-        logger.debug("V10 owner-encoded split detected for %s", self.name)
-        shared_parent = self.parentData[0][0]
-        children = []
-        for owner_idx, pd in enumerate(self.parentData):
-          parent = pd[0]
-          node = RenderNode()
-          node.version = self.version
-          node.name = "{}_{}".format(self.name, owner_idx)
-          node.name_unknown = True
-          node.props = self.props
-          node.material = self.material
-          node.parent = parent
-          node.damage_argument = pd[2]
-          node.vertexData = self.vertexData
-          # V10 owner-encoded split metadata: geometry coordinates are shared
-          # across all owners relative to the same control-space parent.
-          node.shared_parent = shared_parent
-          node.owner_index = owner_idx
-          node.split_owner_encoded = True
-          # Preserve original triangle boundaries. Filtering the flat index
-          # stream and then regrouping in triples mixes vertices from
-          # different source triangles and corrupts geometry/pivots.
-          tri_indices = []
-          mixed_owner_tris = 0
-          for i in range(0, len(self.indexData), 3):
-            tri = self.indexData[i:i+3]
-            if len(tri) != 3:
-              continue
-            tri_owners = [owner_values[ix] for ix in tri]
-            if tri_owners[0] == tri_owners[1] == tri_owners[2] == owner_idx:
-              tri_indices.extend(tri)
-              continue
-            # Fallback for malformed data: assign mixed-owner triangles to
-            # the majority owner to avoid holes.
-            if tri_owners.count(owner_idx) >= 2:
-              mixed_owner_tris += 1
-              tri_indices.extend(tri)
-          # if mixed_owner_tris:
-          #   print(f"Info: {self.name} owner {owner_idx} absorbed {mixed_owner_tris} mixed-owner triangles")
-          node.indexData = tri_indices
-          children.append(node)
-        return children
-
-      # V10 zero-coverage tables without usable owner variation should preserve
-      # all parent attachments by reusing the full geometry on each child.
-      if all_zero_idx_to:
-        print(f"Info: V10 zero-coverage attachment split for {self.name}; duplicating geometry across {len(self.parentData)} parents")
-        children = []
-        for i, (parent, _val1, val2) in enumerate(self.parentData):
-          node = RenderNode()
-          node.version = self.version
-          node.name = "{}_{}".format(self.name, i)
-          node.name_unknown = True
-          node.props = self.props
-          node.material = self.material
-          node.parent = parent
-          node.indexData = self.indexData
-          node.damage_argument = val2
-          node.vertexData = self.vertexData
-          children.append(node)
-        return children
-      
-      # --- FIX START: V10/Mod Compatibility Logic ---
-      # Check if the last entry covers the whole range (Standard V8 behavior)
-      last_val1 = self.parentData[-1][1] # Usually idxTo (End Index)
-      last_val2 = self.parentData[-1][2] # Usually damageArg
-
-      swap_columns = False
-      force_fallback = False
-
-      # Scenario A: Standard mismatch (The warning you saw)
-      if last_val1 != total_indices:
-          # Scenario B: Columns are swapped? (val2 is the count, val1 is damage/0)
-          if last_val2 == total_indices:
-              print(f"Info: Detected V10 data swap for {self.name}. Swapping interpretation.")
-              swap_columns = True
-          # Scenario C: Both are wrong or 0? Force render.
-          elif last_val1 == 0:
-               print(f"Warning: {self.name} has 0 coverage. Forcing geometry to first node to prevent invisible mesh.")
-               force_fallback = True
-          else:
-               print(f"Warning: Split mismatch {self.name}: covered {last_val1} vs total {total_indices}")
-      # --- FIX END ---
-
-      start = 0
-      children = []
-      
-      for i, (parent, val1, val2) in enumerate(self.parentData):
-        node = RenderNode()
-        node.version = self.version
-        node.name = "{}_{}".format(self.name, i)
-        node.name_unknown = True
-        node.props = self.props
-        node.material = self.material
-        node.parent = parent
-        
-        # Apply logic determined above
-        if force_fallback:
-            # If falling back, give EVERYTHING to the first node, others get empty
-            if i == 0:
-                idxTo = total_indices
-            else:
-                idxTo = total_indices # or start, effectively empty
-            damageArg = val2
-        elif swap_columns:
-            idxTo = val2
-            damageArg = val1
-        else:
-            idxTo = val1
-            damageArg = val2
-
-        node.indexData = self.indexData[start:idxTo]
-        node.damage_argument = damageArg
-        
-        # Give them all the whole vertex subarray for now
-        node.vertexData = self.vertexData
-        start = idxTo
-        children.append(node)
-
-      return children
-
-@reads_type("model::ShellNode")
-class ShellNode(BaseNode):
-  category = NodeCategory.shell
-  @classmethod
-  def read(cls, stream):
-    self = super(ShellNode, cls).read(stream)
-    self.parent = stream.read_uint()
-    self.vertex_format = VertexFormat.read(stream)
-
-    # Read the vertex and index data
-    self.vertexData = _read_vertex_data(stream, "__cv_bytes")
-    self.unknown_indexPrefix, self.indexData = _read_index_data(stream, classification="__ci_bytes")
-
-    return self
-  
-  def audit(self):
-    return _render_audit(self, verts="__cv_bytes", inds="__ci_bytes")
-
-  def write(self, writer):
-    super(ShellNode, self).write(writer)
-    # Write parent index, or 0 if no parent
-    parent_index = self.parent.index if self.parent else 0
-    writer.write_uint(parent_index)
-    self.vertex_format.write(writer)
-    _write_vertex_data(self.vertexData, writer)
-    _write_index_data(self.indexData, len(self.vertexData), writer)
-
-  
-@reads_type("model::SkinNode")
-class SkinNode(BaseNode):
-  category = NodeCategory.render
-  @classmethod
-  def read(cls, stream):
-    self = super(SkinNode, cls).read(stream)
-    self.unknown = stream.read_uint()
-    self.material = stream.read_uint()
-
-    boneCount = stream.read_uint()
-    self.bones = stream.read_uints(boneCount)
-    self.post_bone = stream.read_uint()
-
-    # Read the vertex and index data
-    self.vertexData = _read_vertex_data(stream, "__gv_bytes")
-    self.unknown_indexPrefix, self.indexData = _read_index_data(stream, classification="__gi_bytes")
-
-    return self
-
-  def prepare(self, nodes, materials):
-    self.bones = [nodes[x] for x in self.bones]
-
-  def audit(self):
-    return _render_audit(self)
-  
-@reads_type("model::SegmentsNode")
-class SegmentsNode(BaseNode):
-  category = NodeCategory.shell
-  @classmethod
-  def read(cls, stream):
-    self = super(SegmentsNode, cls).read(stream)
-    self.unknown = stream.read_uint()
-    count = stream.read_uint()
-    self.data = [stream.read_floats(6) for x in range(count)]
-    stream.mark_type_read("model::SegmentsNode::Segments", count)
-    return self
-
-  def audit(self):
-    c = super(SegmentsNode, self).audit()
-    c["model::SegmentsNode::Segments"] += len(self.data)
-    return c
-
-  def write(self, writer):
-    super(SegmentsNode, self).write(writer)
-    writer.write_uint(self.unknown)
-    writer.write_uint(len(self.data))
-    for segment in self.data:
-      writer.write_floats(segment)
-
-@reads_type("model::BillboardNode")
-class BillboardNode(Node):
-  @classmethod
-  def read(cls, stream):
-    self = super(BillboardNode, cls).read(stream)
-    self.data = stream.read(154)
-    return self
-
-@reads_type("model::LightNode")
-class LightNode(BaseNode):
-  category = NodeCategory.light
-  @classmethod
-  def read(cls, stream):
-    self = super(LightNode, cls).read(stream)
-    self.parent = stream.read_uint()
-    self.unknown = [stream.read_uchar()]
-    # Preserve animation argument ids for light properties so importer can map
-    # curves and EDMProps args exactly for official exporter round-trips.
-    self.lightProps = PropertiesSet.read(stream, count=False, preserve_animated=True)
-    self.unknown.append(stream.read_uchar())
-    return self
-
-@reads_type("model::FakeSpotLightsNode")
-class FakeSpotLightsNode(BaseNode):
-  category = NodeCategory.render
-  @classmethod
-  def read(cls, stream):
-    self = super(FakeSpotLightsNode, cls).read(stream)
-
-    # Seems to start relatively similar to renderNode
-    self.unknown_start = stream.read_uint()
-    self.material_ish = stream.read_uint()
-
-    # We have parent-like blocks of two uints + three floats
-    controlNodeCount = stream.read_uint()
-
-    self.parentData = []
-    self.parentData_float_offsets = []
-    for _ in range(controlNodeCount):
-      _u0 = stream.read_uint()
-      _u1 = stream.read_uint()
-      _vec_pos = stream.tell()
-      _vec = stream.read_floats(3)
-      self.parentData_float_offsets.append(_vec_pos)
-      self.parentData.append([
-          _u0,
-          _u1,
-          _vec
-        ])
-    # Control node seems to follow same rules as RenderNode
-    if controlNodeCount:
-      stream.mark_type_read('model::FSLNControlNode', controlNodeCount-1)
-
-    dataCount = stream.read_uint()
-    self.raw_data = [stream.read(65) for _ in range(dataCount)]
-    stream.mark_type_read("model::FakeSpotLight", dataCount)
-
-    # Parse raw 65-byte entries: 8 doubles (64 bytes) + 1 byte flag
-    # Layout: pos(3) + dir(3) + size(1) + unknown(1) + flag(1 byte)
-    self.data = []
-    for raw in self.raw_data:
-      doubles = struct.unpack_from('<8d', raw, 0)
-      flag = raw[64]
-      self.data.append({
-        'position': doubles[0:3],
-        'direction': doubles[3:6],
-        'size': doubles[6],
-        'unknown': doubles[7],
-        'flag': flag,
-      })
-
-    # Some v10 FakeSpotLightsNode records carry an extra trailing direction
-    # vector (3 floats) after the light entries. If we leave it unread the
-    # parser desynchronizes and the next v10 string-table lookup sees 1.0
-    # (0x3f800000) as a bogus string index.
-    self.trailing_direction = None
-    self.trailing_direction_offset = None
-    if getattr(stream, "v10", False):
-      pos = stream.tell()
-      try:
-        next_u = stream.read_uint()
-      except Exception:
-        next_u = None
-      finally:
-        stream.seek(pos)
-
-      if next_u is not None and getattr(stream, "strings", None):
-        looks_like_next_type = (
-          0 <= next_u < len(stream.strings)
-          and isinstance(stream.strings[next_u], str)
-          and stream.strings[next_u].startswith("model::")
-        )
-        if not looks_like_next_type:
-          tpos = stream.tell()
-          try:
-            trailing = stream.read_floats(3)
-            next_after = stream.read_uint()
-            looks_aligned_after = (
-              0 <= next_after < len(stream.strings)
-              and isinstance(stream.strings[next_after], str)
-              and stream.strings[next_after].startswith("model::")
-            )
-            if looks_aligned_after:
-              self.trailing_direction = trailing
-              self.trailing_direction_offset = tpos
-              # Keep the next token unread; we only wanted a look-ahead probe.
-              stream.seek(tpos + 12)
-            else:
-              stream.seek(tpos)
-          except Exception:
-            stream.seek(tpos)
-
-    return self
-
-  def prepare(self, nodes, materials):
-    pass
-
-@reads_type("model::FakeOmniLightsNode")
-class FakeOmniLightsNode(BaseNode):
-  category = NodeCategory.render
-  @classmethod
-  def read(cls, stream):
-    self = super(FakeOmniLightsNode, cls).read(stream)
-    self.data_start = stream.read_uints(5)
-    count = stream.read_uint()
-    # Each FakeOmniLight: 6 doubles = [x, y, z, size, uv_lb_packed, uv_rt_packed]
-    self.data = [stream.read_doubles(6) for _ in range(count)]
-    stream.mark_type_read("model::FakeOmniLight", count)
-    return self
-  def prepare(self, nodes, materials):
-    pass
-
-@reads_type("model::FakeALSNode")
-class FakeALSNode(BaseNode):
-  category = NodeCategory.render
-  @classmethod
-  def read(cls, stream):
-    self = super(FakeALSNode, cls).read(stream)
-    # batumi.edm 1138915 x 340
-    als_header = stream.read_uints(3)
-    count = stream.read_uint()
-    self.raw_data = [stream.read(80) for _ in range(count)]
-    stream.mark_type_read("model::FakeALSLight", count)
-
-    # Parse raw 80-byte entries: 10 doubles
-    # Layout: pos(3) + remaining(7) — positions are first 3 doubles
-    self.data = []
-    for raw in self.raw_data:
-      doubles = struct.unpack_from('<10d', raw, 0)
-      self.data.append({
-        'position': doubles[0:3],
-        'extra': doubles[3:10],
-      })
-
-    return self
-
-  def prepare(self, nodes, materials):
-    pass
-
-@reads_type("model::NumberNode")
-class NumberNode(BaseNode):
-  category = NodeCategory.render
-
-  @classmethod
-  def read(cls, stream):
-    # Reads the standard BaseNode header (Name, Version, Props)
-    self = super(NumberNode, cls).read(stream)
-    # Placeholder record used by v10 files; geometry/payload can follow later.
-    self.value = stream.read_float()
-    self.parent = None
-    self.material = None
-    self.vertexData = []
-    self.indexData = []
-    self.unknown_indexPrefix = 5
-    self.damage_argument = -1
-    self.number_params_raw = None
-    self._post_payload_read = False
-    return self
-
-  def read_v10_payload(self, stream):
-    """Read post-object payload used by v10 NumberNode records."""
-    # Different v10 files appear to swap these first two uints
-    # (unknown_start/material). Pick the material candidate that best matches
-    # known NumberNode material signatures when possible.
-    u0 = stream.read_uint()
-    u1 = stream.read_uint()
-    self.unknown_start = u0
-    self.material = u1
-
-    mats = getattr(stream, "materials", None)
-    if mats:
-      valid0 = 0 <= u0 < len(mats)
-      valid1 = 0 <= u1 < len(mats)
-
-      if valid0 and not valid1:
-        self.material = u0
-        self.unknown_start = u1
-      elif valid0 and valid1 and u0 != u1:
-        def _score_material(idx):
-          mat = mats[idx]
-          textures = getattr(mat, "textures", None) or []
-          score = len(textures)
-          if any(getattr(tex, "index", -1) == 3 for tex in textures):
-            score += 100
-          if getattr(mat, "material_name", "") == "def_material":
-            score += 5
-          return score
-
-        if _score_material(u0) > _score_material(u1):
-          self.material = u0
-          self.unknown_start = u1
-
-    self.parent = stream.read_uint()
-    self.damage_argument = stream.read_int()
-    self.vertexData = _read_vertex_data(stream, "__gv_bytes")
-    self.unknown_indexPrefix, self.indexData = _read_index_data(stream, classification="__gi_bytes")
-    self.number_params_raw = (
-      stream.read_int(),
-      stream.read_int(),
-      stream.read_int(),
-      stream.read_int(),
-      stream.read_float(),
-    )
-    self._post_payload_read = True

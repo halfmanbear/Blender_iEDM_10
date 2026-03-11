@@ -135,6 +135,9 @@ class BaseReader(object):
   def read_vec3f(self):
     return Vector(self.read_format("<fff"))
 
+  def read_vec4f(self):
+    return Vector(self.read_format("<ffff"))
+
   def read_vec3d(self):
     return Vector(self.read_format("<ddd"))
 
