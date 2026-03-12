@@ -99,6 +99,12 @@ def readVec2f(data):
 def readVec3f(data):
   return data.read_vec3f()
 
+@animatable(keyname="key::VEC4F")
+@allow_properties
+@reads_type("osg::Vec4f")
+def readVec4f(data):
+  return data.read_vec4f()
+
 @allow_properties
 @reads_type("osg::Vec3d")
 def readVec3d(data):

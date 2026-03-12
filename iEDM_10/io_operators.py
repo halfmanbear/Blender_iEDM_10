@@ -55,6 +55,10 @@ class ImportEDM(Operator, ImportHelper):
       default=200,
       min=1,
       soft_max=5000)
+  debug_render_splits: BoolProperty(
+      name="Debug Render Splits",
+      description="Print detailed v10 RenderNode split/layout diagnostics during import",
+      default=False)
   mesh_origin_mode: EnumProperty(
       name="Mesh Origins",
       description="How to place origins for render-only meshes that have no explicit EDM transform node",
@@ -82,6 +86,7 @@ class ImportEDM(Operator, ImportHelper):
           "debug_transforms": self.debug_transforms,
           "debug_transform_filter": self.debug_transform_filter,
           "debug_transform_limit": self.debug_transform_limit,
+          "debug_render_splits": self.debug_render_splits,
           "mesh_origin_mode": self.mesh_origin_mode,
           "import_bounding_box": self.import_bounding_box,
           "import_user_box": self.import_user_box,
