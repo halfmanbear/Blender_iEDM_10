@@ -91,19 +91,14 @@ def _is_neg90_x_basis_matrix(mat, eps=1e-3):
 
 
 def _anim_base_quaternion_q1_to_blender(node, q):
-  """Convert only the ArgRotationNode base/rest quaternion when the node's base
-  matrix carries the canonical EDM -90°X basis wrapper.
+  """Return the authored base/rest quaternion without an extra basis swap.
 
-  Rotation key quaternions remain on the existing v10 path; this avoids the
-  global basis regression seen when converting all v10 arg quaternions.
+  FA-18 style v10 control-surface nodes (e.g. Stv_F1/Stv_F2/Stv_F3) already
+  carry their rest quaternion in the same local basis as their mesh data and
+  base.position. Applying an additional quaternion_to_blender conversion here
+  breaks mirrored placement and pushes render children away from the airframe.
   """
   q_in = q if hasattr(q, "to_matrix") else Quaternion(q)
-  if _import_ctx.edm_version >= 10 and isinstance(node, ArgRotationNode):
-    try:
-      if _is_neg90_x_basis_matrix(Matrix(node.base.matrix)):
-        return quaternion_to_blender(q_in)
-    except Exception as e:
-      print(f"Warning in blender_importer\graph_pipeline.py: {e}")
   return _anim_quaternion_to_blender(q_in)
 
 
@@ -764,9 +759,10 @@ def _cache_root_aabb_payloads_on_scene(root):
   except Exception as e:
     print(f"Warning in blender_importer\graph_pipeline.py: {e}")
   try:
-    if hasattr(root, "unknownB") and len(root.unknownB) >= 2:
-      min_vec_edm = Vector(root.unknownB[0])
-      max_vec_edm = Vector(root.unknownB[1])
+    user_box = getattr(root, "user_box", None)
+    if user_box is not None:
+      min_vec_edm = Vector(user_box[0])
+      max_vec_edm = Vector(user_box[1])
       if not any(math.isinf(v) for v in min_vec_edm) and not any(math.isinf(v) for v in max_vec_edm):
         scn["_iedm_raw_user_box"] = json.dumps([
           float(min_vec_edm[0]), float(min_vec_edm[1]), float(min_vec_edm[2]),
@@ -774,40 +770,66 @@ def _cache_root_aabb_payloads_on_scene(root):
         ], separators=(",", ":"))
   except Exception as e:
     print(f"Warning in blender_importer\graph_pipeline.py: {e}")
+  try:
+    light_box = getattr(root, "light_box", None)
+    if light_box is not None:
+      min_vec_edm = Vector(light_box[0])
+      max_vec_edm = Vector(light_box[1])
+      if not any(math.isinf(v) for v in min_vec_edm) and not any(math.isinf(v) for v in max_vec_edm):
+        scn["_iedm_raw_light_box"] = json.dumps([
+          float(min_vec_edm[0]), float(min_vec_edm[1]), float(min_vec_edm[2]),
+          float(max_vec_edm[0]), float(max_vec_edm[1]), float(max_vec_edm[2]),
+        ], separators=(",", ":"))
+  except Exception as e:
+    print(f"Warning in blender_importer\\graph_pipeline.py: {e}")
 
 
-def _create_user_box_from_root(root):
-  """Create an empty cube representing the EDM user box (unknownB)."""
-  if not hasattr(root, "unknownB") or len(root.unknownB) < 2:
-    return None
-  min_vec_edm = Vector(root.unknownB[0])
-  max_vec_edm = Vector(root.unknownB[1])
-  if any(math.isinf(v) for v in min_vec_edm) or any(math.isinf(v) for v in max_vec_edm):
-    return None
-  if hasattr(root, "boundingBoxMin") and hasattr(root, "boundingBoxMax"):
-    if Vector(root.boundingBoxMin) == min_vec_edm and Vector(root.boundingBoxMax) == max_vec_edm:
-      return None
+def _create_special_box(name, special_type, min_vec_edm, max_vec_edm, raw_prop_name):
   min_vec = vector_to_blender(min_vec_edm)
   max_vec = vector_to_blender(max_vec_edm)
   center = (min_vec + max_vec) * 0.5
   dims = Vector((abs(max_vec.x - min_vec.x), abs(max_vec.y - min_vec.y), abs(max_vec.z - min_vec.z)))
-  ob = _get_special_box("USER_BOX")
+  ob = _get_special_box(special_type)
   if ob is None:
-    ob = bpy.data.objects.new("User_Box", None)
+    ob = bpy.data.objects.new(name, None)
     ob.empty_display_type = "CUBE"
     ob.empty_display_size = 1.0
-    _set_official_special_type(ob, "USER_BOX")
+    _set_official_special_type(ob, special_type)
     bpy.context.collection.objects.link(ob)
   ob.location = center
   ob.scale = dims * 0.5
   try:
-    ob["_iedm_raw_user_box"] = json.dumps([
+    ob[raw_prop_name] = json.dumps([
       float(min_vec_edm[0]), float(min_vec_edm[1]), float(min_vec_edm[2]),
       float(max_vec_edm[0]), float(max_vec_edm[1]), float(max_vec_edm[2]),
     ], separators=(",", ":"))
   except Exception as e:
-    print(f"Warning in blender_importer\graph_pipeline.py: {e}")
-  _set_official_special_type(ob, "USER_BOX")
+    print(f"Warning in blender_importer\\graph_pipeline.py: {e}")
+  _set_official_special_type(ob, special_type)
   return ob
+
+
+def _create_user_box_from_root(root):
+  """Create an empty cube representing the EDM user box when distinct."""
+  user_box = getattr(root, "user_box", None)
+  if user_box is None:
+    return None
+  min_vec_edm = Vector(user_box[0])
+  max_vec_edm = Vector(user_box[1])
+  if any(math.isinf(v) for v in min_vec_edm) or any(math.isinf(v) for v in max_vec_edm):
+    return None
+  return _create_special_box("User_Box", "USER_BOX", min_vec_edm, max_vec_edm, "_iedm_raw_user_box")
+
+
+def _create_light_box_from_root(root):
+  """Create an empty cube representing the EDM light box when present."""
+  light_box = getattr(root, "light_box", None)
+  if light_box is None:
+    return None
+  min_vec_edm = Vector(light_box[0])
+  max_vec_edm = Vector(light_box[1])
+  if any(math.isinf(v) for v in min_vec_edm) or any(math.isinf(v) for v in max_vec_edm):
+    return None
+  return _create_special_box("Light_Box", "LIGHT_BOX", min_vec_edm, max_vec_edm, "_iedm_raw_light_box")
 
 

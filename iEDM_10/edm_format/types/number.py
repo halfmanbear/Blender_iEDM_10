@@ -19,6 +19,7 @@ class NumberNode(BaseNode):
     self.unknown_indexPrefix = 5
     self.damage_argument = -1
     self.number_params_raw = None
+    self.number_payload = {}
     self._post_payload_read = False
     return self
 
@@ -66,4 +67,18 @@ class NumberNode(BaseNode):
       stream.read_int(),
       stream.read_float(),
     )
+    self.number_payload = {
+      "unknown_start": self.unknown_start,
+      "material": self.material,
+      "parent": self.parent,
+      "damage_argument": self.damage_argument,
+      "index_prefix": self.unknown_indexPrefix,
+      "uv_params": {
+        "unknown": int(self.number_params_raw[0]),
+        "x_arg": int(self.number_params_raw[1]),
+        "x_scale": float(self.number_params_raw[2]),
+        "y_arg": int(self.number_params_raw[3]),
+        "y_scale": float(self.number_params_raw[4]),
+      },
+    }
     self._post_payload_read = True

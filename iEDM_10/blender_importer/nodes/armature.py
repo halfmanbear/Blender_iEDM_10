@@ -376,6 +376,17 @@ def _bind_skin_object(mesh_obj, skin_node):
   # ancestors like wings or pylons.
   if mesh_obj.parent is None:
     mesh_obj.parent = arm_obj
+  else:
+    # Preserve previously inherited world transform if Blender already
+    # attached this mesh to a wrapper object.
+    mesh_obj.matrix_parent_inverse = Matrix.Identity(4)
+  
+  name_bonus = getattr(skin_node, "name", "") or ""
+  candidate = bpy.data.objects.get(name_bonus)
+  if candidate and candidate not in {mesh_obj, arm_obj}:
+    mesh_obj.parent = candidate
+    mesh_obj.matrix_parent_inverse = Matrix.Identity(4)
+    mesh_obj["_iedm_skin_parent_override"] = True
 
   nverts = len(mesh_obj.data.vertices)
   if nverts == 0:

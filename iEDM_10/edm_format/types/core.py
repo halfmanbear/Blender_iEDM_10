@@ -35,6 +35,25 @@ _all_IndexA = {'model::TransformNode', 'model::FakeOmniLightsNode', 'model::Anim
 _all_IndexB = {'model::Key<key::ROTATION>', 'model::Property<float>', 'model::ArgAnimationNode::Position', '__pointers', 'model::FakeOmniLight', 'model::Key<key::SCALE>', 'model::AnimatedProperty<osg::Vec3f>', 'model::AnimatedProperty<osg::Vec4f>', 'model::Key<key::VEC3F>', 'model::Key<key::VEC4F>', 'model::Property<osg::Vec2f>', 'model::Property<osg::Vec3f>', 'model::Property<osg::Vec4f>', 'model::ArgAnimationNode::Rotation', 'model::ArgVisibilityNode::Range', 'model::Key<key::POSITION>', 'model::AnimatedProperty<osg::Vec2f>', 'model::Key<key::FLOAT>', '__ci_bytes', '__gv_bytes', 'model::ArgVisibilityNode::Arg', 'model::AnimatedProperty<float>', 'model::RNControlNode', 'model::SegmentsNode::Segments', '__gi_bytes', '__cv_bytes', 'model::Property<unsigned int>', 'model::Key<key::VEC2F>', 'model::ArgAnimationNode::Scale', 'model::LodNode::Level', 'model::PropertiesSet', 'model::FakeSpotLight'}
 
 
+def _is_root_box_sentinel_pair(min_vec, max_vec, sentinel=3.4028234663852886e+38, eps=1.0e+30):
+  try:
+    mins = tuple(float(v) for v in min_vec)
+    maxs = tuple(float(v) for v in max_vec)
+  except Exception:
+    return False
+  return (
+    all(abs(v - sentinel) <= eps for v in mins)
+    and all(abs(v + sentinel) <= eps for v in maxs)
+  )
+
+
+def _same_vec3(a, b, eps=1.0e-6):
+  try:
+    return all(abs(float(x) - float(y)) <= eps for x, y in zip(a, b))
+  except Exception:
+    return False
+
+
 def _next_v10_token_looks_like_type(stream):
   """Best-effort probe to see if next uint is a v10 type-name table index."""
   if not getattr(stream, "v10", False) or not getattr(stream, "strings", None):
@@ -154,7 +173,12 @@ class EDMFile(object):
       try:
         self._read(reader)
       except Exception:
-        print("ERROR at {}".format(reader.tell()))
+        err_pos = None
+        try:
+          err_pos = reader.tell()
+        except Exception:
+          err_pos = "unknown"
+        print("ERROR at {}".format(err_pos))
         reader.close()
         raise
     else:
@@ -216,6 +240,20 @@ class EDMFile(object):
     self.connectors = objects.get("CONNECTORS", [])
     self.shellNodes = objects.get("SHELL_NODES", [])
     self.lightNodes = objects.get("LIGHT_NODES", [])
+    for node_list in objects.values():
+      for node in node_list:
+        prepare = getattr(node, "prepare", None)
+        if callable(prepare):
+          try:
+            prepare(self.nodes, self.root.materials)
+          except Exception as exc:
+            logger.warning(
+              "Prepare failed for %s '%s' (%s: %s)",
+              type(node).__name__,
+              getattr(node, "name", ""),
+              type(exc).__name__,
+              exc,
+            )
     self.renderNodes = []
     # Split any renderNodes as one may contain several objects
     for node in objects.get("RENDER_NODES", []):
@@ -310,13 +348,15 @@ class EDMFile(object):
         if 0 <= node.shared_parent < len(self.nodes):
           node.shared_parent = self.nodes[node.shared_parent]
       if hasattr(node, "material"):
-        if 0 <= node.material < len(self.root.materials):
-            node.material = self.root.materials[node.material]
-        else:
-            print(f"Warning: Invalid material index {node.material} for node {node}")
-            node.material = None
+        if isinstance(node.material, int):
+          if 0 <= node.material < len(self.root.materials):
+              node.material = self.root.materials[node.material]
+          else:
+              print(f"Warning: Invalid material index {node.material} for node {node}")
+              node.material = None
       if hasattr(node, "bones"):
-        node.bones = [self.nodes[x] for x in node.bones]
+        if node.bones and isinstance(node.bones[0], int):
+          node.bones = [self.nodes[x] for x in node.bones]
         # If we have bones we have no single 'parent'. Stick it on the root.
         node.set_parent(self.nodes[0])
 
@@ -500,8 +540,33 @@ class RootNode(BaseNode):
     super(RootNode, self).__init__()
     self.name = "Scene Root"
     self.props["__VERSION__"] = 3
+    self.unknownB = []
     self.unknownC = 0
     self.maxArgPlusOne = 0
+    self.scene_bounds_box = None
+    self.user_box = None
+    self.light_box = None
+    self.root_boxes = {}
+
+  def _refresh_box_metadata(self):
+    self.scene_bounds_box = (self.boundingBoxMin, self.boundingBoxMax)
+    self.user_box = None
+    self.light_box = None
+    self.root_boxes = {
+      "bounding_box": self.scene_bounds_box,
+    }
+
+    payload = list(getattr(self, "unknownB", []) or [])
+    if len(payload) >= 2:
+      candidate_a = (payload[0], payload[1])
+      if not _same_vec3(candidate_a[0], self.boundingBoxMin) or not _same_vec3(candidate_a[1], self.boundingBoxMax):
+        self.user_box = candidate_a
+        self.root_boxes["user_box"] = candidate_a
+    if len(payload) >= 4:
+      candidate_b = (payload[2], payload[3])
+      if not _is_root_box_sentinel_pair(candidate_b[0], candidate_b[1]):
+        self.light_box = candidate_b
+        self.root_boxes["light_box"] = candidate_b
 
   @classmethod
   def read(cls, stream):
@@ -518,6 +583,7 @@ class RootNode(BaseNode):
     stream.materials = self.materials
     self.unknownC = stream.read_uint()
     self.maxArgPlusOne = stream.read_uint()
+    self._refresh_box_metadata()
     return self
 
   def audit(self):
@@ -535,15 +601,26 @@ class RootNode(BaseNode):
 
     writer.write_vecd(self.boundingBoxMin)
     writer.write_vecd(self.boundingBoxMax)
-    # Don't fully understand this bit; seems to sometimes be min, max again then high, low.
-    # Try those
-    writer.write_vecd(self.boundingBoxMin)
-    writer.write_vecd(self.boundingBoxMax)
-    # Most seem to have this exact set of data; 3.4e38 * 3, -3.4e38*3
-    for _ in range(3):
-      writer.write(b'\x00\x00\x00\xe0\xff\xff\xefG')
-    for _ in range(3):
-      writer.write(b'\x00\x00\x00\xe0\xff\xff\xef\xc7')
+    # v10 stores two additional box slots after the main AABB. In the common
+    # case slot A duplicates the scene bounds and slot B is an FLT_MAX sentinel.
+    # Preserve any decoded user/light boxes when present.
+    extra_boxes = list(getattr(self, "unknownB", []) or [])
+    if len(extra_boxes) < 4:
+      extra_boxes = list(extra_boxes)
+      if len(extra_boxes) < 2:
+        user_box = self.user_box or self.scene_bounds_box
+        extra_boxes.extend(user_box)
+      if len(extra_boxes) < 4:
+        light_box = self.light_box
+        if light_box is not None:
+          extra_boxes.extend(light_box)
+        else:
+          extra_boxes.extend([
+            Vector((3.4028234663852886e+38, 3.4028234663852886e+38, 3.4028234663852886e+38)),
+            Vector((-3.4028234663852886e+38, -3.4028234663852886e+38, -3.4028234663852886e+38)),
+          ])
+    for vec in extra_boxes[:4]:
+      writer.write_vecd(vec)
 
     writer.write_uint(len(self.materials))
     for mat in self.materials:

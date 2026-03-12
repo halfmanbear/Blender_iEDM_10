@@ -1,6 +1,15 @@
 from .core import *  # noqa: F401,F403
 
 
+def _tag_shell_family_node(node, source_type):
+  if node is None:
+    return node
+  node._source_type_name = source_type
+  if source_type in {"model::ShellSkinNode", "model::TreeShellNode"}:
+    node._shell_family = source_type.replace("model::", "").replace("Node", "")
+  return node
+
+
 def _read_index_data(stream, classification=None):
   "Performs the common index-reading operation"
   dtPos = stream.tell()
@@ -76,6 +85,67 @@ def _read_parent_data(stream):
       ranges = list(stream.read_ints(2))
       parentData.append((node, ranges[0], ranges[1]))
     return parentData
+
+
+def _classify_render_parent_data(parentData, vertexData, indexData):
+  """Best-effort classification of v10 RenderNode parent attachment layouts.
+
+  Observed variants:
+  - single-parent: (parent, damageArg)
+  - coverage table: (parent, idxTo, damageArg)
+  - swapped coverage/damage columns
+  - zero-coverage attachment tables where geometry is duplicated per parent
+  - owner-encoded split tables where vertex slot 3 identifies the owner
+  """
+  result = {
+    "mode": "single_parent",
+    "swap_columns": False,
+    "force_fallback": False,
+    "owner_values": None,
+    "shared_parent": None,
+    "coverage_total": len(indexData) if indexData else 0,
+  }
+  if not parentData:
+    result["mode"] = "missing"
+    return result
+  if len(parentData) == 1:
+    return result
+
+  result["mode"] = "coverage_table"
+  all_zero_idx_to = all(len(pd) == 3 and pd[1] == 0 for pd in parentData)
+  all_damage_neg1 = all(len(pd) == 3 and pd[2] == -1 for pd in parentData)
+  owner_values = None
+  if all_zero_idx_to and vertexData:
+    try:
+      raw_owner_values = [int(round(v[3])) for v in vertexData]
+      nOwners = len(parentData)
+      owner_values = [max(0, min(nOwners - 1, o)) for o in raw_owner_values]
+      result["owner_values"] = owner_values
+    except Exception:
+      owner_values = None
+
+  if all_zero_idx_to and owner_values is not None and (all_damage_neg1 or len(set(owner_values)) > 1):
+    result["mode"] = "owner_encoded"
+    result["shared_parent"] = parentData[0][0]
+    return result
+
+  if all_zero_idx_to:
+    result["mode"] = "duplicate_geometry"
+    return result
+
+  total_indices = len(indexData)
+  last_val1 = parentData[-1][1]
+  last_val2 = parentData[-1][2]
+  if last_val1 != total_indices:
+    if last_val2 == total_indices:
+      result["swap_columns"] = True
+      result["mode"] = "coverage_table_swapped"
+    elif last_val1 == 0:
+      result["force_fallback"] = True
+      result["mode"] = "fallback_first_parent"
+    else:
+      result["mode"] = "coverage_table_mismatch"
+  return result
 
 def _render_audit(self, verts="__gv_bytes", inds="__gi_bytes"):
   c = Counter()
@@ -170,29 +240,13 @@ class RenderNode(BaseNode):
       total_indices = len(self.indexData)
       logger.debug("Multiple parents (%d) for %s, total_indices=%d", len(self.parentData), self.name, total_indices)
 
-      # V10 variants often encode parent attachments with idxTo == 0 for every
-      # entry (i.e. not a V8-style coverage table). Some files then encode an
-      # owner index per vertex; others intend the geometry to be reused for
-      # each parent entry (typically different damage arguments / control nodes).
-      all_zero_idx_to = bool(self.parentData) and all(len(pd) == 3 and pd[1] == 0 for pd in self.parentData)
-      all_damage_neg1 = bool(self.parentData) and all(len(pd) == 3 and pd[2] == -1 for pd in self.parentData)
-      owner_values = None
-      if all_zero_idx_to and self.vertexData:
-        try:
-          raw_owner_values = [int(round(v[3])) for v in self.vertexData]
-          nOwners = len(self.parentData)
-          out_of_range = sum(1 for o in raw_owner_values if not (0 <= o < nOwners))
-          if out_of_range:
-            print(f"Info: {self.name} has {out_of_range} vertices with out-of-range owner, clamping to [0, {nOwners - 1}]")
-          owner_values = [max(0, min(nOwners - 1, o)) for o in raw_owner_values]
-        except Exception:
-          owner_values = None
+      parent_layout = _classify_render_parent_data(self.parentData, self.vertexData, self.indexData)
+      self.parentData_layout = parent_layout
+      owner_values = parent_layout.get("owner_values")
 
-      # Require either the strong legacy signal (all damageArg == -1) or actual
-      # owner variation across vertices before treating this as owner-encoded.
-      if all_zero_idx_to and owner_values is not None and (all_damage_neg1 or len(set(owner_values)) > 1):
+      if parent_layout["mode"] == "owner_encoded":
         logger.debug("V10 owner-encoded split detected for %s", self.name)
-        shared_parent = self.parentData[0][0]
+        shared_parent = parent_layout.get("shared_parent")
         children = []
         for owner_idx, pd in enumerate(self.parentData):
           parent = pd[0]
@@ -205,6 +259,7 @@ class RenderNode(BaseNode):
           node.parent = parent
           node.damage_argument = pd[2]
           node.vertexData = self.vertexData
+          node.parentData_layout = dict(parent_layout)
           # V10 owner-encoded split metadata: geometry coordinates are shared
           # across all owners relative to the same control-space parent.
           node.shared_parent = shared_parent
@@ -236,7 +291,7 @@ class RenderNode(BaseNode):
 
       # V10 zero-coverage tables without usable owner variation should preserve
       # all parent attachments by reusing the full geometry on each child.
-      if all_zero_idx_to:
+      if parent_layout["mode"] == "duplicate_geometry":
         print(f"Info: V10 zero-coverage attachment split for {self.name}; duplicating geometry across {len(self.parentData)} parents")
         children = []
         for i, (parent, _val1, val2) in enumerate(self.parentData):
@@ -250,30 +305,9 @@ class RenderNode(BaseNode):
           node.indexData = self.indexData
           node.damage_argument = val2
           node.vertexData = self.vertexData
+          node.parentData_layout = dict(parent_layout)
           children.append(node)
         return children
-      
-      # --- FIX START: V10/Mod Compatibility Logic ---
-      # Check if the last entry covers the whole range (Standard V8 behavior)
-      last_val1 = self.parentData[-1][1] # Usually idxTo (End Index)
-      last_val2 = self.parentData[-1][2] # Usually damageArg
-
-      swap_columns = False
-      force_fallback = False
-
-      # Scenario A: Standard mismatch (The warning you saw)
-      if last_val1 != total_indices:
-          # Scenario B: Columns are swapped? (val2 is the count, val1 is damage/0)
-          if last_val2 == total_indices:
-              print(f"Info: Detected V10 data swap for {self.name}. Swapping interpretation.")
-              swap_columns = True
-          # Scenario C: Both are wrong or 0? Force render.
-          elif last_val1 == 0:
-               print(f"Warning: {self.name} has 0 coverage. Forcing geometry to first node to prevent invisible mesh.")
-               force_fallback = True
-          else:
-               print(f"Warning: Split mismatch {self.name}: covered {last_val1} vs total {total_indices}")
-      # --- FIX END ---
 
       start = 0
       children = []
@@ -286,16 +320,17 @@ class RenderNode(BaseNode):
         node.props = self.props
         node.material = self.material
         node.parent = parent
+        node.parentData_layout = dict(parent_layout)
         
         # Apply logic determined above
-        if force_fallback:
+        if parent_layout["force_fallback"]:
             # If falling back, give EVERYTHING to the first node, others get empty
             if i == 0:
                 idxTo = total_indices
             else:
                 idxTo = total_indices # or start, effectively empty
             damageArg = val2
-        elif swap_columns:
+        elif parent_layout["swap_columns"]:
             idxTo = val2
             damageArg = val1
         else:
@@ -376,6 +411,7 @@ class ShellSkinNode(ShellNode):
       ("shell", ShellNode.read),
       ("skin", SkinNode.read),
     ])
+    _tag_shell_family_node(node, "model::ShellSkinNode")
     if isinstance(node, SkinNode):
       logger.warning("Parsed ShellSkinNode using SkinNode layout for '%s'", getattr(node, "name", ""))
     return node
@@ -387,11 +423,12 @@ class TreeShellNode(ShellNode):
 
   @classmethod
   def read(cls, stream):
-    return _read_with_layout_fallback(stream, [
+    node = _read_with_layout_fallback(stream, [
       ("shell", ShellNode.read),
       ("shell_skin", ShellSkinNode.read),
       ("skin", SkinNode.read),
     ])
+    return _tag_shell_family_node(node, "model::TreeShellNode")
 
 @reads_type("model::SegmentsNode")
 class SegmentsNode(BaseNode):

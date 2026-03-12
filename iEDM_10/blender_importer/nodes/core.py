@@ -1,3 +1,56 @@
+def _is_narrow_safe_identity_helper_name(name):
+  if not name:
+    return False
+  if name in {"Connector Transform", "Fake Light Transform"}:
+    return True
+  if name.startswith(("Connector_", "Light_Dir", "Omni_", "Fspot", "Point", "Dummy")):
+    return True
+  return False
+
+
+def _idprop_sequence_value(value):
+  def _convert(item, depth=0):
+    if depth > 2:
+      return None
+    if isinstance(item, (int, float, bool, str)):
+      return item
+    if isinstance(item, (bytes, bytearray)):
+      return bytes(item).hex()
+    item_to_list = getattr(item, "tolist", None)
+    if callable(item_to_list):
+      try:
+        return _convert(item_to_list(), depth)
+      except Exception:
+        return None
+    if isinstance(item, (list, tuple)):
+      if len(item) > 16:
+        return None
+      converted = [_convert(sub, depth + 1) for sub in item]
+      if any(sub is None for sub in converted):
+        return None
+      return converted
+    return None
+
+  if not isinstance(value, (list, tuple)):
+    return None
+  if len(value) > 16:
+    return None
+  converted = _convert(value, 0)
+  if converted is None:
+    return None
+  if all(isinstance(item, (int, float, bool)) for item in converted):
+    return converted
+  return __import__("json").dumps(converted, separators=(",", ":"))
+
+
+def _idprop_diag_value(value):
+  if isinstance(value, (int, float, bool, str)):
+    return value
+  if isinstance(value, (bytes, bytearray)):
+    return bytes(value).hex()
+  return _idprop_sequence_value(value)
+
+
 def process_node(node):
   """Processes a single node of the transform graph"""
   _used_shared_parent_fallback = False
@@ -186,6 +239,8 @@ def process_node(node):
       node.blender = create_segments(node.render)
     elif isinstance(node.render, LightNode):
       node.blender = create_lamp(node.render)
+    elif isinstance(node.render, BillboardNode) or type(node.render).__name__ == "BillboardNode":
+      node.blender = create_billboard(node.render)
     elif isinstance(node.render, FakeOmniLightsNode) or type(node.render).__name__ == "FakeOmniLightsNode":
       node.blender = create_fake_omni_lights(node.render)
     elif isinstance(node.render, FakeSpotLightsNode) or type(node.render).__name__ == "FakeSpotLightsNode":
@@ -228,9 +283,10 @@ def process_node(node):
   node._is_primary = True
 
   # --- (2) Parent in a “parity-safe” way: identity parent inverse ---
-  if node.parent and node.parent.blender and node.parent.blender != node.blender:
-    node.blender.parent = node.parent.blender
-    node.blender.matrix_parent_inverse = Matrix.Identity(4)
+  if not node.blender.get("_iedm_skin_parent_override"):
+    if node.parent and node.parent.blender and node.parent.blender != node.blender:
+      node.blender.parent = node.parent.blender
+      node.blender.matrix_parent_inverse = Matrix.Identity(4)
 
   # Preserve mapping from EDM transform node -> created blender object
   if node.transform and node.blender:
@@ -350,10 +406,9 @@ def process_node(node):
         node.blender["_iedm_orig_anim_name"] = orig_anim_name
     except Exception as e:
       print(f"Warning in blender_importer\nodes\core.py: {e}")
-  # Preserve raw ArgRotation payload for exporter passthrough.
-  # This avoids re-decomposition drift for Dummy*.001 controller chains where
-  # base terms can be folded into key quaternions.
-  if isinstance(node.transform, ArgRotationNode) and node.blender is not None:
+  # Preserve raw ArgAnimation payload on imported objects so problematic nodes
+  # can be inspected directly in Blender without re-reading the EDM.
+  if isinstance(node.transform, ArgAnimationNode) and node.blender is not None:
     try:
       raw = {}
       base = getattr(node.transform, "base", None)
@@ -382,6 +437,25 @@ def process_node(node):
         except Exception as e:
           print(f"Warning in blender_importer\nodes\core.py: {e}")
 
+      pos_payload = []
+      for entry in (getattr(node.transform, "posData", None) or []):
+        if not isinstance(entry, (list, tuple)) or len(entry) != 2:
+          continue
+        arg, keys = entry
+        try:
+          arg_i = int(arg)
+        except Exception:
+          continue
+        key_rows = []
+        for k in (keys or []):
+          try:
+            key_rows.append([float(k.frame), float(k.value[0]), float(k.value[1]), float(k.value[2])])
+          except Exception:
+            continue
+        pos_payload.append([arg_i, key_rows])
+      if pos_payload:
+        raw["pos_data"] = pos_payload
+
       rot_payload = []
       for entry in (getattr(node.transform, "rotData", None) or []):
         if not isinstance(entry, (list, tuple)) or len(entry) != 2:
@@ -402,8 +476,15 @@ def process_node(node):
       if rot_payload:
         raw["rot_data"] = rot_payload
 
+      try:
+        zmat = getattr(node.transform, "zero_transform_local_matrix", None)
+        if zmat is not None:
+          raw["zero_transform_local_matrix"] = [float(v) for row in Matrix(zmat) for v in row]
+      except Exception as e:
+        print(f"Warning in blender_importer\nodes\core.py: {e}")
+
       if raw:
-        node.blender["_iedm_raw_argrot_payload"] = json.dumps(raw, separators=(",", ":"))
+        node.blender["_iedm_raw_arganim_payload"] = json.dumps(raw, separators=(",", ":"))
     except Exception as e:
       print(f"Warning in blender_importer\nodes\core.py: {e}")
 
@@ -445,15 +526,25 @@ def process_node(node):
 
   if _is_render_only_positioning:
     shared_parent = getattr(node.render, "shared_parent", None)
+    parent_transform = getattr(getattr(node, "parent", None), "transform", None)
+    parent_is_real_transform = (
+      parent_transform is not None
+      and not isinstance(parent_transform, ArgVisibilityNode)
+    )
     _used_shared_parent_fallback = False
-    
-    # Parity: Always factor in shared_parent transform for V10 chunks.
-    if shared_parent is not None:
+    applied_local_bl = False
+    has_parent_obj = bool(node.parent and node.parent.blender)
+    shared_parent_obj = getattr(shared_parent, "_blender_obj", None) if shared_parent is not None else None
+
+    # Owner-encoded split chunks can be authored in a shared control-space.
+    # If we have no explicit owner wrapper to compensate against, fall back to
+    # the shared parent transform directly.
+    if shared_parent is not None and not has_parent_obj and not parent_is_real_transform:
       apply_node_transform(shared_parent, node.blender, used_shared_parent=True)
       _used_shared_parent_fallback = True
 
-    if shared_parent is not None and node.parent and node.parent.blender:
-      src = getattr(shared_parent, "_blender_obj", None)
+    if shared_parent is not None and has_parent_obj:
+      src = shared_parent_obj
       dst = node.parent.blender
       if src is not None:
         try:
@@ -465,26 +556,38 @@ def process_node(node):
         # for it), apply that EDM transform directly to the render-only mesh object so
         # the exporter control node does not become an identity wrapper under v_*.
         try:
-          if getattr(shared_parent, "category", None) is NodeCategory.transform:
+          if (
+            not parent_is_real_transform
+            and getattr(shared_parent, "category", None) is NodeCategory.transform
+          ):
             apply_node_transform(shared_parent, node.blender, used_shared_parent=True)
             _used_shared_parent_fallback = True
         except Exception as e:
           print(f"Warning in blender_importer\nodes\core.py: {e}")
+    local_bl = getattr(node, "_local_bl", None)
+    if local_bl is not None and not _used_shared_parent_fallback:
+      try:
+        matrix_to_apply = local_bl.copy() if hasattr(local_bl, "copy") else local_bl
+        node.blender.matrix_basis = matrix_to_apply
+        applied_local_bl = True
+      except Exception as e:
+        print(f"Warning in blender_importer\nnodes\core.py: {e}")
 
-      if _import_ctx.edm_version >= 10:
-        # If a visibility wrapper is acting as a control node, keep mesh aligned.
-        if (
-          node.parent and isinstance(node.parent.transform, ArgVisibilityNode) and node.parent.blender
-          and not _used_shared_parent_fallback
-        ):
-          parent_loc = node.parent.blender.matrix_basis.decompose()[0]
+    if _import_ctx.edm_version >= 10:
+      # If a visibility wrapper is acting as a control node, keep mesh aligned.
+      if (
+        node.parent and isinstance(node.parent.transform, ArgVisibilityNode) and node.parent.blender
+        and not _used_shared_parent_fallback
+      ):
+        parent_loc = node.parent.blender.matrix_basis.decompose()[0]
+        if not applied_local_bl:
           _offset_mesh_world(node.blender, parent_loc)
 
     # Optional pivot recentering (kept as you had it)
     if (
       _import_ctx.mesh_origin_mode == "APPROX"
       and node.parent and node.parent.blender
-      and not isinstance(node.parent.transform, ArgVisibilityNode)
+      and not isinstance(node.parent.transform, (ArgVisibilityNode, AnimatingNode))
     ):
       if node.blender.location.length < 1e-9:
         _recenter_mesh_object_to_geometry(node.blender)
@@ -560,7 +663,9 @@ def process_node(node):
     and hasattr(material_target, "data")
     and material_target.data
   ):
-    material_target.data.materials.append(node.render.material.blender_material)
+    render_cls_name = type(node.render).__name__
+    if render_cls_name not in {"FakeOmniLightsNode", "FakeSpotLightsNode", "FakeALSNode"}:
+      material_target.data.materials.append(node.render.material.blender_material)
 
   # --- Apply transform animation / base transforms (non-visibility transforms only) ---
   if node.transform and not isinstance(node.transform, ArgVisibilityNode):
@@ -622,18 +727,17 @@ def process_node(node):
       for attr in dir(target):
         if attr.startswith("_") or attr == "blender" or attr == "children" or attr == "parent":
           continue
-        val = getattr(target, attr)
-        if isinstance(val, (int, float, str, bool)):
-          try:
-            node.blender[prefix + attr] = val
-          except (OverflowError, ValueError):
-            pass
-        elif isinstance(val, (list, tuple)) and len(val) <= 16:
-          try:
-            # Try to store as property (Blender supports arrays)
-            node.blender[prefix + attr] = val
-          except Exception as e:
-            print(f"Warning in blender_importer\nodes\core.py: {e}")
+        try:
+          val = getattr(target, attr)
+        except Exception:
+          continue
+        idprop_val = _idprop_diag_value(val)
+        if idprop_val is None:
+          continue
+        try:
+          node.blender[prefix + attr] = idprop_val
+        except Exception:
+          pass
 
     if node.transform:
       _dump_diag(node.transform, "EDM_TF_")
@@ -644,7 +748,7 @@ def process_node(node):
     
     # Store the importer's calculated Blender local matrix
     if hasattr(node, "_local_bl"):
-      node.blender["IEDM_LOCAL_BL_MAT"] = [v for row in node._local_bl for v in row]
+      node.blender["IEDM_LOCAL_BL_MAT"] = [float(v) for row in node._local_bl for v in row]
 
   _debug_dump_node_transform(node)
 

@@ -223,6 +223,46 @@ def create_lamp(node):
   return obj
 
 
+def create_billboard(node):
+  """Create a conservative Blender placeholder for BillboardNode payloads."""
+  obj = bpy.data.objects.new(name=node.name or "Billboard", object_data=None)
+  obj.empty_display_type = 'SINGLE_ARROW'
+  obj.empty_display_size = 0.2
+
+  summary = getattr(node, "payload_summary", None) or {}
+  try:
+    obj["_iedm_billboard_payload_len"] = int(summary.get("payload_len", len(getattr(node, "data", b"") or b"")))
+  except Exception as e:
+    print(f"Warning in blender_importer\\lights.py: {e}")
+  try:
+    payload_hex = summary.get("payload_hex")
+    if payload_hex:
+      obj["_iedm_billboard_payload_hex"] = payload_hex
+  except Exception as e:
+    print(f"Warning in blender_importer\\lights.py: {e}")
+  try:
+    head_u32 = summary.get("head_u32")
+    if head_u32 is not None:
+      obj["_iedm_billboard_head_u32"] = json.dumps([int(v) for v in head_u32], separators=(",", ":"))
+  except Exception as e:
+    print(f"Warning in blender_importer\\lights.py: {e}")
+  try:
+    head_f32 = summary.get("head_f32")
+    if head_f32 is not None:
+      obj["_iedm_billboard_head_f32"] = json.dumps([float(v) for v in head_f32], separators=(",", ":"))
+  except Exception as e:
+    print(f"Warning in blender_importer\\lights.py: {e}")
+  try:
+    tail_u16 = summary.get("tail_u16")
+    if tail_u16 is not None:
+      obj["_iedm_billboard_tail_u16"] = int(tail_u16)
+  except Exception as e:
+    print(f"Warning in blender_importer\\lights.py: {e}")
+
+  bpy.context.collection.objects.link(obj)
+  return obj
+
+
 def _create_fake_light_material(obj_name, kind="fake_omni"):
   """Create a Blender material with the correct EDM node group for fake lights.
 
@@ -277,6 +317,19 @@ def _create_fake_light_material(obj_name, kind="fake_omni"):
   return mat
 
 
+def _material_for_fake_light(node, obj_name, kind):
+  edm_mat = getattr(node, "material", None)
+  blender_mat = getattr(edm_mat, "blender_material", None) if edm_mat else None
+  if blender_mat is not None and _material_matches_fake_light_kind(blender_mat, kind):
+    _apply_fake_light_material_payload(blender_mat, edm_mat, kind)
+    return blender_mat
+  fake_mat = _create_fake_light_material(obj_name, kind=kind)
+  if fake_mat is not None:
+    _apply_fake_light_material_payload(fake_mat, edm_mat, kind)
+    return fake_mat
+  return blender_mat
+
+
 def _create_fake_light_mesh(name, positions):
   """Create a mesh with one vertex per light position (already in Blender coords)."""
   mesh = bpy.data.meshes.new(name)
@@ -287,6 +340,156 @@ def _create_fake_light_mesh(name, positions):
   return mesh
 
 
+def _fake_light_world_from_edm(pos_edm):
+  """
+  Fake-light point payloads are exported through the official addon's
+  ROOT_TRANSFORM_MATRIX. Invert that here so importer-created Blender objects
+  match the reference .blend topology and object placement.
+  """
+  return Vector((float(pos_edm[0]), -float(pos_edm[2]), float(pos_edm[1])))
+
+
+def _create_fake_omni_mesh(name, world_positions):
+  if not world_positions:
+    return _create_fake_light_mesh(name, []), Vector((0.0, 0.0, 0.0))
+
+  center = Vector((0.0, 0.0, 0.0))
+  for pos in world_positions:
+    center += pos
+  center /= float(len(world_positions))
+
+  local_positions = [pos - center for pos in world_positions]
+  unique_positions = {
+    tuple(round(float(c), 6) for c in pos)
+    for pos in local_positions
+  }
+  if len(unique_positions) == 8:
+    xs = sorted({round(pos[0], 6) for pos in unique_positions})
+    ys = sorted({round(pos[1], 6) for pos in unique_positions})
+    zs = sorted({round(pos[2], 6) for pos in unique_positions})
+    if len(xs) == len(ys) == len(zs) == 2:
+      verts = [
+        (xs[0], ys[0], zs[0]),
+        (xs[0], ys[0], zs[1]),
+        (xs[0], ys[1], zs[0]),
+        (xs[0], ys[1], zs[1]),
+        (xs[1], ys[0], zs[0]),
+        (xs[1], ys[0], zs[1]),
+        (xs[1], ys[1], zs[0]),
+        (xs[1], ys[1], zs[1]),
+      ]
+      faces = [
+        (0, 1, 3, 2),
+        (4, 6, 7, 5),
+        (0, 4, 5, 1),
+        (2, 3, 7, 6),
+        (0, 2, 6, 4),
+        (1, 5, 7, 3),
+      ]
+      mesh = bpy.data.meshes.new(name)
+      mesh.from_pydata(verts, [], faces)
+      mesh.update()
+      return mesh, center
+
+  return _create_fake_light_mesh(name, local_positions), center
+
+
+def _axis_box_layout(positions):
+  unique_positions = {
+    tuple(round(float(c), 6) for c in pos)
+    for pos in positions
+  }
+  if len(unique_positions) != 8:
+    return None, None
+  xs = sorted({round(pos[0], 6) for pos in unique_positions})
+  ys = sorted({round(pos[1], 6) for pos in unique_positions})
+  zs = sorted({round(pos[2], 6) for pos in unique_positions})
+  if len(xs) != 2 or len(ys) != 2 or len(zs) != 2:
+    return None, None
+  verts = [
+    (xs[0], ys[0], zs[0]),
+    (xs[0], ys[0], zs[1]),
+    (xs[0], ys[1], zs[0]),
+    (xs[0], ys[1], zs[1]),
+    (xs[1], ys[0], zs[0]),
+    (xs[1], ys[0], zs[1]),
+    (xs[1], ys[1], zs[0]),
+    (xs[1], ys[1], zs[1]),
+  ]
+  faces = [
+    (0, 1, 3, 2),
+    (2, 3, 7, 6),
+    (6, 7, 5, 4),
+    (4, 5, 1, 0),
+    (2, 6, 4, 0),
+    (7, 3, 1, 5),
+  ]
+  return verts, faces
+
+
+def _create_axis_box_mesh(name, positions):
+  verts, faces = _axis_box_layout(positions)
+  if verts is None:
+    return None
+  mesh = bpy.data.meshes.new(name)
+  mesh.from_pydata(verts, [], faces)
+  mesh.update()
+  return mesh
+
+
+def _classify_fake_spot_mode(positions, dirs_bl):
+  if not positions:
+    return "surface"
+  if not dirs_bl:
+    return "surface"
+  ref = None
+  uniform = True
+  for dvec in dirs_bl:
+    if dvec.length <= 1.0e-8:
+      continue
+    cur = dvec.normalized()
+    if ref is None:
+      ref = cur
+      continue
+    if ref.dot(cur) < 0.999:
+      uniform = False
+      break
+  if not uniform:
+    return "surface"
+  verts, _faces = _axis_box_layout(positions)
+  if verts is not None:
+    return "non_surface_box"
+  return "non_surface_points"
+
+
+def _default_fake_spot_uvs(two_sided):
+  front_lb = (0.0, 0.5)
+  front_rt = (0.25, 1.0)
+  back_lb = (0.75, 0.5) if two_sided else (0.0, 0.0)
+  back_rt = (1.0, 1.0)
+  return front_lb, front_rt, back_lb, back_rt
+
+
+def _add_fake_spot_direction_child(parent_obj, direction, distance=1.0):
+  if parent_obj is None:
+    return None
+  dvec = Vector(direction)
+  if dvec.length <= 1.0e-8:
+    dvec = Vector((1.0, 0.0, 0.0))
+  else:
+    dvec.normalize()
+  child = bpy.data.objects.new("Light_Dir", None)
+  child.empty_display_type = "PLAIN_AXES"
+  child.empty_display_size = 0.1
+  child.parent = parent_obj
+  child.location = tuple(dvec * float(distance))
+  quat = Vector((1.0, 0.0, 0.0)).rotation_difference(dvec)
+  child.rotation_mode = 'QUATERNION'
+  child.rotation_quaternion = quat
+  bpy.context.collection.objects.link(child)
+  return child
+
+
 def _unpack_uv_double(dval):
   """Decode a double that packs two floats (UV pair) via reinterpretation."""
   import struct
@@ -294,23 +497,241 @@ def _unpack_uv_double(dval):
   return struct.unpack('<2f', raw)
 
 
+def _safe_float(value, default=0.0):
+  try:
+    return float(value)
+  except Exception:
+    return float(default)
+
+
+def _safe_vec(value, default=(0.0, 0.0, 0.0)):
+  try:
+    return tuple(float(v) for v in value)
+  except Exception:
+    return tuple(float(v) for v in default)
+
+
+def _find_fake_light_group_node(material):
+  if material is None or not getattr(material, "use_nodes", False) or not getattr(material, "node_tree", None):
+    return None
+  bridge = _ensure_official_material_bridge()
+  valid_node_types = {
+    bridge.get("node_types", {}).get("fake_omni"),
+    bridge.get("node_types", {}).get("fake_spot"),
+  }
+  valid_tree_names = {
+    bridge.get("names", {}).get("fake_omni"),
+    bridge.get("names", {}).get("fake_spot"),
+  }
+  nodes = material.node_tree.nodes
+  for node in nodes:
+    node_tree = getattr(node, "node_tree", None)
+    node_tree_name = getattr(node_tree, "name", None)
+    if getattr(node, "bl_idname", None) in valid_node_types:
+      return node
+    if node.bl_idname == "ShaderNodeGroup" and node_tree_name in valid_tree_names:
+      return node
+    if hasattr(node, "inputs") and any(getattr(sock, "name", None) == "Emissive" for sock in getattr(node, "inputs", ())):
+      return node
+  return None
+
+
+def _material_matches_fake_light_kind(material, kind):
+  if material is None or not getattr(material, "use_nodes", False) or not getattr(material, "node_tree", None):
+    return False
+  bridge = _ensure_official_material_bridge()
+  official_name = bridge.get("names", {}).get(kind)
+  official_node_type = bridge.get("node_types", {}).get(kind)
+  for node in material.node_tree.nodes:
+    node_tree = getattr(node, "node_tree", None)
+    node_tree_name = getattr(node_tree, "name", None)
+    if official_node_type and getattr(node, "bl_idname", None) == official_node_type:
+      return True
+    if official_name and node_tree_name == official_name:
+      return True
+  return False
+
+
+def _find_or_create_emissive_texture_node(material, texture_name):
+  if material is None or not texture_name or not getattr(material, "node_tree", None):
+    return None
+  nodes = material.node_tree.nodes
+  for node in nodes:
+    if node.bl_idname != "ShaderNodeTexImage":
+      continue
+    image = getattr(node, "image", None)
+    if image and os.path.splitext(os.path.basename(image.filepath))[0].lower() == str(texture_name).lower():
+      return node
+  filename = None
+  source_dir = getattr(_import_ctx, "source_dir", None)
+  if source_dir:
+    try:
+      with chdir(source_dir):
+        filename = _find_texture_file(texture_name)
+    except Exception:
+      filename = None
+  if not filename:
+    filename = _find_texture_file(texture_name)
+  if not filename:
+    try:
+      image = bpy.data.images.get(texture_name)
+      if image is None:
+        image = bpy.data.images.new(name=str(texture_name), width=1, height=1, alpha=True)
+      tex_image = nodes.new('ShaderNodeTexImage')
+      tex_image.image = image
+      tex_image.location = (-350, 0)
+      return tex_image
+    except Exception as e:
+      print(f"Warning in blender_importer\\lights.py: {e}")
+      return None
+  try:
+    tex_image = nodes.new('ShaderNodeTexImage')
+    tex_image.image = bpy.data.images.load(filename)
+    tex_image.image.colorspace_settings.name = 'sRGB'
+    tex_image.location = (-350, 0)
+    return tex_image
+  except Exception as e:
+    print(f"Warning in blender_importer\\lights.py: {e}")
+    return None
+
+
+def _set_material_group_input(group_node, socket_name, value):
+  if not group_node:
+    return
+  for socket in group_node.inputs:
+    if socket.name != socket_name or not hasattr(socket, "default_value"):
+      continue
+    try:
+      socket.default_value = value
+    except Exception as e:
+      print(f"Warning in blender_importer\\lights.py: {e}")
+    return
+
+
+def _apply_fake_light_material_payload(material, edm_material, kind):
+  if material is None or edm_material is None:
+    return
+  group_node = _find_fake_light_group_node(material)
+  if group_node is None:
+    return
+
+  textures = getattr(edm_material, "textures", None) or []
+  if textures:
+    tex_name = getattr(textures[0], "name", None)
+    tex_node = _find_or_create_emissive_texture_node(material, tex_name)
+    if tex_node is not None:
+      try:
+        _link_texture_to_group_input(material.node_tree.links, tex_node, group_node, "Emissive")
+      except Exception:
+        pass
+
+  uniforms = getattr(edm_material, "uniforms", None) or {}
+  anim_uniforms = getattr(edm_material, "animated_uniforms", None) or {}
+
+  luminance_prop = anim_uniforms.get("luminance", uniforms.get("luminance"))
+  luminance_val = None
+  if hasattr(luminance_prop, "keys") and getattr(luminance_prop, "keys", None):
+    luminance_val = getattr(luminance_prop.keys[0], "value", None)
+  elif luminance_prop is not None:
+    luminance_val = luminance_prop
+  if luminance_val is not None:
+    _set_material_group_input(group_node, "Luminance", _safe_float(luminance_val, 1.0))
+
+  shift = uniforms.get("shiftToCamera")
+  if shift is not None:
+    _set_material_group_input(group_node, "ShiftToCamera", _safe_float(shift, 0.0))
+
+  size_factors = uniforms.get("sizeFactors")
+  size_vec = _safe_vec(size_factors, default=(4.0, 1000.0, 0.0))
+  if len(size_vec) >= 1:
+    _set_material_group_input(group_node, "MinSizePixels", _safe_float(size_vec[0], 4.0))
+  if len(size_vec) >= 2:
+    _set_material_group_input(group_node, "MaxDistance", _safe_float(size_vec[1], 1000.0))
+
+  if kind == "fake_spot":
+    cone_setup = uniforms.get("coneSetup")
+    cone_vec = _safe_vec(cone_setup, default=())
+    if len(cone_vec) >= 2:
+      try:
+        theta_deg = math.degrees(math.acos(max(-1.0, min(1.0, cone_vec[0]))))
+        phi_deg = math.degrees(math.acos(max(-1.0, min(1.0, cone_vec[1]))))
+        _set_material_group_input(group_node, "Inner Angle", theta_deg)
+        _set_material_group_input(group_node, "Outer Angle", phi_deg)
+      except Exception:
+        pass
+    specular = uniforms.get("specularAmount")
+    if specular is not None:
+      _set_material_group_input(group_node, "SpecularAmount", _safe_float(specular, 0.0))
+
+
+def _apply_fake_light_animation_payload(obj, edm_material):
+  if obj is None or not hasattr(obj, "EDMProps") or edm_material is None:
+    return
+  anim_uniforms = getattr(edm_material, "animated_uniforms", None) or {}
+  luminance_prop = anim_uniforms.get("luminance")
+  if luminance_prop is None or not hasattr(luminance_prop, "keys"):
+    return
+
+  keys = list(getattr(luminance_prop, "keys", []) or [])
+  if not keys:
+    return
+  arg = getattr(luminance_prop, "argument", None)
+  base_luminance = _safe_float(getattr(keys[0], "value", 1.0), 1.0)
+  if abs(base_luminance) <= 1.0e-8:
+    base_luminance = 1.0
+  try:
+    obj.EDMProps.ANIMATED_BRIGHTNESS = 1.0
+  except Exception:
+    pass
+
+  try:
+    action_name = "FakeLight_{}".format(obj.name)
+    if arg is not None and int(arg) >= 0:
+      action_name = "{}_{}".format(int(arg), obj.name)
+    action = bpy.data.actions.new(action_name)
+    if hasattr(action, "argument") and arg is not None and int(arg) >= 0:
+      action.argument = int(arg)
+    anim_data = obj.animation_data_create()
+    anim_data.action = action
+    for framedata in keys:
+      frame = _anim_frame_to_scene_frame(getattr(framedata, "frame", 0.0))
+      value = _safe_float(getattr(framedata, "value", 0.0), 0.0) / base_luminance
+      obj.EDMProps.ANIMATED_BRIGHTNESS = value
+      obj.keyframe_insert(data_path='EDMProps.ANIMATED_BRIGHTNESS', frame=frame)
+    curve = action.fcurves.find('EDMProps.ANIMATED_BRIGHTNESS')
+    if curve is not None:
+      for key in curve.keyframe_points:
+        key.interpolation = 'LINEAR'
+  except Exception as e:
+    print(f"Warning in blender_importer\\lights.py: {e}")
+
+
 def create_fake_omni_lights(node):
-  """Create a mesh object for FakeOmniLightsNode with one vertex per light."""
+  """Create a non-surface fake omni object compatible with the official exporter."""
   name = node.name or "FakeOmniLights"
 
-  # Each entry: 6 doubles = [x, y, z, size, uv_lb_packed, uv_rt_packed]
-  # The last two doubles each pack two floats (UV coordinates).
   positions = []
-  sizes = []
+  decoded_entries = list(getattr(node, "decoded_data", []) or [])
+  if not decoded_entries:
+    try:
+      from ..edm_format.types.lights import decode_fake_omni_entry
+      decoded_entries = [decode_fake_omni_entry(entry) for entry in getattr(node, "data", [])]
+    except Exception:
+      decoded_entries = []
+
+  size = None
   uv_lb = None
   uv_rt = None
-  for entry in node.data:
-    pos_edm = (entry[0], entry[1], entry[2])
-    positions.append(vector_to_blender(pos_edm))
-    sizes.append(entry[3])
-    if uv_lb is None:
-      uv_lb = _unpack_uv_double(entry[4])
-      uv_rt = _unpack_uv_double(entry[5])
+  for decoded in decoded_entries:
+    pos_edm = decoded.get("position", (0.0, 0.0, 0.0))
+    positions.append(_fake_light_world_from_edm(pos_edm))
+    if size is None:
+      size = decoded.get("size")
+      uv_lb = decoded.get("uv_lb")
+      uv_rt = decoded.get("uv_rt")
+  if not positions:
+    for entry in getattr(node, "data", []) or []:
+      positions.append(_fake_light_world_from_edm(entry[0:3]))
 
   if not positions:
     # No light entries — create an empty placeholder
@@ -321,38 +742,39 @@ def create_fake_omni_lights(node):
     bpy.context.collection.objects.link(ob)
     return ob
 
-  mesh = _create_fake_light_mesh(name, positions)
+  mesh, location = _create_fake_omni_mesh(name, positions)
   ob = bpy.data.objects.new(name, mesh)
+  ob.location = location
   _set_official_special_type(ob, 'FAKE_LIGHT')
 
   # Assign dedicated fake omni material with correct EDM node group
-  fake_mat = _create_fake_light_material(name, kind="fake_omni")
+  fake_mat = _material_for_fake_light(node, name, kind="fake_omni")
   if fake_mat is not None:
+    mesh.materials.clear()
     mesh.materials.append(fake_mat)
 
   # Set EDMProps for fake light export
   if hasattr(ob, "EDMProps"):
-    ob.EDMProps.SIZE = float(sizes[0]) if sizes else 3.0
+    ob.EDMProps.SIZE = float(size) if size is not None else 3.0
+    ob.EDMProps.SURFACE_MODE = False
     if uv_lb is not None:
       ob.EDMProps.UV_LB = (float(uv_lb[0]), float(uv_lb[1]))
+    if uv_rt is not None:
       ob.EDMProps.UV_RT = (float(uv_rt[0]), float(uv_rt[1]))
+  _apply_fake_light_animation_payload(ob, getattr(node, "material", None))
 
   bpy.context.collection.objects.link(ob)
   return ob
 
 
 def create_fake_spot_lights(node):
-  """Create a mesh object for FakeSpotLightsNode.
-
-  We reconstruct these as surface-mode quads (one quad per light) so the
-  official exporter emits the same v10 FakeSpotLightsNode layout as reference
-  assets (no extra trailing direction vector).
-  """
+  """Create a mesh object for FakeSpotLightsNode."""
   name = node.name or "FakeSpotLights"
 
   positions = []
   dirs_bl = []
   sizes = []
+  two_sided = False
   for i, entry in enumerate(node.data):
     pos_edm = entry['position']
     positions.append(vector_to_blender(pos_edm))
@@ -402,6 +824,13 @@ def create_fake_spot_lights(node):
     if not math.isfinite(s) or s <= 1e-6:
       s = 0.1
     sizes.append(s)
+    if entry.get('back_side') is True:
+      two_sided = True
+    elif 'flag' in entry:
+      try:
+        two_sided = two_sided or bool(int(entry.get('flag', 0)) & 0x1)
+      except Exception:
+        pass
 
   if not positions:
     ob = bpy.data.objects.new(name, None)
@@ -411,67 +840,81 @@ def create_fake_spot_lights(node):
     bpy.context.collection.objects.link(ob)
     return ob
 
-  # Build one quad per light center, oriented by the light direction. Exporter
-  # surface-mode fake spot parsing expects faces + UVs.
-  verts = []
-  faces = []
-  uv_quads = []
-  for i, (center, normal, size_val) in enumerate(zip(positions, dirs_bl, sizes)):
-    up = Vector((0.0, 0.0, 1.0))
-    if abs(normal.dot(up)) > 0.999:
-      up = Vector((0.0, 1.0, 0.0))
-    tangent = normal.cross(up)
-    if tangent.length <= 1e-8:
-      tangent = Vector((1.0, 0.0, 0.0))
-    tangent.normalize()
-    bitangent = normal.cross(tangent)
-    if bitangent.length <= 1e-8:
-      bitangent = Vector((0.0, 1.0, 0.0))
-    bitangent.normalize()
+  mode = _classify_fake_spot_mode(positions, dirs_bl)
+  if mode == "non_surface_box":
+    mesh = _create_axis_box_mesh(name, positions)
+    if mesh is None:
+      mesh = _create_fake_light_mesh(name, positions)
+  elif mode == "non_surface_points":
+    mesh = _create_fake_light_mesh(name, positions)
+  else:
+    verts = []
+    faces = []
+    uv_quads = []
+    for center, normal, size_val in zip(positions, dirs_bl, sizes):
+      up = Vector((0.0, 0.0, 1.0))
+      if abs(normal.dot(up)) > 0.999:
+        up = Vector((0.0, 1.0, 0.0))
+      tangent = normal.cross(up)
+      if tangent.length <= 1e-8:
+        tangent = Vector((1.0, 0.0, 0.0))
+      tangent.normalize()
+      bitangent = normal.cross(tangent)
+      if bitangent.length <= 1e-8:
+        bitangent = Vector((0.0, 1.0, 0.0))
+      bitangent.normalize()
 
-    # parse_faces derives "light size" from the max distance from vertex0 to the
-    # other quad vertices (diagonal dominates), so choose side length so the
-    # resulting value is approximately size_val.
-    half_side = max(0.001, float(size_val) / (2.0 * math.sqrt(2.0)))
-    quad = [
-      center - tangent * half_side - bitangent * half_side,
-      center + tangent * half_side - bitangent * half_side,
-      center + tangent * half_side + bitangent * half_side,
-      center - tangent * half_side + bitangent * half_side,
-    ]
-    base = len(verts)
-    verts.extend([tuple(v) for v in quad])
-    faces.append((base + 0, base + 1, base + 2, base + 3))
-    uv_quads.append(((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)))
+      half_side = max(0.001, float(size_val) / (2.0 * math.sqrt(2.0)))
+      quad = [
+        center - tangent * half_side - bitangent * half_side,
+        center + tangent * half_side - bitangent * half_side,
+        center + tangent * half_side + bitangent * half_side,
+        center - tangent * half_side + bitangent * half_side,
+      ]
+      base = len(verts)
+      verts.extend([tuple(v) for v in quad])
+      faces.append((base + 0, base + 1, base + 2, base + 3))
+      uv_quads.append(((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)))
 
-  mesh = bpy.data.meshes.new(name)
-  mesh.from_pydata(verts, [], faces)
-  mesh.update()
-  if faces:
-    try:
-      uv_layer = mesh.uv_layers.new(name="UVMap")
-      loop_uv = uv_layer.data
-      for poly in mesh.polygons:
-        q = uv_quads[poly.index]
-        for li, uv in zip(poly.loop_indices, q):
-          loop_uv[li].uv = uv
-    except Exception as e:
-      print(f"Warning in blender_importer\lights.py: {e}")
+    mesh = bpy.data.meshes.new(name)
+    mesh.from_pydata(verts, [], faces)
+    mesh.update()
+    if faces:
+      try:
+        uv_layer = mesh.uv_layers.new(name="UVMap")
+        loop_uv = uv_layer.data
+        for poly in mesh.polygons:
+          q = uv_quads[poly.index]
+          for li, uv in zip(poly.loop_indices, q):
+            loop_uv[li].uv = uv
+      except Exception as e:
+        print(f"Warning in blender_importer\\lights.py: {e}")
 
   ob = bpy.data.objects.new(name, mesh)
   _set_official_special_type(ob, 'FAKE_LIGHT')
 
   # Assign dedicated fake spot material with correct EDM node group
-  fake_mat = _create_fake_light_material(name, kind="fake_spot")
+  fake_mat = _material_for_fake_light(node, name, kind="fake_spot")
   if fake_mat is not None:
+    mesh.materials.clear()
     mesh.materials.append(fake_mat)
 
   if hasattr(ob, "EDMProps"):
-    ob.EDMProps.SURFACE_MODE = True
-    ob.EDMProps.TWO_SIDED = False
+    ob.EDMProps.SURFACE_MODE = (mode == "surface")
+    ob.EDMProps.TWO_SIDED = bool(two_sided)
     ob.EDMProps.SIZE = float(sizes[0]) if sizes else 0.1
+    if mode != "surface":
+      front_lb, front_rt, back_lb, back_rt = _default_fake_spot_uvs(bool(two_sided))
+      ob.EDMProps.UV_LB = front_lb
+      ob.EDMProps.UV_RT = front_rt
+      ob.EDMProps.UV_LB_BACK = back_lb
+      ob.EDMProps.UV_RT_BACK = back_rt
+  _apply_fake_light_animation_payload(ob, getattr(node, "material", None))
 
   bpy.context.collection.objects.link(ob)
+  if mode != "surface":
+    direction = dirs_bl[0] if dirs_bl else Vector((1.0, 0.0, 0.0))
+    _add_fake_spot_direction_child(ob, direction, distance=max(1.0, float(sizes[0]) * 0.5 if sizes else 1.0))
   return ob
 
 
@@ -497,9 +940,11 @@ def create_fake_als_lights(node):
   _set_official_special_type(ob, 'FAKE_LIGHT')
 
   # ALS lights map to fake_omni material kind
-  fake_mat = _create_fake_light_material(name, kind="fake_omni")
+  fake_mat = _material_for_fake_light(node, name, kind="fake_omni")
   if fake_mat is not None:
+    mesh.materials.clear()
     mesh.materials.append(fake_mat)
+  _apply_fake_light_animation_payload(ob, getattr(node, "material", None))
 
   bpy.context.collection.objects.link(ob)
   return ob

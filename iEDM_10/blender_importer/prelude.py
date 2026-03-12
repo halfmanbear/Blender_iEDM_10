@@ -38,6 +38,10 @@ def _default_transform_debug_state():
   return {"enabled": False, "filter": None, "limit": 200, "emitted": 0}
 
 
+def _default_render_split_debug_state():
+  return {"enabled": False}
+
+
 import threading
 class ImportContext(threading.local):
   """Mutable importer runtime state shared across reader modules."""
@@ -45,7 +49,9 @@ class ImportContext(threading.local):
   def __init__(self):
     self.edm_version = 10
     self.transform_debug = _default_transform_debug_state()
+    self.render_split_debug = _default_render_split_debug_state()
     self.mesh_origin_mode = "APPROX"
+    self.source_dir = None
     self.official_material_bridge = None
     self.bone_import_ctx = None
     self.legacy_v10_parent_compose = False
@@ -72,7 +78,19 @@ def _anim_frame_to_scene_frame(frame_value):
 
 def _is_child_of_file_root(node):
   parent = getattr(node, "parent", None)
-  return parent is not None and getattr(parent, "parent", None) is None
+  if parent is None:
+    return False
+  if getattr(parent, "parent", None) is None:
+    return True
+  try:
+    from ..edm_format.types import ArgVisibilityNode
+    grandparent = getattr(parent, "parent", None)
+    parent_tf = getattr(parent, "transform", None)
+    if isinstance(parent_tf, ArgVisibilityNode) and grandparent is not None and getattr(grandparent, "parent", None) is None:
+      return True
+  except Exception:
+    pass
+  return False
 
 
 def _ob_local_is_identity(o, eps=1e-6):

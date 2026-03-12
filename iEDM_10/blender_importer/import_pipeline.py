@@ -3,8 +3,10 @@ def read_file(filename, options=None):
   # Re-initialize the global import context for this new import session
   _import_ctx.__init__()
   _reset_transform_debug(options)
+  _import_ctx.render_split_debug = {"enabled": bool(options.get("debug_render_splits", False))}
   _reset_mesh_origin_mode(options)
   _import_ctx.bone_import_ctx = None
+  _import_ctx.source_dir = os.path.dirname(os.path.abspath(filename))
 
   # Parse the EDM file
   edm = EDMFile(filename)
@@ -73,7 +75,7 @@ def read_file(filename, options=None):
   bpy.context.scene.use_preview_range = False
   bpy.context.scene.frame_start = 0
   bpy.context.scene.frame_end = FRAME_SCALE
-  bpy.context.scene.frame_set(FRAME_SCALE // 2)
+  bpy.context.scene.frame_set(0)
 
 
 
@@ -99,7 +101,7 @@ def read_file(filename, options=None):
   # whether it was originally exported from 3ds Max (with a root swap matrix) 
   # or from Blender (with optimized meshes in Y-up space).
 
-  # Always create BOUNDING_BOX and USER_BOX empties for correct export round-tripping.
+  # Create explicit root box empties from decoded v10 root metadata.
   # The official exporter recomputes AABB from all scene geometry, including
   # extreme-position connectors (e.g. particle views at z=-280m), producing a
   # huge bounding box.  These special empties carry the original raw AABB values
@@ -108,6 +110,7 @@ def read_file(filename, options=None):
   if not _has_special_box("BOUNDING_BOX"):
     create_bounding_box_from_root(edm.root)
   _create_user_box_from_root(edm.root)
+  _create_light_box_from_root(edm.root)
 
   # Build the translation graph with hierarchy simplification
   graph = build_graph(edm)
@@ -229,7 +232,23 @@ def create_visibility_actions(visNode):
         _add_constant_key(curve_visible, frameOff, 0.0)
   return actions
 
-def add_position_fcurves(action, keys, transform_left, transform_right):
+def _arg_anim_vector_to_blender(node, value):
+  vec = _anim_vector_to_blender(value)
+  try:
+    if (
+      _import_ctx.edm_version >= 10
+      and _is_child_of_file_root(node)
+      and hasattr(node, "base")
+      and hasattr(node.base, "matrix")
+      and _is_neg90_x_basis_matrix(Matrix(node.base.matrix))
+    ):
+      return _ROOT_BASIS_FIX.to_3x3() @ Vector(vec)
+  except Exception as e:
+    print(f"Warning in blender_importer\\import_pipeline.py: {e}")
+  return vec
+
+
+def add_position_fcurves(action, keys, transform_left, transform_right, node=None):
   "Adds position fcurve data to an animation action"
   # Create an fcurve for every component (reuse existing if present)
   curves = []
@@ -244,7 +263,8 @@ def add_position_fcurves(action, keys, transform_left, transform_right):
     frame = _anim_frame_to_scene_frame(framedata.frame)
 
     # Calculate the position transformation (convert keyframe from EDM Y-up to Blender Z-up)
-    newPosMat = transform_left @ Matrix.Translation(_anim_vector_to_blender(framedata.value)) @ transform_right
+    anim_pos = _arg_anim_vector_to_blender(node, framedata.value) if node is not None else _anim_vector_to_blender(framedata.value)
+    newPosMat = transform_left @ Matrix.Translation(anim_pos) @ transform_right
     newPos = newPosMat.decompose()[0]
 
     for curve, component in zip(curves, newPos):
@@ -302,6 +322,21 @@ def add_scale_fcurves(action, keys):
       curve.keyframe_points[-1].co = (frame, component)
       curve.keyframe_points[-1].interpolation = 'LINEAR'
 
+
+def _transform_uses_quaternion_rotation(tfnode, obj=None):
+  try:
+    if isinstance(tfnode, ArgAnimationNode) and getattr(tfnode, "rotData", None):
+      return True
+  except Exception:
+    pass
+  try:
+    action = getattr(getattr(obj, "animation_data", None), "action", None)
+    if action is not None:
+      return any(fc.data_path == "rotation_quaternion" for fc in action.fcurves)
+  except Exception:
+    pass
+  return False
+
 def create_arganimation_actions(node):
   "Creates a set of actions to represent an ArgAnimationNode"
   actions = []
@@ -322,13 +357,25 @@ def create_arganimation_actions(node):
 
   mat_bl = base_mat
   aabS = aabS_raw
-  aabT = Matrix.Translation(_anim_vector_to_blender(node.base.position))
+  aabT = Matrix.Translation(_arg_anim_vector_to_blender(node, node.base.position))
   q1m = _anim_base_quaternion_q1_to_blender(node, node.base.quat_1).to_matrix().to_4x4()
   key_quat_to_blender = lambda q: _anim_base_quaternion_q1_to_blender(node, q)
   q1 = q1m.to_quaternion()
   q1_rot = q1
   mat_anim = mat_bl
   matQuat = mat_bl.decompose()[1]
+
+  # Some v10 ArgAnimationNode controllers embed a static pivot translation in
+  # base.matrix and also carry a non-zero base.position. Treating both as
+  # separate static translations pushes the object too far from the airframe.
+  embedded_mat_translation = mat_bl.decompose()[0]
+  base_position_vec = Vector(node.base.position)
+  use_embedded_translation_only = (
+    isinstance(node, ArgAnimationNode)
+    and not isinstance(node, ArgPositionNode)
+    and embedded_mat_translation.length > 1e-6
+    and base_position_vec.length > 1e-6
+  )
 
   # With:
   #   aabT = Matrix.Translation(argNode.base.position)
@@ -350,9 +397,17 @@ def create_arganimation_actions(node):
   #             Rotates geometry into file-space      |     |      |     |
   #                                           |       |     |      |     |
   # Reconstruct the neutral local transform from the same chain used at export.
-  # Parity Fix: Include aabT (base position) in the static transform. 
-  # This correctly places the animation controller empty in Blender.
-  zero_mat = (mat_bl @ aabT @ q1m @ aabS)
+  # Positional arg animations drive object location curves directly, so keeping
+  # base translation on the object would be overwritten by the F-curves at the
+  # current frame. For those nodes, carry base translation in the action basis
+  # instead and leave the static object transform without translation.
+  has_position_keys = bool(getattr(node, "posData", None))
+  if use_embedded_translation_only:
+    zero_mat = (mat_bl @ q1m @ aabS)
+  elif has_position_keys:
+    zero_mat = (mat_bl @ q1m @ aabS)
+  else:
+    zero_mat = (mat_bl @ aabT @ q1m @ aabS)
   
   bmat_inv = getattr(node, "bmat_inv", None)
   if bmat_inv is not None:
@@ -387,11 +442,15 @@ def create_arganimation_actions(node):
     leftRotation = matQuat @ q1_rot
     rightRotation = Quaternion((1, 0, 0, 0))
     
-    # STRIP TRANSLATION from the Action Basis (leftPosition).
-    # The translation is handled by the Static Object Transform (zero_mat).
-    # If we include it here, the Action creates translation F-curves, leading to
-    # Double Translation on export (TransformNode + ArgAnimationNode both translating).
-    leftPosition = (mat_anim @ aabT).to_3x3().to_4x4()
+    # Positional arg animations need base translation carried in their action
+    # basis so keyframe evaluation preserves the authored rest location.
+    if use_embedded_translation_only:
+      leftPosition = mat_anim
+    elif has_position_keys:
+      leftPosition = (mat_anim @ aabT)
+    else:
+      # STRIP TRANSLATION from the Action Basis.
+      leftPosition = (mat_anim @ aabT).to_3x3().to_4x4()
     
     # Factor in bmat_inv to the animation basis if present.
     rightPosition = q1m @ aabS
@@ -405,7 +464,7 @@ def create_arganimation_actions(node):
 
     # Build the f-curves for the action
     for pos in posData:
-      add_position_fcurves(action, pos, leftPosition, rightPosition)
+      add_position_fcurves(action, pos, leftPosition, rightPosition, node=node)
     for rot in rotData:
       add_rotation_fcurves(action, rot, leftRotation, rightRotation, quat_to_blender=key_quat_to_blender)
     for sca_pair in scaleData:
@@ -633,7 +692,8 @@ def apply_node_transform(node, obj, used_shared_parent=False):
   if tfnode is None:
     return
 
-  obj.rotation_mode = "XYZ"
+  wants_quaternion_rotation = _transform_uses_quaternion_rotation(tfnode, obj)
+  obj.rotation_mode = "QUATERNION" if wants_quaternion_rotation else "XYZ"
 
   def _debug_set_trace(source_label, local_mat):
     if not _import_ctx.transform_debug.get("enabled"):
@@ -657,8 +717,12 @@ def apply_node_transform(node, obj, used_shared_parent=False):
       print(f"Warning in blender_importer\import_pipeline.py: {e}")
     loc, rot, scale = local_mat.decompose()
     obj.location = loc
-    obj.rotation_mode = "XYZ"
-    obj.rotation_euler = rot.to_euler('XYZ')
+    if wants_quaternion_rotation:
+      obj.rotation_mode = "QUATERNION"
+      obj.rotation_quaternion = rot
+    else:
+      obj.rotation_mode = "XYZ"
+      obj.rotation_euler = rot.to_euler('XYZ')
     obj.scale = scale
 
   def _compose_with_parent_if_enabled(local_mat):
@@ -888,16 +952,35 @@ def create_object(node):
   ob.edm.is_collision_shell = isinstance(node, ShellNode)
   ob.edm.is_renderable      = isinstance(node, (RenderNode, NumberNode, SkinNode))
   ob.edm.damage_argument = -1 if not isinstance(node, (RenderNode, NumberNode)) else node.damage_argument
+  try:
+    source_type = getattr(node, "_source_type_name", None)
+    if source_type:
+      ob["_iedm_source_node_type"] = str(source_type)
+    layout_variant = getattr(node, "_layout_variant", None)
+    if layout_variant:
+      ob["_iedm_layout_variant"] = str(layout_variant)
+    shell_family = getattr(node, "_shell_family", None)
+    if shell_family:
+      ob["_iedm_shell_family"] = str(shell_family)
+  except Exception as e:
+    print(f"Warning in blender_importer\\import_pipeline.py: {e}")
   if isinstance(node, ShellNode):
     _set_official_special_type(ob, 'COLLISION_SHELL')
     # Match original collision-shell viewport style from official scenes.
     ob.display_type = 'BOUNDS'
   elif isinstance(node, NumberNode):
     _set_official_special_type(ob, 'NUMBER_TYPE')
+    payload = getattr(node, "number_payload", None) or {}
+    uv_params = payload.get("uv_params")
     raw = getattr(node, "number_params_raw", None)
-    if raw and hasattr(ob, "EDMProps"):
-      # Layout observed in v10 NumberNode payloads:
-      # [unknown, xArg, xScale-int, yArg, yScale-float]
+    if uv_params and hasattr(ob, "EDMProps"):
+      ob.EDMProps.NUMBER_UV_X_ARG = int(uv_params.get("x_arg", -1))
+      ob.EDMProps.NUMBER_UV_X_SCALE = float(uv_params.get("x_scale", 0.0))
+      ob.EDMProps.NUMBER_UV_Y_ARG = int(uv_params.get("y_arg", -1))
+      ob.EDMProps.NUMBER_UV_Y_SCALE = float(uv_params.get("y_scale", 0.0))
+    elif raw and hasattr(ob, "EDMProps"):
+      # Legacy fallback for files parsed before structured number payloads
+      # were attached.
       ob.EDMProps.NUMBER_UV_X_ARG = int(raw[1])
       ob.EDMProps.NUMBER_UV_X_SCALE = float(raw[2])
       ob.EDMProps.NUMBER_UV_Y_ARG = int(raw[3])
