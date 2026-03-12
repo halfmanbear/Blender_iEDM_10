@@ -42,6 +42,146 @@ class IEDMFallbackEDMPropsGroup(bpy.types.PropertyGroup):
         name="connector ext",
         default="",
     )
+    TWO_SIDED: bpy.props.BoolProperty(
+        name="two sided object",
+        default=False,
+    )
+    SURFACE_MODE: bpy.props.BoolProperty(
+        name="surface mode",
+        default=False,
+    )
+    DAMAGE_ARG: bpy.props.IntProperty(
+        name="Damage arg",
+        default=-1,
+        min=-1,
+    )
+    AO_ARG: bpy.props.IntProperty(
+        name="LightMap arg",
+        default=-1,
+        min=-1,
+    )
+    COLOR_ARG: bpy.props.IntProperty(
+        name="Base color arg",
+        default=-1,
+        min=-1,
+    )
+    EMISSIVE_ARG: bpy.props.IntProperty(
+        name="Emissive value arg",
+        default=-1,
+        min=-1,
+    )
+    EMISSIVE_COLOR_ARG: bpy.props.IntProperty(
+        name="Emissive color arg",
+        default=-1,
+        min=-1,
+    )
+    UV_LB: bpy.props.FloatVectorProperty(
+        name="tex_coords_lb",
+        size=2,
+        default=(0.0, 0.0),
+        subtype='COORDINATES',
+    )
+    UV_RT: bpy.props.FloatVectorProperty(
+        name="tex_coords_rt",
+        size=2,
+        default=(1.0, 1.0),
+        subtype='COORDINATES',
+    )
+    SIZE: bpy.props.FloatProperty(
+        name="size",
+        default=3.0,
+        min=0.0,
+    )
+    UV_LB_BACK: bpy.props.FloatVectorProperty(
+        name="tex_coords_lb_back",
+        size=2,
+        default=(0.0, 0.0),
+    )
+    UV_RT_BACK: bpy.props.FloatVectorProperty(
+        name="tex_coords_rt_back",
+        size=2,
+        default=(1.0, 1.0),
+    )
+    ANIMATED_BRIGHTNESS: bpy.props.FloatProperty(
+        name="object luminance",
+        default=1.0,
+        min=0.0,
+        options={'ANIMATABLE'},
+    )
+    LIGHT_SOFTNESS: bpy.props.FloatProperty(
+        name="light softness",
+        default=0.0,
+        min=0.0,
+        options={'ANIMATABLE'},
+    )
+    NUMBER_UV_X_ARG: bpy.props.IntProperty(
+        name="xArg",
+        default=-1,
+        min=-1,
+    )
+    NUMBER_UV_X_SCALE: bpy.props.FloatProperty(
+        name="xScale",
+        default=0.0,
+        min=0.0,
+        max=1.0,
+    )
+    NUMBER_UV_Y_ARG: bpy.props.IntProperty(
+        name="yArg",
+        default=-1,
+        min=-1,
+    )
+    NUMBER_UV_Y_SCALE: bpy.props.FloatProperty(
+        name="yScale",
+        default=0.0,
+        min=0.0,
+        max=1.0,
+    )
+    LIGHT_COLOR_ARG: bpy.props.IntProperty(
+        name="Light color arg",
+        default=-1,
+        min=-1,
+    )
+    LIGHT_POWER_ARG: bpy.props.IntProperty(
+        name="Light power arg",
+        default=-1,
+        min=-1,
+    )
+    LIGHT_DISTANCE_ARG: bpy.props.IntProperty(
+        name="Light distance arg",
+        default=-1,
+        min=-1,
+    )
+    LIGHT_SPECULAR_ARG: bpy.props.IntProperty(
+        name="Light specular arg",
+        default=-1,
+        min=-1,
+    )
+    LIGHT_SPOT_SHAPE_ARG: bpy.props.IntProperty(
+        name="Light spot shape arg",
+        default=-1,
+        min=-1,
+    )
+    LIGHT_VOLUME_RADIUS_FACTOR: bpy.props.FloatProperty(
+        name="Volume radius factor",
+        default=0.0,
+        min=0.0,
+        max=1.0,
+    )
+    LIGHT_VOLUME_DENSITY_FACTOR: bpy.props.FloatProperty(
+        name="Volume density factor",
+        default=0.0,
+        min=0.0,
+        max=1.0,
+    )
+    LIGHT_VOLUME_NEAR_DISTANCE: bpy.props.FloatProperty(
+        name="Volume near distance",
+        default=0.0,
+        min=0.0,
+    )
+    LIGHT_VOLUME_TYPE: bpy.props.StringProperty(
+        name="Volume type",
+        default="NONE",
+    )
 
 
 class EDMObjectSettings(bpy.types.PropertyGroup):
