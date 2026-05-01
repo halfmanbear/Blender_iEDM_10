@@ -21,7 +21,7 @@ class ImportEDM(Operator, ImportHelper):
   filename_ext = ".edm"
 
   filter_glob: StringProperty(
-          default="*.edm",
+          default="*.edm;*.edm2",
           options={'HIDDEN'},
           )
   files: CollectionProperty(
@@ -100,7 +100,7 @@ class ImportEDM(Operator, ImportHelper):
     return {'FINISHED'}
 
 def menu_import(self, context):
-  self.layout.operator(ImportEDM.bl_idname, text="DCS World (.edm)")
+  self.layout.operator(ImportEDM.bl_idname, text="DCS World (.edm, .edm2)")
 
 def register():
   bpy.utils.register_class(ImportEDM)

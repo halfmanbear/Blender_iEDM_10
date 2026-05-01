@@ -110,11 +110,34 @@ def _read_texture_coordinates_channels(stream):
   count = stream.read_uint()
   return stream.read_ints(count)
 
+def _read_alpha_function(stream):
+  # enable(uint8) + unknown(uint32) + threshold(float)
+  enable = stream.read_uchar()
+  stream.read_uint()
+  stream.read_float()
+  return enable
+
+def _read_blend_function(stream):
+  # enable(uint8) + src_factor(uint32) + dst_factor(uint32)
+  enable = stream.read_uchar()
+  src = stream.read_uint()
+  dst = stream.read_uint()
+  return (enable, src, dst)
+
+def _read_billboard(stream):
+  # axis(uint8) + mode(uint8)
+  axis = stream.read_uchar()
+  mode = stream.read_uchar()
+  return (axis, mode)
+
 # Lookup table for material reading types
 _material_entry_lookup = {
+  "ALPHA_FUNCTION": _read_alpha_function,
+  "BLEND_FUNCTION": _read_blend_function,
+  "BILLBOARD": _read_billboard,
   "BLENDING": lambda x: x.read_uchar(),
   "CULLING" : lambda x: x.read_uchar(),
-  "DECAL": lambda x: x.read_uchar(),   # <--- ADD THIS LINE
+  "DECAL": lambda x: x.read_uchar(),
   "DEPTH_BIAS": lambda x: x.read_uint(),
   "TEXTURE_COORDINATES_CHANNELS": _read_texture_coordinates_channels,
   "MATERIAL_NAME": lambda x: x.read_string(),
@@ -127,29 +150,24 @@ _material_entry_lookup = {
 }
 
 class ShadowSettings(object):
+  # DLL stores bit0=cast, bit2=cast_only; bit1 is read but discarded by the engine.
   def __init__(self, value=None, **kwargs):
     if value is not None:
-      assert value <= 7, "Only understand first three shadow flags"
       self.cast = bool(value & 1)
-      self.receive = bool(value & 2)
       self.cast_only = bool(value & 4)
     else:
       self.cast = kwargs.get("cast", False)
-      self.receive = kwargs.get("receive", False)
       self.cast_only = kwargs.get("cast_only", False)
 
   @property
   def value(self):
     return (1 if self.cast else 0) + \
-           (2 if self.receive else 0) + \
            (4 if self.cast_only else 0)
 
   def __repr__(self):
     args = []
     if self.cast:
       args.append("cast=True")
-    if self.receive:
-      args.append("recieve=True")
     if self.cast_only:
       args.append("cast_only=True")
     return "ShadowSettings(" + ", ".join(args) + ")"
@@ -158,6 +176,7 @@ class Material(object):
   def __init__(self):
     self.blending = 0
     self.culling = 0
+    self.decal = 0
     self.depth_bias = 0
     self.texture_coordinates_channels = None
     self.material_name = ""
@@ -167,6 +186,9 @@ class Material(object):
     self.uniforms = PropertiesSet()
     self.animated_uniforms = PropertiesSet()
     self.textures = []
+    self.alpha_function = None
+    self.blend_function = None
+    self.billboard = None
 
   @classmethod
   def read(cls, stream):
@@ -187,6 +209,10 @@ class Material(object):
                      # ANIMATED_UNIFORMS
     if self.vertex_format:
       entry_count += 1
+    if getattr(self, "culling", 0):
+      entry_count += 1
+    if getattr(self, "decal", 0):
+      entry_count += 1
     writer.write_uint(entry_count)
     writer.write_string("BLENDING")
     writer.write_uchar(self.blending)
@@ -195,6 +221,12 @@ class Material(object):
     if self.vertex_format:
       writer.write_string("VERTEX_FORMAT")
       self.vertex_format.write(writer)
+    if getattr(self, "culling", 0):
+      writer.write_string("CULLING")
+      writer.write_uchar(int(self.culling))
+    if getattr(self, "decal", 0):
+      writer.write_string("DECAL")
+      writer.write_uchar(int(self.decal))
     writer.write_string("TEXTURE_COORDINATES_CHANNELS")
     tcc = (0, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1)
     writer.write_uint(len(tcc))
@@ -227,6 +259,8 @@ class Material(object):
     if self.animated_uniforms:
       for entry in self.animated_uniforms.values():
         if isinstance(entry, AnimatedProperty):
+          if not entry.keys:
+            continue
           typeEntry = entry.keys[0].value
           if isinstance(typeEntry, float):
             c["model::AnimatedProperty<float>"] += 1

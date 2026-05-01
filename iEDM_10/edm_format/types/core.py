@@ -1,6 +1,7 @@
 from ..typereader import reads_type
 from ..typereader import get_type_reader as _tr_get_type_reader
 from ..basereader import BaseReader
+from ..probe import require_supported_import_format
 
 from ..material_types import VertexFormat, Material, Texture, ShadowSettings
 from ..propertiesset import PropertiesSet
@@ -31,7 +32,7 @@ class AnimatingNode(ABC):
 
 
 # All possible entries for indexA and indexB
-_all_IndexA = {'model::TransformNode', 'model::FakeOmniLightsNode', 'model::AnimatedFakeOmniLightsNode', 'model::SkinNode', 'model::Connector', 'model::ShellNode', 'model::ShellSkinNode', 'model::TreeShellNode', 'model::SegmentsNode', 'model::FakeSpotLightsNode', 'model::AnimatedFakeSpotLightsNode', 'model::FakeSpotLights3Node', 'model::BillboardNode', 'model::ArgAnimatedBone', 'model::RootNode', 'model::TmpNumberRoot', 'model::Node', 'model::ArgAnimationNode', 'model::LightNode', 'model::LodNode', 'model::Bone', 'model::RenderNode', 'model::ArgVisibilityNode'}
+_all_IndexA = {'model::TransformNode', 'model::FakeOmniLightsNode', 'model::AnimatedFakeOmniLightsNode', 'model::SkinNode', 'model::Connector', 'model::ShellNode', 'model::ShellSkinNode', 'model::TreeShellNode', 'model::SegmentsNode', 'model::FakeSpotLightsNode', 'model::AnimatedFakeSpotLightsNode', 'model::FakeSpotLights3Node', 'model::BillboardNode', 'model::ArgAnimatedBone', 'model::RootNode', 'model::TmpNumberRoot', 'model::NumberRoot', 'model::Node', 'model::ArgAnimationNode', 'model::ArgRotationNode', 'model::ArgPositionNode', 'model::ArgScaleNode', 'model::LightNode', 'model::LodNode', 'model::Bone', 'model::RenderNode', 'model::ArgVisibilityNode'}
 _all_IndexB = {'model::Key<key::ROTATION>', 'model::Property<float>', 'model::ArgAnimationNode::Position', '__pointers', 'model::FakeOmniLight', 'model::Key<key::SCALE>', 'model::AnimatedProperty<osg::Vec3f>', 'model::AnimatedProperty<osg::Vec4f>', 'model::Key<key::VEC3F>', 'model::Key<key::VEC4F>', 'model::Property<osg::Vec2f>', 'model::Property<osg::Vec3f>', 'model::Property<osg::Vec4f>', 'model::ArgAnimationNode::Rotation', 'model::ArgVisibilityNode::Range', 'model::Key<key::POSITION>', 'model::AnimatedProperty<osg::Vec2f>', 'model::Key<key::FLOAT>', '__ci_bytes', '__gv_bytes', 'model::ArgVisibilityNode::Arg', 'model::AnimatedProperty<float>', 'model::RNControlNode', 'model::SegmentsNode::Segments', '__gi_bytes', '__cv_bytes', 'model::Property<unsigned int>', 'model::Key<key::VEC2F>', 'model::ArgAnimationNode::Scale', 'model::LodNode::Level', 'model::PropertiesSet', 'model::FakeSpotLight'}
 
 
@@ -96,8 +97,14 @@ def _read_with_layout_fallback(stream, readers):
   raise IOError("All fallback readers failed ({})".format(error_summary))
 
 
-def _scan_to_next_v10_type_token(stream, max_bytes=16384):
-  """Find next likely model:: token index in v10 string table on 4-byte boundaries."""
+def _scan_to_next_v10_type_token(stream, max_bytes=16384, validate_node_header=False):
+  """Find next likely model:: token index in v10 string table on 4-byte boundaries.
+
+  validate_node_header: when True, also require that the 4 bytes immediately
+  following the candidate type token decode to a plausible inline BaseNode name
+  length (< 80).  This rejects false-positive token matches where an unrelated
+  binary value happens to be a valid string-table index.
+  """
   if not getattr(stream, "v10", False) or not getattr(stream, "strings", None):
     return None
   pos = stream.tell()
@@ -110,8 +117,15 @@ def _scan_to_next_v10_type_token(stream, max_bytes=16384):
     if not (0 <= idx < len(stream.strings)):
       continue
     token = stream.strings[idx]
-    if isinstance(token, str) and token.startswith("model::"):
-      return off
+    if not (isinstance(token, str) and token.startswith("model::")):
+      continue
+    if validate_node_header:
+      if off + 8 > len(data):
+        continue
+      name_len = struct.unpack_from("<I", data, off + 4)[0]
+      if name_len >= 80:
+        continue
+    return off
   return None
 
 
@@ -169,6 +183,7 @@ def _read_main_object_dictionary(stream):
 class EDMFile(object):
   def __init__(self, filename=None, version=8):
     if filename:
+      require_supported_import_format(filename)
       reader = TrackingReader(filename)
       try:
         self._read(reader)
@@ -266,7 +281,10 @@ class EDMFile(object):
     # v10 stores NumberNode mesh payloads in a trailing post-section after the
     # main object dictionary. Bind payload blocks onto NumberNode placeholders.
     if reader.v10:
-      number_nodes = [n for n in self.renderNodes if isinstance(n, NumberNode)]
+      number_nodes = [
+        n for n in self.renderNodes
+        if isinstance(n, NumberNode) and not getattr(n, "_post_payload_read", False)
+      ]
       if number_nodes:
         payload_error = False
         for n in number_nodes:
@@ -286,36 +304,20 @@ class EDMFile(object):
             if not getattr(n, "_post_payload_read", False):
               n.parent = None
 
-    # v10 also carries an extra trailing block (after all objects) that holds
-    # additional matrices; empirically these act as inverse bind/local offsets
-    # for arg animation nodes. Parse and attach them if present.
+    # ClassReader10_loadRoot ends cleanly after the sections loop — there is no
+    # trailing data written by standard DCS World EDM tooling.
+    # Any bytes remaining here come from a non-standard exporter.
+    # Consume them so the end-of-file check below doesn't false-alarm, and warn
+    # so unexpected payloads surface in logs rather than being silently ignored.
     if reader.v10:
       tail_start = reader.tell()
-      # Read all remaining bytes directly from the stream.
       tail_bytes = reader.stream.read()
-      if not tail_bytes:
-        logger.debug("Tail parse: no remaining bytes at %d", tail_start)
       if tail_bytes:
-        floats = struct.unpack("<{}f".format(len(tail_bytes)//4), tail_bytes[:len(tail_bytes)//4*4])
-        mats = []
-        for i in range(0, len(floats)-15, 16):
-          chunk = floats[i:i+16]
-          mat = Matrix([chunk[0:4], chunk[4:8], chunk[8:12], chunk[12:16]]).transposed()
-          mats.append(mat)
-        arg_nodes = [n for n in self.nodes if isinstance(n, ArgAnimationNode)]
-        if mats and arg_nodes:
-          # Heuristic: tail often stores [base, inverse] per arg; when count permits,
-          # use the second half as the inverse/bind offset.
-          # TODO: bmat_inv is stored here but not yet consumed by the importer.
-          # These are likely inverse bind matrices for the animation system;
-          # implement their use when the dual-quaternion skinning path is added.
-          offset = len(arg_nodes) if len(mats) >= 2 * len(arg_nodes) else 0
-          for i, n in enumerate(arg_nodes):
-            idx = i + offset
-            if idx < len(mats):
-              n.base.bmat_inv = mats[idx]
-
-      # ensure file is consumed
+        logger.warning(
+          "Tail parse: %d unexpected bytes at offset %d "
+          "(not present in standard DCS EDM files — non-standard exporter output?)",
+          len(tail_bytes), tail_start,
+        )
       reader.seek(tail_start + len(tail_bytes))
 
     # Verify we are at the end of the file without unconsumed data.
@@ -335,12 +337,6 @@ class EDMFile(object):
         else:
              # Already resolved or unexpected type
              pass
-      elif type(node).__name__ == 'SegmentsNode':
-        # SegmentsNodes don't have a parent in the file - attach to root
-        if self.nodes:
-            node.set_parent(self.nodes[0])
-        else:
-            print("Warning: SegmentsNode has no root to attach to")
       # Owner-encoded split RenderNodes keep a shared control parent index.
       # Resolve it to the actual transform node so importer code can map
       # mesh-local coordinates from shared parent space.
@@ -508,11 +504,16 @@ class BaseNode(GraphNode):
   @classmethod
   def read(cls, stream):
     node = cls()
+    # Node names are raw length-prefixed bytes in every version,
+    # never string-table lookups, so lookup=False is required even in v10 files.
     name = stream.read_string(lookup=False)
     # v10: official exporter sometimes wraps inline node names in single quotes
     if name.startswith("'") and name.endswith("'") and len(name) >= 2:
         name = name[1:-1]
     node.name = name
+    # The DLL reads this uint but discards it without storing or using it.
+    # We preserve it for lossless round-trips.
+    # This is NOT the __VERSION__ value — that comes from the PropertiesSet below.
     node.version = stream.read_uint()
     node.props = PropertiesSet.read(stream, count=False)
     return node
@@ -643,11 +644,24 @@ class TmpNumberRoot(Node):
       ("node", Node.read),
     ])
 
+
+@reads_type("model::NumberRoot")
+class NumberRoot(Node):
+  """Treat NumberRoot as a transform-like control root when encountered."""
+  @classmethod
+  def read(cls, stream):
+    return _read_with_layout_fallback(stream, [
+      ("transform", TransformNode.read),
+      ("node", Node.read),
+    ])
+
 @reads_type("model::TransformNode")
 class TransformNode(Node):
   @classmethod
   def read(cls, stream):
     self = super(TransformNode, cls).read(stream)
+    # TransformNode serializes a single matrixd after the common node header.
+    # The extra bone_matrix field belongs to Bone, not TransformNode.
     self.matrix = stream.read_matrixd()
     return self
 
@@ -656,21 +670,28 @@ class TransformNode(Node):
     stream.write_matrixd(self.matrix)
 
 @reads_type("model::Bone")
-class Bone(Node):
+class Bone(TransformNode):
   @classmethod
   def read(cls, reader):
     self = super(Bone, cls).read(reader)
-    self.data = [reader.read_matrixd(), reader.read_matrixd()]
+    # Bone uses the TransformNode preamble, then serializes an additional matrixd for the
+    # inverse bind / bone matrix.
+    self.bone_matrix = reader.read_matrixd()
     return self
+
+  def write(self, stream):
+    super(Bone, self).write(stream)
+    stream.write_matrixd(self.bone_matrix)
 
 class ArgAnimationBase(object):
   def __init__(self, matrix=None, position=None, quat_1=None, quat_2=None, scale=None):
     self.matrix = matrix or Matrix()
     self.position = position or Vector()
     self.quat_1 = quat_1 or Quaternion((1,0,0,0))
-    # quat_2 is the second component of a dual-quaternion (used for blend
-    # skinning), but its semantics are not yet implemented in the importer.
-    # It is preserved here so the write path can round-trip it faithfully.
+    # quat_2 is the orientation basis for base.scale:
+    #   S_base = R(quat_2) @ diag(scale) @ R(quat_2)^-1
+    # Preserve it so the importer/exporter can reconstruct the authored scale
+    # basis instead of treating base.scale as always axis-aligned.
     self.quat_2 = quat_2 or Quaternion((1,0,0,0))
     self.scale = scale or Vector((1,1,1))
   @classmethod
@@ -781,18 +802,24 @@ class ArgAnimationNode(Node, AnimatingNode):
     return c
 
   def get_all_args(self):
-    "Return a list of all arguments that this object represents"
-    all_args = set()
+    "Return all represented arguments in stable source order."
+    ordered = []
+    seen = set()
     for dataset in [self.posData, self.rotData, self.scaleData]:
-      all_args = all_args | set(x[0] for x in dataset)
-    return all_args
+      for entry in dataset:
+        arg = entry[0]
+        if arg in seen:
+          continue
+        seen.add(arg)
+        ordered.append(arg)
+    return ordered
 
 @reads_type("model::ArgAnimatedBone")
 class ArgAnimatedBone(ArgAnimationNode):
   @classmethod
   def read(cls, stream):
     self = super(ArgAnimatedBone, cls).read(stream)
-    self.boneTransform = stream.read_matrixd()
+    self.inv_base_bone_matrix = stream.read_matrixd()
     return self
 
 @reads_type("model::ArgRotationNode")
@@ -841,13 +868,28 @@ class ArgScaleNode(ArgAnimationNode):
     stream.mark_type_read("model::ArgAnimationNode::Scale")
     arg = stream.read_uint()
     count = stream.read_uint()
-    # Weirdly seems to be two sets of keys; one with 4-components and one with three
-    # keys = [get_type_reader("model::Key<key::SCALE>")(stream) for _ in range(count)]
+    # Set 1 (4-component): scale orientation quaternion Q.
+    # The DLL applies scale as Q * diag(sx,sy,sz) * Q^-1.
+    # When Q is identity this reduces to plain axis-aligned scale.
     keys = [ScaleKey.read(stream, 4) for _ in range(count)]
     count2 = stream.read_uint()
-    # Second set of keys only has three components...?
+    # Set 2 (3-component): scale magnitudes (sx, sy, sz) along the Q axes.
     key2s = [ScaleKey.read(stream, 3) for _ in range(count2)]
-    # print("Edn of scale arg at ", steam.tell())
+    # Warn when oriented scale data is present. The importer can reconstruct it
+    # for the single-action helper-chain path, but other paths may still fall
+    # back to axis-aligned scale.
+    for k in keys:
+      v = k.value  # (x, y, z, w) in file order; identity = (0, 0, 0, ±1)
+      # Treat both w=+1 and w=-1 (negative identity quaternion) as identity.
+      # Some exporters write (0,0,0,-1) as the default orientation even for
+      # pure rotation nodes; this represents the same rotation as (0,0,0,+1).
+      if abs(v[0]) > 1e-4 or abs(v[1]) > 1e-4 or abs(v[2]) > 1e-4 or abs(abs(v[3]) - 1.0) > 1e-4:
+        logger.warning(
+          "Scale orientation quaternion is non-identity (arg=%d, frame=%g, xyzw=%s). "
+          "Importer will try helper-chain reconstruction; unsupported paths may still differ.",
+          arg, k.frame, tuple(round(float(x), 4) for x in v),
+        )
+        break
     return (arg, (keys, key2s))
 
 
@@ -880,7 +922,7 @@ class PositionKey(object):
   def __repr__(self):
     return "Key(frame={}, value={})".format(self.frame, repr(self.value))
 
-#@reads_type("model::Key<key::SCALE>")
+@reads_type("model::Key<key::SCALE>")
 class ScaleKey(object):
   @classmethod
   def read(cls, stream, entrylength):
@@ -897,6 +939,13 @@ class ArgVisibilityNode(Node, AnimatingNode):
   def read(cls, stream):
     self = super(ArgVisibilityNode, cls).read(stream)
     self.visData = stream.read_list(cls._read_AANVisibilityArg)
+    # When the serialized __VERSION__ property is non-zero, the reader consumes
+    # one trailing matrixf as a legacy compatibility payload, then normalizes
+    # the node version back to 0. The writer does not emit that matrix on save.
+    self.vis_matrix = None
+    if self.props.get("__VERSION__", 0):
+      self.vis_matrix = stream.read_matrixf()
+      self.props["__VERSION__"] = 0
     return self
 
   @classmethod
@@ -907,6 +956,16 @@ class ArgVisibilityNode(Node, AnimatingNode):
     data = [stream.read_doubles(2) for _ in range(count)]
     stream.mark_type_read("model::ArgVisibilityNode::Range", count)
     return (arg, data)
+
+  def write(self, stream):
+    super(ArgVisibilityNode, self).write(stream)
+    stream.write_uint(len(self.visData))
+    for arg, ranges in self.visData:
+      stream.write_uint(arg)
+      stream.write_uint(len(ranges))
+      for low, high in ranges:
+        stream.write_double(low)
+        stream.write_double(high)
 
   def audit(self):
     c = super(ArgVisibilityNode, self).audit()
@@ -945,12 +1004,15 @@ class Connector(BaseNode):
   def read(cls, stream):
     self = super(Connector, cls).read(stream)
     self.parent = stream.read_uint()
-    self.data = stream.read_uint()
+    # After the control-node index a full Properties block is read.
+    # In practice this block is always empty
+    # (count = 0) so the count uint32 == 0 and no entries follow. If count > 0
+    # the entries must be consumed to keep the stream aligned.
+    self.extra_props = PropertiesSet.read(stream, count=False)
+    self.data = len(self.extra_props)
     return self
 
   def write(self, stream):
     super(Connector, self).write(stream)
     stream.write_uint(self.parent.index)
     stream.write_uint(self.data)
-
-

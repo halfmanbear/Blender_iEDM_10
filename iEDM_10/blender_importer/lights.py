@@ -103,6 +103,32 @@ def _add_light_keyframes(action, data_path, keys, value_fn, array_index=None):
   return curve
 
 
+def _add_edmprop_keyframes(action, data_path, keys, value_fn):
+  curve = _new_fcurve(action, data_path)
+  for framedata in keys:
+    frame = _anim_frame_to_scene_frame(getattr(framedata, "frame", 0.0))
+    value = value_fn(getattr(framedata, "value", 0.0))
+    key = curve.keyframe_points.insert(frame, float(value), options={'FAST'})
+    key.interpolation = 'LINEAR'
+  return curve
+
+
+def _push_object_action_to_nla(obj, action):
+  if obj is None or action is None:
+    return False
+  anim_data = obj.animation_data_create()
+  try:
+    track = anim_data.nla_tracks.new()
+    track.name = action.name
+    strip = track.strips.new(action.name, 0, action)
+    strip.extrapolation = 'HOLD'
+    strip.blend_type = 'REPLACE'
+    return True
+  except Exception as e:
+    print(f"Warning in blender_importer/lights.py: {e}")
+    return False
+
+
 def _import_light_properties(node, obj, light_data, light_type):
   props = getattr(node, "lightProps", None) or {}
   if not props:
@@ -113,8 +139,8 @@ def _import_light_properties(node, obj, light_data, light_type):
   dist_arg, dist_keys, dist_static = _extract_light_property(_get_prop_any(props, "Distance", "distance"))
   phi_arg, phi_keys, phi_static = _extract_light_property(_get_prop_any(props, "Phi", "phi"))
   theta_arg, theta_keys, theta_static = _extract_light_property(_get_prop_any(props, "Theta", "theta"))
-  spec_arg, spec_keys, spec_static = _extract_light_property(_get_prop_any(props, "Specular", "specularAmount", "specular"))
-  soft_arg, soft_keys, soft_static = _extract_light_property(_get_prop_any(props, "", "softness", "Softness"))
+  spec_arg, spec_keys, spec_static = _extract_light_property(_get_prop_any(props, "specularAmount", "specular_amount", "specular"))
+  soft_arg, soft_keys, soft_static = _extract_light_property(_get_prop_any(props, "softness", "Softness"))
   vol_radius_arg, vol_radius_keys, vol_radius_static = _extract_light_property(_get_prop_any(props, "VolumeRadiusFactor", "radiusFactor"))
   vol_density_arg, vol_density_keys, vol_density_static = _extract_light_property(_get_prop_any(props, "VolumeDensityFactor", "densityFactor"))
   vol_near_arg, vol_near_keys, vol_near_static = _extract_light_property(_get_prop_any(props, "VolumeNearDistance", "nearDistance"))
@@ -167,52 +193,98 @@ def _import_light_properties(node, obj, light_data, light_type):
 
   # Recreate light-data animation curves for exporter parity.
   has_anim = any(keys for keys in (color_keys, bright_keys, dist_keys, phi_keys, theta_keys, spec_keys))
-  if not has_anim:
-    return
+  if has_anim:
+    action = bpy.data.actions.new("Light_{}".format(obj.name))
+    if hasattr(action, "argument"):
+      first_arg = next((a for a in (color_arg, bright_arg, dist_arg, phi_arg, theta_arg, spec_arg, soft_arg) if a >= 0), -1)
+      if first_arg >= 0:
+        action.argument = int(first_arg)
 
-  action = bpy.data.actions.new("Light_{}".format(obj.name))
-  if hasattr(action, "argument"):
-    first_arg = next((a for a in (color_arg, bright_arg, dist_arg, phi_arg, theta_arg, spec_arg, soft_arg) if a >= 0), -1)
-    if first_arg >= 0:
-      action.argument = int(first_arg)
-
-  if color_keys:
-    for idx in range(3):
-      _add_light_keyframes(action, "color", color_keys, lambda v, c=idx: _to_vec3(v)[c], array_index=idx)
-  if bright_keys:
-    _add_light_keyframes(
-      action,
-      "energy",
-      bright_keys,
-      lambda v: _edm_light_brightness_to_blender_energy(v, light_type),
-    )
-  if dist_keys:
-    light_data.use_custom_distance = True
-    _add_light_keyframes(action, "cutoff_distance", dist_keys, lambda v: max(0.0, _to_float(v, 0.0)))
-  if spec_keys and hasattr(light_data, "specular_factor"):
-    _add_light_keyframes(action, "specular_factor", spec_keys, lambda v: max(0.0, _to_float(v, 0.0)))
-  if light_type == 'SPOT':
-    if phi_keys:
+    if color_keys:
+      for idx in range(3):
+        _add_light_keyframes(action, "color", color_keys, lambda v, c=idx: _to_vec3(v)[c], array_index=idx)
+    if bright_keys:
       _add_light_keyframes(
         action,
-        "spot_size",
-        phi_keys,
-        lambda v: min(math.radians(170.0), max(0.0, _to_float(v, 0.0))),
+        "energy",
+        bright_keys,
+        lambda v: _edm_light_brightness_to_blender_energy(v, light_type),
       )
-    if theta_keys:
-      _add_light_keyframes(
-        action,
-        "spot_blend",
-        theta_keys,
+    if dist_keys:
+      light_data.use_custom_distance = True
+      _add_light_keyframes(action, "cutoff_distance", dist_keys, lambda v: max(0.0, _to_float(v, 0.0)))
+    if spec_keys and hasattr(light_data, "specular_factor"):
+      _add_light_keyframes(action, "specular_factor", spec_keys, lambda v: max(0.0, _to_float(v, 0.0)))
+    if light_type == 'SPOT':
+      if phi_keys:
+        _add_light_keyframes(
+          action,
+          "spot_size",
+          phi_keys,
+          lambda v: min(math.radians(170.0), max(0.0, _to_float(v, 0.0))),
+        )
+      if theta_keys:
+        _add_light_keyframes(
+          action,
+          "spot_blend",
+          theta_keys,
+          lambda v: min(1.0, max(0.0, _to_float(v, 0.0))),
+        )
+
+    anim_data = light_data.animation_data_create()
+    anim_data.action = action
+
+  edmprop_anim = any(keys for keys in (soft_keys, vol_radius_keys, vol_density_keys, vol_near_keys))
+  if edmprop_anim and hasattr(obj, "EDMProps"):
+    prop_action = bpy.data.actions.new("LightProps_{}".format(obj.name))
+    if hasattr(prop_action, "argument"):
+      first_arg = next((a for a in (soft_arg, vol_radius_arg, vol_density_arg, vol_near_arg, vol_type_arg) if a >= 0), -1)
+      if first_arg >= 0:
+        prop_action.argument = int(first_arg)
+
+    if soft_keys:
+      _add_edmprop_keyframes(
+        prop_action,
+        "EDMProps.LIGHT_SOFTNESS",
+        soft_keys,
+        lambda v: max(0.0, _to_float(v, 0.0)),
+      )
+    if vol_radius_keys:
+      _add_edmprop_keyframes(
+        prop_action,
+        "EDMProps.LIGHT_VOLUME_RADIUS_FACTOR",
+        vol_radius_keys,
         lambda v: min(1.0, max(0.0, _to_float(v, 0.0))),
       )
+    if vol_density_keys:
+      _add_edmprop_keyframes(
+        prop_action,
+        "EDMProps.LIGHT_VOLUME_DENSITY_FACTOR",
+        vol_density_keys,
+        lambda v: min(1.0, max(0.0, _to_float(v, 0.0))),
+      )
+    if vol_near_keys:
+      _add_edmprop_keyframes(
+        prop_action,
+        "EDMProps.LIGHT_VOLUME_NEAR_DISTANCE",
+        vol_near_keys,
+        lambda v: max(0.0, _to_float(v, 0.0)),
+      )
 
-  anim_data = light_data.animation_data_create()
-  anim_data.action = action
+    # Keep object-level EDMProps animation separate from later transform /
+    # visibility action assignment on the same object.
+    if not _push_object_action_to_nla(obj, prop_action):
+      obj_anim_data = obj.animation_data_create()
+      obj_anim_data.action = prop_action
 
 
 def create_lamp(node):
   """Creates a blender lamp from an edm renderable LampNode"""
+  if getattr(node, "texture", None) is not None:
+    surrogate = _create_textured_light_surrogate(node)
+    if surrogate is not None:
+      return surrogate
+
   light_props = getattr(node, "lightProps", None) or {}
   has_spot_keys = any(k in light_props for k in ("Phi", "Theta", "phi", "theta"))
   light_type = 'SPOT' if has_spot_keys else 'POINT'
@@ -223,41 +295,231 @@ def create_lamp(node):
   return obj
 
 
-def create_billboard(node):
-  """Create a conservative Blender placeholder for BillboardNode payloads."""
-  obj = bpy.data.objects.new(name=node.name or "Billboard", object_data=None)
-  obj.empty_display_type = 'SINGLE_ARROW'
-  obj.empty_display_size = 0.2
+def _store_textured_light_metadata(obj, node, surrogate_kind):
+  if obj is None:
+    return
+  obj["_iedm_translation_status"] = "approximate"
+  obj["_iedm_translation_source"] = "LightNode.Texture2dProperties"
+  obj["_iedm_light_surrogate_kind"] = str(surrogate_kind or "")
 
-  summary = getattr(node, "payload_summary", None) or {}
+  tex = getattr(node, "texture", None)
+  if tex is None:
+    return
+
   try:
-    obj["_iedm_billboard_payload_len"] = int(summary.get("payload_len", len(getattr(node, "data", b"") or b"")))
+    obj["_iedm_light_texture_name"] = str(getattr(tex, "name", "") or "")
+    obj["_iedm_light_texture_index"] = int(getattr(tex, "index", 0) or 0)
+    obj["_iedm_light_texture_wrap_s"] = int(getattr(tex, "wrap_s", 0) or 0)
+    obj["_iedm_light_texture_wrap_t"] = int(getattr(tex, "wrap_t", 0) or 0)
+    obj["_iedm_light_texture_mag_filter"] = int(getattr(tex, "mag_filter", 0) or 0)
+    obj["_iedm_light_texture_min_filter"] = int(getattr(tex, "min_filter", 0) or 0)
+  except Exception:
+    pass
+
+  uv_transform = getattr(tex, "uv_transform", None)
+  if uv_transform is not None:
+    try:
+      obj["_iedm_light_texture_uv_matrix"] = [float(v) for row in uv_transform for v in row]
+    except Exception:
+      pass
+
+
+def _apply_textured_light_material(material, node):
+  if material is None:
+    return
+  tex = getattr(node, "texture", None)
+  tex_name = str(getattr(tex, "name", "") or "") if tex is not None else ""
+  if not tex_name:
+    return
+  group_node = _find_fake_light_group_node(material)
+  if group_node is None:
+    return
+  tex_node = _find_or_create_emissive_texture_node(material, tex_name)
+  if tex_node is None:
+    return
+  try:
+    _link_texture_to_group_input(material.node_tree.links, tex_node, group_node, "Emissive")
+  except Exception:
+    pass
+
+
+def _create_textured_light_surrogate(node):
+  light_props = getattr(node, "lightProps", None) or {}
+  has_spot_keys = any(k in light_props for k in ("Phi", "Theta", "phi", "theta"))
+  name = node.name or "TexturedLight"
+
+  if has_spot_keys:
+    mesh = _create_fake_light_mesh(name, [Vector((0.0, 0.0, 0.0))])
+    obj = bpy.data.objects.new(name, mesh)
+    _set_official_special_type(obj, 'FAKE_LIGHT')
+    if hasattr(obj, "EDMProps"):
+      obj.EDMProps.SURFACE_MODE = False
+      obj.EDMProps.TWO_SIDED = False
+      obj.EDMProps.SIZE = 1.0
+      front_lb, front_rt, back_lb, back_rt = _default_fake_spot_uvs(False)
+      obj.EDMProps.UV_LB = front_lb
+      obj.EDMProps.UV_RT = front_rt
+      obj.EDMProps.UV_LB_BACK = back_lb
+      obj.EDMProps.UV_RT_BACK = back_rt
+    fake_mat = _create_fake_light_material(name, kind="fake_spot")
+    if fake_mat is not None:
+      mesh.materials.clear()
+      mesh.materials.append(fake_mat)
+      _apply_textured_light_material(fake_mat, node)
+    _store_textured_light_metadata(obj, node, "fake_spot")
+    _add_fake_spot_direction_child(obj, Vector((1.0, 0.0, 0.0)), distance=1.0)
+    preview_light = bpy.data.lights.new(name=f"{name}_Preview", type='SPOT')
+    try:
+      _import_light_properties(node, obj, preview_light, 'SPOT')
+    finally:
+      bpy.data.lights.remove(preview_light)
+    bpy.context.collection.objects.link(obj)
+    return obj
+
+  mesh, location = _create_fake_omni_mesh(name, [Vector((0.0, 0.0, 0.0))])
+  obj = bpy.data.objects.new(name, mesh)
+  obj.location = location
+  _set_official_special_type(obj, 'FAKE_LIGHT')
+  if hasattr(obj, "EDMProps"):
+    obj.EDMProps.SIZE = 1.0
+    obj.EDMProps.SURFACE_MODE = False
+  fake_mat = _create_fake_light_material(name, kind="fake_omni")
+  if fake_mat is not None:
+    mesh.materials.clear()
+    mesh.materials.append(fake_mat)
+    _apply_textured_light_material(fake_mat, node)
+  _store_textured_light_metadata(obj, node, "fake_omni")
+  bpy.context.collection.objects.link(obj)
+  return obj
+
+
+def _create_official_render_material(obj_name, kind="default"):
+  bridge = _ensure_official_material_bridge()
+  if not bridge.get("available"):
+    return None
+
+  names = bridge.get("names", {})
+  official_name = names.get(kind, names.get("default", "EDM_Default_Material"))
+
+  mat = bpy.data.materials.new(name=obj_name)
+  mat.use_nodes = True
+  nodes = mat.node_tree.nodes
+  links = mat.node_tree.links
+
+  for node in list(nodes):
+    nodes.remove(node)
+
+  output_node = nodes.new('ShaderNodeOutputMaterial')
+  output_node.location = (400, 0)
+
+  group_node = _create_official_group_node(nodes, bridge, kind, official_name)
+  if group_node is None:
+    return None
+
+  group_node.location = (0, 0)
+  if group_node.outputs:
+    try:
+      links.new(group_node.outputs[0], output_node.inputs['Surface'])
+    except Exception as e:
+      print(f"Warning in blender_importer\\lights.py: {e}")
+  return mat
+
+
+def _billboard_plane_axes(axis_name):
+  axis = str(axis_name or "all")
+  if axis in {"x", "along_x"}:
+    return Vector((0.0, 1.0, 0.0)), Vector((0.0, 0.0, 1.0))
+  if axis in {"y", "along_y"}:
+    return Vector((1.0, 0.0, 0.0)), Vector((0.0, 0.0, 1.0))
+  return Vector((1.0, 0.0, 0.0)), Vector((0.0, 1.0, 0.0))
+
+
+def _create_billboard_surrogate_mesh(name, axis_name, matrix_value, pivot_value):
+  pivot = Vector((0.0, 0.0, 0.0))
+  if pivot_value is not None:
+    try:
+      pivot = Vector((float(pivot_value[0]), float(pivot_value[1]), float(pivot_value[2])))
+    except Exception:
+      pivot = Vector((0.0, 0.0, 0.0))
+
+  axis_u, axis_v = _billboard_plane_axes(axis_name)
+  half_size = 0.5
+  local_verts = [
+    pivot + ((-half_size) * axis_u) + ((-half_size) * axis_v),
+    pivot + ((half_size) * axis_u) + ((-half_size) * axis_v),
+    pivot + ((half_size) * axis_u) + ((half_size) * axis_v),
+    pivot + ((-half_size) * axis_u) + ((half_size) * axis_v),
+  ]
+
+  transform = Matrix.Identity(4)
+  if matrix_value is not None:
+    try:
+      transform = Matrix(matrix_value)
+    except Exception:
+      transform = Matrix.Identity(4)
+
+  verts = []
+  for vert in local_verts:
+    try:
+      verts.append(tuple((transform @ vert.to_4d()).xyz))
+    except Exception:
+      verts.append(tuple(vert))
+
+  mesh = bpy.data.meshes.new(name)
+  mesh.from_pydata(verts, [], [(0, 1, 2, 3)])
+  mesh.update()
+
+  try:
+    uv_layer = mesh.uv_layers.new(name="UVMap")
+    uv_values = ((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0))
+    for loop_index, uv in enumerate(uv_values):
+      uv_layer.data[loop_index].uv = uv
   except Exception as e:
     print(f"Warning in blender_importer\\lights.py: {e}")
-  try:
-    payload_hex = summary.get("payload_hex")
-    if payload_hex:
-      obj["_iedm_billboard_payload_hex"] = payload_hex
-  except Exception as e:
-    print(f"Warning in blender_importer\\lights.py: {e}")
-  try:
-    head_u32 = summary.get("head_u32")
-    if head_u32 is not None:
-      obj["_iedm_billboard_head_u32"] = json.dumps([int(v) for v in head_u32], separators=(",", ":"))
-  except Exception as e:
-    print(f"Warning in blender_importer\\lights.py: {e}")
-  try:
-    head_f32 = summary.get("head_f32")
-    if head_f32 is not None:
-      obj["_iedm_billboard_head_f32"] = json.dumps([float(v) for v in head_f32], separators=(",", ":"))
-  except Exception as e:
-    print(f"Warning in blender_importer\\lights.py: {e}")
-  try:
-    tail_u16 = summary.get("tail_u16")
-    if tail_u16 is not None:
-      obj["_iedm_billboard_tail_u16"] = int(tail_u16)
-  except Exception as e:
-    print(f"Warning in blender_importer\\lights.py: {e}")
+
+  return mesh
+
+
+def create_billboard(node):
+  """Create an exporter-compatible approximate mesh surrogate for BillboardNode."""
+
+  # Type mapping based on edm_plugin_ref.html
+  type_map = {0: "direction", 1: "point"}
+  axis_map = {
+    0: "all",
+    1: "x",
+    2: "y",
+    3: "z",
+    4: "along_x",
+    5: "along_y",
+    6: "along_z"
+  }
+
+  billboard_type = type_map.get(getattr(node, "billboard_type", 0), "point")
+  billboard_axis = axis_map.get(getattr(node, "billboard_axis", 0), "all")
+  mesh = _create_billboard_surrogate_mesh(
+    node.name or "Billboard",
+    billboard_axis,
+    getattr(node, "matrix", None),
+    getattr(node, "pivot", None),
+  )
+  obj = bpy.data.objects.new(name=node.name or "Billboard", object_data=mesh)
+  _set_official_special_type(obj, 'UNKNOWN_TYPE')
+  obj.edm.billboard_type = billboard_type
+  obj.edm.billboard_axis = billboard_axis
+  obj["_iedm_translation_status"] = "approximate"
+  obj["_iedm_translation_source"] = "BillboardNode"
+  obj["_iedm_billboard_surrogate"] = True
+
+  if getattr(node, "matrix", None) is not None:
+    obj["_iedm_billboard_matrix"] = [float(v) for row in node.matrix for v in row]
+  if getattr(node, "pivot", None) is not None:
+    obj["_iedm_billboard_pivot"] = [float(v) for v in node.pivot]
+
+  if mesh is not None and not mesh.materials:
+    fallback_mat = _create_official_render_material(f"{obj.name}_Billboard", kind="default")
+    if fallback_mat is not None:
+      mesh.materials.append(fallback_mat)
 
   bpy.context.collection.objects.link(obj)
   return obj
@@ -582,7 +844,7 @@ def _find_or_create_emissive_texture_node(material, texture_name):
       tex_image.location = (-350, 0)
       return tex_image
     except Exception as e:
-      print(f"Warning in blender_importer\\lights.py: {e}")
+      print(f"Warning in blender_importer/lights.py: {e}")
       return None
   try:
     tex_image = nodes.new('ShaderNodeTexImage')
@@ -591,7 +853,7 @@ def _find_or_create_emissive_texture_node(material, texture_name):
     tex_image.location = (-350, 0)
     return tex_image
   except Exception as e:
-    print(f"Warning in blender_importer\\lights.py: {e}")
+    print(f"Warning in blender_importer/lights.py: {e}")
     return None
 
 
@@ -604,7 +866,7 @@ def _set_material_group_input(group_node, socket_name, value):
     try:
       socket.default_value = value
     except Exception as e:
-      print(f"Warning in blender_importer\\lights.py: {e}")
+      print(f"Warning in blender_importer/lights.py: {e}")
     return
 
 
@@ -703,7 +965,112 @@ def _apply_fake_light_animation_payload(obj, edm_material):
       for key in curve.keyframe_points:
         key.interpolation = 'LINEAR'
   except Exception as e:
-    print(f"Warning in blender_importer\\lights.py: {e}")
+    print(f"Warning in blender_importer/lights.py: {e}")
+
+
+def _has_animated_fake_omni_payload(node):
+  return (
+    getattr(node, "anim_arg_handle", None) is not None
+    and getattr(node, "anim_arg_handle", 0xFFFFFFFF) != 0xFFFFFFFF
+    and getattr(node, "anim_data_count", 0) > 0
+    and getattr(node, "anim_data_raw", b"")
+  )
+
+
+def _apply_animated_fake_omni_brightness(ob, node, light_count):
+  """Reconstruct per-light brightness animation from AnimatedFakeOmniLightsNode payload.
+
+  The binary stores lightCount * 128 float32 brightness values — each light's
+  curve presampled at 128 evenly-spaced arg positions. The official exporter
+  expects: one vertex per light, a vertex group whose weight encodes each
+  light's timing delay, and an action on EDMProps.ANIMATED_BRIGHTNESS named
+  "{arg_handle}_{object_name}" with the master brightness curve as keyframes.
+  """
+  import struct as _struct
+
+  arg_handle = getattr(node, "anim_arg_handle", None)
+  data_count = getattr(node, "anim_data_count", 0)
+  anim_data_raw = getattr(node, "anim_data_raw", b"")
+
+  if not anim_data_raw or data_count == 0 or light_count <= 0:
+    return
+
+  # Format spec: anim_sample_rate must be 128. Use the explicit field when
+  # available and consistent; fall back to data_count // light_count otherwise.
+  explicit_rate = getattr(node, "anim_sample_rate", None)
+  n_samples = data_count // light_count
+  if explicit_rate is not None and explicit_rate > 0:
+    if explicit_rate != n_samples:
+      print(
+        "Warning: animated fake light '{}': anim_sample_rate={} but data_count/light_count={}; "
+        "using explicit rate".format(getattr(node, "name", ""), explicit_rate, n_samples)
+      )
+    n_samples = int(explicit_rate)
+  if n_samples == 0:
+    return
+
+  all_floats = _struct.unpack_from("<{}f".format(data_count), anim_data_raw)
+  lights_samples = [
+    all_floats[i * n_samples:(i + 1) * n_samples]
+    for i in range(light_count)
+  ]
+  master = lights_samples[0]
+
+  # Recover per-light delay by finding circular shift vs master curve.
+  # Shift of k samples → delay = k/n_samples * 2.0 in EDM time units,
+  # stored as vertex group weight (exporter reads weight directly as delay).
+  delays = [0.0]
+  for j in range(1, light_count):
+    samp = lights_samples[j]
+    best_shift, best_score = 0, float("inf")
+    for shift in range(n_samples):
+      score = sum((master[i] - samp[(i + shift) % n_samples]) ** 2 for i in range(n_samples))
+      if score < best_score:
+        best_score = score
+        best_shift = shift
+    delays.append(min(best_shift / n_samples * 2.0, 1.0))
+
+  # Assign delay weights — one vertex group, one weight per vertex.
+  delay_group = ob.vertex_groups.new(name="brightness_delay")
+  for vi, delay in enumerate(delays):
+    if vi < len(ob.data.vertices):
+      delay_group.add([vi], float(delay), 'REPLACE')
+
+  # Build brightness action from master curve.
+  # 128 samples span Blender frames [0, 200]; frame_i = i * 200 / n_samples.
+  try:
+    ob.EDMProps.ANIMATED_BRIGHTNESS = 1.0
+  except Exception:
+    pass
+
+  action_name = "{}_{}".format(int(arg_handle), ob.name)
+  action = bpy.data.actions.new(action_name)
+  try:
+    if hasattr(action, "argument"):
+      action.argument = int(arg_handle)
+  except Exception:
+    pass
+
+  anim_data = ob.animation_data_create()
+  anim_data.action = action
+
+  frame_step = 200.0 / n_samples
+  for i, brightness in enumerate(master):
+    frame = i * frame_step
+    try:
+      ob.EDMProps.ANIMATED_BRIGHTNESS = float(brightness)
+      ob.keyframe_insert(data_path='EDMProps.ANIMATED_BRIGHTNESS', frame=frame)
+    except Exception:
+      pass
+
+  curve = action.fcurves.find('EDMProps.ANIMATED_BRIGHTNESS')
+  if curve is not None:
+    for kp in curve.keyframe_points:
+      kp.interpolation = 'LINEAR'
+    try:
+      curve.extrapolation = 'CONSTANT'
+    except Exception:
+      pass
 
 
 def create_fake_omni_lights(node):
@@ -761,7 +1128,11 @@ def create_fake_omni_lights(node):
       ob.EDMProps.UV_LB = (float(uv_lb[0]), float(uv_lb[1]))
     if uv_rt is not None:
       ob.EDMProps.UV_RT = (float(uv_rt[0]), float(uv_rt[1]))
-  _apply_fake_light_animation_payload(ob, getattr(node, "material", None))
+
+  if _has_animated_fake_omni_payload(node):
+    _apply_animated_fake_omni_brightness(ob, node, len(positions))
+  else:
+    _apply_fake_light_animation_payload(ob, getattr(node, "material", None))
 
   bpy.context.collection.objects.link(ob)
   return ob
@@ -888,7 +1259,7 @@ def create_fake_spot_lights(node):
           for li, uv in zip(poly.loop_indices, q):
             loop_uv[li].uv = uv
       except Exception as e:
-        print(f"Warning in blender_importer\\lights.py: {e}")
+        print(f"Warning in blender_importer/lights.py: {e}")
 
   ob = bpy.data.objects.new(name, mesh)
   _set_official_special_type(ob, 'FAKE_LIGHT')
@@ -909,7 +1280,10 @@ def create_fake_spot_lights(node):
       ob.EDMProps.UV_RT = front_rt
       ob.EDMProps.UV_LB_BACK = back_lb
       ob.EDMProps.UV_RT_BACK = back_rt
-  _apply_fake_light_animation_payload(ob, getattr(node, "material", None))
+  if _has_animated_fake_omni_payload(node):
+    _apply_animated_fake_omni_brightness(ob, node, len(node.data))
+  else:
+    _apply_fake_light_animation_payload(ob, getattr(node, "material", None))
 
   bpy.context.collection.objects.link(ob)
   if mode != "surface":
@@ -920,6 +1294,45 @@ def create_fake_spot_lights(node):
 
 def create_fake_als_lights(node):
   """Create a mesh object for FakeALSNode with one vertex per light."""
+  def _preserve_fake_als_metadata(obj, als_node):
+    if obj is None or als_node is None:
+      return
+    try:
+      obj["_iedm_translation_status"] = "approximate"
+      obj["_iedm_translation_source"] = "FakeALSNode"
+      obj["_iedm_fake_als_extra_preserved"] = True
+      obj["_iedm_fake_als_count"] = int(len(getattr(als_node, "data", None) or []))
+      header = list(getattr(als_node, "als_header", ()) or ())
+      if header:
+        obj["_iedm_fake_als_header"] = [int(v) for v in header[:3]]
+
+      payload = {
+        "header": [int(v) for v in header[:3]],
+        "entries": [
+          {
+            "position": [float(v) for v in (entry.get("position") or ())[:3]],
+            "extra": [float(v) for v in (entry.get("extra") or ())[:7]],
+          }
+          for entry in (getattr(als_node, "data", None) or [])
+        ],
+      }
+      encoded = json.dumps(payload, separators=(",", ":"), sort_keys=True)
+      if len(encoded) <= 60000:
+        obj["_iedm_fake_als_payload"] = encoded
+        obj["_iedm_fake_als_payload_storage"] = "inline_json"
+      else:
+        safe_name = "".join(ch if (ch.isalnum() or ch in "._-") else "_" for ch in (obj.name or "FakeALS"))
+        text_name = "IEDM_FakeALS_{}".format(safe_name[:48])
+        text_block = bpy.data.texts.get(text_name)
+        if text_block is None:
+          text_block = bpy.data.texts.new(text_name)
+        text_block.clear()
+        text_block.write(encoded)
+        obj["_iedm_fake_als_payload_text"] = text_name
+        obj["_iedm_fake_als_payload_storage"] = "text_json"
+    except Exception as e:
+      print(f"Warning preserving FakeALSNode payload on {getattr(obj, 'name', '')}: {e}")
+
   name = node.name or "FakeALSLights"
 
   positions = []
@@ -932,6 +1345,7 @@ def create_fake_als_lights(node):
     ob.empty_display_type = "SPHERE"
     ob.empty_display_size = 0.1
     _set_official_special_type(ob, 'FAKE_LIGHT')
+    _preserve_fake_als_metadata(ob, node)
     bpy.context.collection.objects.link(ob)
     return ob
 
@@ -945,6 +1359,7 @@ def create_fake_als_lights(node):
     mesh.materials.clear()
     mesh.materials.append(fake_mat)
   _apply_fake_light_animation_payload(ob, getattr(node, "material", None))
+  _preserve_fake_als_metadata(ob, node)
 
   bpy.context.collection.objects.link(ob)
   return ob

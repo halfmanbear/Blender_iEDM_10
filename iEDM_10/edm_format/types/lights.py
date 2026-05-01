@@ -1,6 +1,7 @@
 import struct
 
 from .core import *  # noqa: F401,F403
+from .core import _scan_to_next_v10_type_token
 from .render_shell import _read_index_data, _read_vertex_data  # noqa: F401
 
 
@@ -55,6 +56,23 @@ def decode_fake_omni_entry(entry):
   - entry[4].x -> UV_RT.x
   - entry[5].x -> SIZE
   """
+  if isinstance(entry, dict):
+    position = tuple(float(v) for v in (entry.get("position") or (0.0, 0.0, 0.0)))
+    uv0 = entry.get("uv0")
+    uv1 = entry.get("uv1")
+    decoded = {
+      "position": position,
+      "size": float(entry.get("size", 0.0) or 0.0),
+      "uv_lb": tuple(float(v) for v in uv0) if uv0 is not None else None,
+      "uv_rt": tuple(float(v) for v in uv1) if uv1 is not None else None,
+      "face_arg": int(entry.get("face_arg", 0) or 0),
+      "layout": "v10_mixed",
+    }
+    decoded["legacy_size"] = decoded["size"]
+    decoded["legacy_uv_lb"] = decoded["uv_lb"]
+    decoded["legacy_uv_rt"] = decoded["uv_rt"]
+    return decoded
+
   values = tuple(float(v) for v in entry)
   decoded = {
     "position": values[0:3],
@@ -99,30 +117,21 @@ def decode_fake_omni_entry(entry):
   decoded["uv_rt"] = decoded["legacy_uv_rt"]
   return decoded
 
+def _to_float(v, default=0.0):
+  try:
+    return float(v)
+  except Exception:
+    return float(default)
 
-def summarize_billboard_payload(raw):
-  """Return a small importer-facing summary for opaque BillboardNode payloads."""
-  data = bytes(raw or b"")
-  summary = {
-    "payload_len": len(data),
-    "payload_hex": data.hex(),
+
+def _read_fake_omni_light(stream):
+  return {
+    "position": tuple(stream.read_doubles(3)),
+    "uv0": tuple(stream.read_floats(2)),
+    "uv1": tuple(stream.read_floats(2)),
+    "size": stream.read_float(),
+    "face_arg": stream.read_uint(),
   }
-  if len(data) >= 16:
-    try:
-      summary["head_u32"] = struct.unpack_from("<4I", data, 0)
-    except Exception:
-      pass
-    try:
-      summary["head_f32"] = struct.unpack_from("<4f", data, 0)
-    except Exception:
-      pass
-  if len(data) >= 2:
-    try:
-      summary["tail_u16"] = struct.unpack_from("<H", data, len(data) - 2)[0]
-    except Exception:
-      pass
-  return summary
-
 
 @reads_type("model::BillboardNode")
 class BillboardNode(Node):
@@ -131,9 +140,49 @@ class BillboardNode(Node):
   @classmethod
   def read(cls, stream):
     self = super(BillboardNode, cls).read(stream)
-    self.data = stream.read(154)
-    self.payload_summary = summarize_billboard_payload(self.data)
+    # v10 BillboardNode payload
+    self.billboard_type = stream.read_uchar()
+    self.billboard_axis = stream.read_uchar()
+    
+    # When __VERSION__ is non-zero in the node's PropertiesSet, a matrixd and
+    # vec3d follow in the stream.
+    # NOTE: props is an OrderedDict (PropertiesSet), NOT a list of property objects,
+    # so the previous loop over self.properties was always a no-op and the matrix
+    # was never consumed — causing stream desync for versioned BillboardNodes.
+    if self.props.get("__VERSION__", 0):
+      self.matrix = stream.read_matrixd()
+      self.pivot = stream.read_vec3d()
+    else:
+      self.matrix = None
+      self.pivot = None
+      
     return self
+
+class Texture2dProperties(object):
+  """
+  Verified layout of model::Texture2dProperties::load():
+    uint32   index
+    string   name        (string-table lookup in v10)
+    uint32   wrap_s
+    uint32   wrap_t
+    uint32   mag_filter
+    uint32   min_filter
+    matrixf  uv_transform  (16 floats)
+  """
+  __slots__ = ("index", "name", "wrap_s", "wrap_t", "mag_filter", "min_filter", "uv_transform")
+
+  @classmethod
+  def read(cls, stream):
+    self = cls()
+    self.index       = stream.read_uint()
+    self.name        = stream.read_string()          # string-table lookup in v10
+    self.wrap_s      = stream.read_uint()
+    self.wrap_t      = stream.read_uint()
+    self.mag_filter  = stream.read_uint()
+    self.min_filter  = stream.read_uint()
+    self.uv_transform = stream.read_matrixf()
+    return self
+
 
 @reads_type("model::LightNode")
 class LightNode(BaseNode):
@@ -147,8 +196,13 @@ class LightNode(BaseNode):
     # Preserve animation argument ids for light properties so importer can map
     # curves and EDMProps args exactly for official exporter round-trips.
     self.lightProps = PropertiesSet.read(stream, count=False, preserve_animated=True)
+    # This byte is has_texture. When nonzero Texture2dProperties::load() follows.
+    # Failing to consume the payload causes stream desync for all subsequent nodes.
     self.unknown.append(stream.read_uchar())
     self.post_props_flag = self.unknown[1]
+    self.texture = None
+    if self.post_props_flag:
+      self.texture = Texture2dProperties.read(stream)
     return self
 
 @reads_type("model::FakeSpotLightsNode")
@@ -208,7 +262,11 @@ class FakeSpotLightsNode(BaseNode):
     self.trailing_direction_offset = None
     self.trailing_blob = b""
     self.trailing_blob_offset = None
-    if getattr(stream, "v10", False):
+    # AnimatedFakeSpotLightsNode bytes immediately following the light entries
+    # are the animation payload, not trailing blob.  The subclass sets this flag
+    # so we skip trailing detection and leave the stream positioned correctly for
+    # _read_animated_fake_lights_payload.
+    if getattr(stream, "v10", False) and not getattr(cls, "_skip_trailing", False):
       pos = stream.tell()
       try:
         next_u = stream.read_uint()
@@ -244,7 +302,7 @@ class FakeSpotLightsNode(BaseNode):
             stream.seek(tpos)
 
       preserve_from = stream.tell()
-      skip = _scan_to_next_v10_type_token(stream)
+      skip = _scan_to_next_v10_type_token(stream, validate_node_header=True)
       stream.seek(preserve_from)
       if skip is not None and skip > 0:
         self.trailing_blob_offset = preserve_from
@@ -258,10 +316,48 @@ class FakeSpotLightsNode(BaseNode):
       [getattr(self, "material_ish", -1)],
       "fake_spot",
     )
+    # v10 fake-spot records encode their control node in the first uint of the
+    # first parentData entry. Recover the transform parent so build_graph() can
+    # place the fake spot back under its original visibility/control wrapper
+    # (same pattern as FakeOmniLightsNode).
+    parent_data = getattr(self, "parentData", None)
+    if parent_data and getattr(self, "parent", None) is None:
+      try:
+        raw = parent_data[0][0]
+        if isinstance(raw, int) and 0 <= raw < len(nodes):
+          self.set_parent(nodes[raw])
+          self.control_node = nodes[raw]
+          self.control_node_index = raw
+      except Exception:
+        pass
+
+def _read_animated_fake_lights_payload(stream, node, node_label):
+  # readAnimatedFakeOmniLights / readAnimatedFakeSpotLights read three fields
+  # after the base node:
+  #   uint32  arg_handle   — animation argument channel index (throws if 0xFFFFFFFF)
+  #   uint32  sample_rate  — must equal 128
+  #   uint32  data_count   — total float32 samples (= lightCount * 128)
+  #   data_count * 4 bytes — raw float32 animation curve data
+  node.anim_arg_handle = stream.read_uint()
+  if node.anim_arg_handle == 0xFFFFFFFF:
+    logger.warning("%s: invalid animation arg handle (0xFFFFFFFF)", node_label)
+  node.anim_sample_rate = stream.read_uint()
+  if node.anim_sample_rate != 128:
+    logger.warning("%s: unexpected sample rate %d (expected 128)", node_label, node.anim_sample_rate)
+  node.anim_data_count = stream.read_uint()
+  node.anim_data_raw = stream.read(node.anim_data_count * 4)
+  return node
+
 
 @reads_type("model::AnimatedFakeSpotLightsNode")
 class AnimatedFakeSpotLightsNode(FakeSpotLightsNode):
-  pass
+  _skip_trailing = True  # animation payload follows immediately; skip trailing-blob detection
+  @classmethod
+  def read(cls, stream):
+    self = super(AnimatedFakeSpotLightsNode, cls).read(stream)
+    return _read_animated_fake_lights_payload(
+      stream, self, "AnimatedFakeSpotLightsNode"
+    )
 
 @reads_type("model::FakeSpotLights3Node")
 class FakeSpotLights3Node(FakeSpotLightsNode):
@@ -328,25 +424,55 @@ class FakeOmniLightsNode(BaseNode):
   @classmethod
   def read(cls, stream):
     self = super(FakeOmniLightsNode, cls).read(stream)
-    self.data_start = stream.read_uints(5)
+    # FakeOmniLightsNode starts with the same uint32 + properties-set id prefix as
+    # RenderNode/SkinNode before its control-link vector payload.
+    self.unknown_start = stream.read_uint()
+    self.material_ish = stream.read_uint()
+    # uint32 controlLinkCount, then for each link: uint32 node_index + uint32 (discarded).
+    # Hardcoding 5 uints only worked when controlLinkCount == 2 (1 + 2*2 = 5).
+    control_link_count = stream.read_uint()
+    self.control_links = []
+    for _ in range(control_link_count):
+      node_idx = stream.read_uint()
+      _discard = stream.read_uint()
+      self.control_links.append(node_idx)
     count = stream.read_uint()
-    # Each FakeOmniLight is 6 doubles. The trailing 3 doubles are not a stable
-    # "size + 2 packed UV pairs" tuple across exporter-facing representations,
-    # so keep the raw tuple and let decode_fake_omni_entry() classify it.
-    self.data = [stream.read_doubles(6) for _ in range(count)]
+    # FakeOmniLight::load layout:
+    #   Vec3d position, Vec2f uv0, Vec2f uv1, float size, uint32 face_arg.
+    self.data = [_read_fake_omni_light(stream) for _ in range(count)]
     self.decoded_data = [decode_fake_omni_entry(entry) for entry in self.data]
     stream.mark_type_read("model::FakeOmniLight", count)
     return self
+
   def prepare(self, nodes, materials):
     self.material = _resolve_material_from_candidates(
       materials,
-      list(getattr(self, "data_start", ()) or ()),
+      list(getattr(self, "control_links", ()) or ()),
       "fake_omni",
     )
+    # Use the last control link's node index as the transform parent — matches
+    # the old data_start[3] behaviour (link1 for the common 2-link case) and
+    # generalises cleanly to any link count.
+    control_links = list(getattr(self, "control_links", ()) or ())
+    if control_links and getattr(self, "parent", None) is None:
+      control_idx = control_links[-1]
+      if isinstance(control_idx, int) and 0 <= control_idx < len(nodes):
+        try:
+          self.set_parent(nodes[control_idx])
+          self.control_node = nodes[control_idx]
+          self.control_node_index = control_idx
+        except Exception:
+          self.control_node = None
+          self.control_node_index = control_idx
 
 @reads_type("model::AnimatedFakeOmniLightsNode")
 class AnimatedFakeOmniLightsNode(FakeOmniLightsNode):
-  pass
+  @classmethod
+  def read(cls, stream):
+    self = super(AnimatedFakeOmniLightsNode, cls).read(stream)
+    return _read_animated_fake_lights_payload(
+      stream, self, "AnimatedFakeOmniLightsNode"
+    )
 
 @reads_type("model::FakeALSNode")
 class FakeALSNode(BaseNode):
@@ -378,4 +504,3 @@ class FakeALSNode(BaseNode):
       list(getattr(self, "als_header", ()) or ()),
       "fake_als",
     )
-
