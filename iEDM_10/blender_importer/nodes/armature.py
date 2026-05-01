@@ -1,3 +1,5 @@
+import math
+
 def _channel_slices_from_vertex_format(vertex_format):
   """Return channel->(start,end) slices based on vertex format packed layout."""
   offsets = {}
@@ -95,6 +97,19 @@ def _transfer_bone_actions_to_armature(graph, arm_obj, node_to_bone_name):
             source_graph_nodes.add(current)
             source_transforms.add(tfnode)
           for src_action in src_actions:
+            _log_bone_debug_event(
+              "retarget-source",
+              {
+                "graph_node": getattr(tfnode, "name", "") or type(tfnode).__name__,
+                "graph_node_type": type(tfnode).__name__,
+                "bone_name": bone_name,
+                "action_name": src_action.name,
+                "fcurves": [fcu.data_path for fcu in src_action.fcurves],
+              },
+              getattr(tfnode, "name", "") or type(tfnode).__name__,
+              bone_name,
+              src_action.name,
+            )
             dst_action = action_map.get(src_action.name)
             if dst_action is None:
               dst_action = bpy.data.actions.new(src_action.name)
@@ -112,6 +127,19 @@ def _transfer_bone_actions_to_armature(graph, arm_obj, node_to_bone_name):
 
   if not action_map:
     return source_graph_nodes, source_transforms
+
+  _log_bone_debug_event(
+    "retarget-summary",
+    {
+      "armature": getattr(arm_obj, "name", None),
+      "actions": sorted(action_map.keys()),
+      "source_graph_nodes": sorted(
+        (getattr(getattr(n, "transform", None), "name", "") or type(getattr(n, "transform", None)).__name__)
+        for n in source_graph_nodes
+      ),
+    },
+    getattr(arm_obj, "name", None),
+  )
 
   arm_obj.animation_data_create()
   ad = arm_obj.animation_data
@@ -153,11 +181,64 @@ def _prepare_bone_import(graph, parent_obj=None):
   arm_data = bpy.data.armatures.new(arm_name)
   arm_obj = bpy.data.objects.new(arm_name, arm_data)
   bpy.context.collection.objects.link(arm_obj)
+
+  # Determine how to apply the EDM Y-up → Blender Z-up basis correction.
+  #
+  # For 3DSMAX_BANO / 3DSMAX_DEF (v10_root_object_basis_fix = True):
+  #   The parent scene root carries _ROOT_BASIS_FIX.  The armature cancels
+  #   that parent (arm.world ≈ Identity).  Bone rest matrices are placed in
+  #   Blender Z-up space so they match the skinned-mesh corrected space.
+  #   (apply_bone_root_fix = True, _arm_carries_basis_fix = False)
+  #
+  # For BLOB_RENDER (v10_root_object_basis_fix = False):
+  #   A root object may exist but it does NOT carry _ROOT_BASIS_FIX — it only
+  #   holds the raw EDM node transform.  The armature carries _ROOT_BASIS_FIX so
+  #   bone viewport display is correct.  Skinned meshes are NOT children of the
+  #   armature (they end up parented to the root object via bone-node propagation);
+  #   core.py sees arm_carries_basis_fix=True and applies _ROOT_BASIS_FIX to each
+  #   SkinNode mesh's matrix_basis directly so their orientation matches non-skinned
+  #   siblings.  Bone rests stay in EDM Y-up armature-local space.
+  #   (apply_bone_root_fix = False, _arm_carries_basis_fix = True)
+  _profile_needs_root_fix = _import_profile_flag("bone_rest_requires_root_basis_fix")
+  _parent_carries_root_fix = (parent_obj is not None) and _import_profile_flag("v10_root_object_basis_fix")
+  _arm_carries_basis_fix = _profile_needs_root_fix and not _parent_carries_root_fix
+  apply_bone_root_fix = _profile_needs_root_fix and _parent_carries_root_fix
+
   if parent_obj is not None:
-    basis = arm_obj.matrix_basis.copy()
     arm_obj.parent = parent_obj
     arm_obj.matrix_parent_inverse = Matrix.Identity(4)
-    arm_obj.matrix_basis = basis
+    if _arm_carries_basis_fix:
+      # Parent exists but does NOT carry _ROOT_BASIS_FIX (BLOB_RENDER).
+      # Cancel the parent's raw transform and apply _ROOT_BASIS_FIX so that
+      # arm.matrix_world = _ROOT_BASIS_FIX, making skinned-mesh children and
+      # bone viewport display both correctly Z-up.
+      try:
+        arm_obj.matrix_basis = parent_obj.matrix_basis.inverted() @ _ROOT_BASIS_FIX
+      except Exception:
+        arm_obj.matrix_basis = _ROOT_BASIS_FIX
+    else:
+      # Parent carries _ROOT_BASIS_FIX (3DSMAX_BANO / 3DSMAX_DEF).
+      # Cancel the parent basis so arm.world ≈ Identity; bone rest matrices
+      # are placed in Blender Z-up space (apply_bone_root_fix = True).
+      try:
+        arm_obj.matrix_basis = parent_obj.matrix_basis.inverted()
+      except Exception:
+        arm_obj.matrix_basis = Matrix.Identity(4)
+  elif _arm_carries_basis_fix:
+    # No parent at all.  Apply _ROOT_BASIS_FIX directly to the armature so
+    # all skinned-mesh children inherit the Y-up→Z-up conversion.
+    arm_obj.matrix_basis = _ROOT_BASIS_FIX
+  _log_bone_debug_event(
+    "armature-parent",
+    {
+      "armature": arm_name,
+      "parent": getattr(parent_obj, "name", None) if parent_obj is not None else None,
+      "armature_basis": _matrix_trs_summary(arm_obj.matrix_basis),
+      "parent_basis": _matrix_trs_summary(getattr(parent_obj, "matrix_basis", None)) if parent_obj is not None else None,
+    },
+    arm_name,
+    getattr(parent_obj, "name", None) if parent_obj is not None else None,
+  )
 
   view_layer = bpy.context.view_layer
   prev_active = view_layer.objects.active
@@ -198,31 +279,47 @@ def _prepare_bone_import(graph, parent_obj=None):
 
     def _bone_bind_matrix(tfnode):
       """Extract the bone's own bind-pose matrix from EDM Bone or ArgAnimatedBone."""
-      if isinstance(tfnode, Bone) and hasattr(tfnode, "data") and len(tfnode.data) >= 1:
-        return Matrix(tfnode.data[0])
-      if isinstance(tfnode, ArgAnimatedBone) and hasattr(tfnode, "boneTransform"):
-        return Matrix(tfnode.boneTransform)
+      if isinstance(tfnode, Bone) and hasattr(tfnode, "bone_matrix"):
+        return Matrix(tfnode.bone_matrix)
+      if isinstance(tfnode, ArgAnimatedBone) and hasattr(tfnode, "inv_base_bone_matrix"):
+        return Matrix(tfnode.inv_base_bone_matrix)
       return None
 
     def _bone_rest_matrix(node):
       """Compute a bone's full rest matrix in Blender/armature space.
 
       The exporter writes mat_inv = pbone.matrix.inverted() as the bind matrix:
-        - Bone:            data[1] = mat_inv
-        - ArgAnimatedBone: boneTransform = mat_inv
+        - Bone:            bone_matrix = mat_inv  (in addition to Bone.matrix)
+        - ArgAnimatedBone: inv_base_bone_matrix = mat_inv  (separate field at node+488)
       Inverting gives pbone.matrix — the exact armature-space rest matrix we need
       for edit-bone placement.  This avoids precision loss from accumulating
       parent-chain matrix multiplications.
+
+      For Blender-exported EDMs the bind matrix is already in Blender Z-up space,
+      because io_scene_edm applies ROOT_TRANSFORM_MATRIX once at the scene root
+      and stores all bone matrices in Blender's native coordinate system.
+
+      For 3ds Max-exported EDMs (all variants) the bind matrix is in EDM Y-up
+      space.  In those cases we apply _ROOT_BASIS_FIX (the inverse of
+      ROOT_TRANSFORM_MATRIX) to convert Y-up → Blender Z-up before placing the
+      edit bone, controlled by the bone_rest_requires_root_basis_fix profile flag.
       """
+      apply_root_fix = apply_bone_root_fix  # pre-computed from enclosing scope
       tf = node.transform
 
-      # Bone (non-animated): data[1] is the inverse bind matrix.
+      # Bone (non-animated): bone_matrix is the inverse bind matrix.
+      # model::Bone serializes TransformNode.matrix plus a second matrixd for
+      # bone_matrix. inv_base_bone_matrix does NOT exist on plain Bone —
+      # it only appears on ArgAnimatedBone.
       if isinstance(tf, Bone) and not isinstance(tf, ArgAnimatedBone):
-        if hasattr(tf, "data") and len(tf.data) >= 2:
-          inv_bind = Matrix(tf.data[1])
+        if hasattr(tf, "bone_matrix"):
+          inv_bind = Matrix(tf.bone_matrix)
           if not inv_bind.is_identity:
             try:
-              return inv_bind.inverted()
+              rest = inv_bind.inverted()
+              if apply_root_fix:
+                rest = _ROOT_BASIS_FIX @ rest
+              return rest
             except ValueError:
               pass
         # Fall back to accumulated world matrix
@@ -231,12 +328,15 @@ def _prepare_bone_import(graph, parent_obj=None):
           world_mat = getattr(node, "_local_bl", Matrix.Identity(4))
         return world_mat
 
-      # ArgAnimatedBone: boneTransform is the inverse bind matrix.
-      if isinstance(tf, ArgAnimatedBone) and hasattr(tf, "boneTransform"):
-        bone_bind = Matrix(tf.boneTransform)
+      # ArgAnimatedBone: inv_base_bone_matrix is the inverse bind matrix.
+      if isinstance(tf, ArgAnimatedBone) and hasattr(tf, "inv_base_bone_matrix"):
+        bone_bind = Matrix(tf.inv_base_bone_matrix)
         if not bone_bind.is_identity:
           try:
-            return bone_bind.inverted()
+            rest = bone_bind.inverted()
+            if apply_root_fix:
+              rest = _ROOT_BASIS_FIX @ rest
+            return rest
           except ValueError:
             pass
         # Fall back to accumulated world matrix
@@ -266,16 +366,19 @@ def _prepare_bone_import(graph, parent_obj=None):
             tf_type, tf_name, rest[0][3], rest[1][3], rest[2][3]))
       else:
         _bone_bind_missing += 1
-        print("  [bone-bind] {} '{}' -> NO bind matrix (type={}, has_data={}, has_boneTransform={})".format(
+        print("  [bone-bind] {} '{}' -> NO bind matrix (type={}, has_bone_matrix={}, has_inv_base_bone_matrix={})".format(
           tf_type, tf_name, tf_type,
-          hasattr(tf, "data") and len(getattr(tf, "data", [])) >= 1,
-          hasattr(tf, "boneTransform")))
+          hasattr(tf, "bone_matrix"),
+          hasattr(tf, "inv_base_bone_matrix")))
     print("Info: Bone bind matrices: {} found, {} missing".format(_bone_bind_found, _bone_bind_missing))
 
     bone_node_set = set(sorted_nodes)
     for node in sorted_nodes:
       eb = edit_bones[node_to_bone_name[node]]
       bone_rest = _bone_rest_matrix(node)
+      bone_bind = _bone_bind_matrix(node.transform)
+      bone_name = node_to_bone_name[node]
+      tf_name = getattr(node.transform, "name", "") or type(node.transform).__name__
 
       head = bone_rest.to_translation()
       rot3 = bone_rest.to_3x3()
@@ -300,6 +403,37 @@ def _prepare_bone_import(graph, parent_obj=None):
       eb.tail = head + y_axis * max(length, 0.01)
       if z_axis.length > 1e-8:
         eb.align_roll(z_axis)
+      _log_bone_debug_event(
+        "bone-bind-rest",
+        {
+          "bone_name": bone_name,
+          "source_name": tf_name,
+          "source_type": type(node.transform).__name__,
+          "bind_matrix": _matrix_trs_summary(bone_bind) if bone_bind is not None else None,
+          "rest_matrix": _matrix_trs_summary(bone_rest),
+          "head_src": [round(float(v), 6) for v in head],
+          "y_axis_src": [round(float(v), 6) for v in y_axis],
+          "z_axis_src": [round(float(v), 6) for v in z_axis],
+          "derived_length": round(float(max(length, 0.01)), 6),
+          "parent_bone": node_to_bone_name.get(getattr(node, "parent", None)),
+        },
+        bone_name,
+        tf_name,
+      )
+      _log_bone_debug_event(
+        "bone-rest",
+        {
+          "bone_name": bone_name,
+          "source_name": tf_name,
+          "source_type": type(node.transform).__name__,
+          "rest_matrix": _matrix_trs_summary(bone_rest),
+          "head": [round(float(v), 6) for v in eb.head],
+          "tail": [round(float(v), 6) for v in eb.tail],
+          "parent_bone": node_to_bone_name.get(getattr(node, "parent", None)),
+        },
+        bone_name,
+        tf_name,
+      )
 
     for node in sorted_nodes:
       parent = node.parent
@@ -309,6 +443,33 @@ def _prepare_bone_import(graph, parent_obj=None):
         continue
       eb = edit_bones[node_to_bone_name[node]]
       eb.parent = edit_bones[node_to_bone_name[parent]]
+
+    for node in sorted_nodes:
+      bone_name = node_to_bone_name[node]
+      tf_name = getattr(node.transform, "name", "") or type(node.transform).__name__
+      eb = edit_bones[bone_name]
+      parent_matrix = eb.parent.matrix.copy() if eb.parent else None
+      matrix_local = eb.matrix.copy()
+      if parent_matrix is not None:
+        try:
+          matrix_local = parent_matrix.inverted() @ eb.matrix
+        except Exception:
+          matrix_local = eb.matrix.copy()
+      _log_bone_debug_event(
+        "edit-bone-final",
+        {
+          "bone_name": bone_name,
+          "source_name": tf_name,
+          "source_type": type(node.transform).__name__,
+          "parent_bone": eb.parent.name if eb.parent else None,
+          "matrix": _matrix_trs_summary(eb.matrix),
+          "matrix_local": _matrix_trs_summary(matrix_local),
+          "head": [round(float(v), 6) for v in eb.head],
+          "tail": [round(float(v), 6) for v in eb.tail],
+        },
+        bone_name,
+        tf_name,
+      )
   finally:
     try:
       bpy.ops.object.mode_set(mode="OBJECT")
@@ -317,17 +478,6 @@ def _prepare_bone_import(graph, parent_obj=None):
     if prev_active is not None:
       view_layer.objects.active = prev_active
 
-  # Preserve bind/rest transforms when exporter computes static bone matrices.
-  arm_data.pose_position = "REST"
-  _bone_anim_sources = _transfer_bone_actions_to_armature(graph, arm_obj, node_to_bone_name)
-  bone_anim_source_nodes = set()
-  bone_anim_source_transforms = set()
-  if _bone_anim_sources:
-    if isinstance(_bone_anim_sources, tuple) and len(_bone_anim_sources) == 2:
-      bone_anim_source_nodes = _bone_anim_sources[0] or set()
-      bone_anim_source_transforms = _bone_anim_sources[1] or set()
-    else:
-      bone_anim_source_nodes = _bone_anim_sources or set()
   bone_name_by_transform = {}
   for tnode, bname in node_to_bone_name.items():
     if tnode.transform is not None:
@@ -338,9 +488,31 @@ def _prepare_bone_import(graph, parent_obj=None):
     "bone_name_by_node": node_to_bone_name,
     "bone_name_by_transform": bone_name_by_transform,
     "bone_chain_nodes": bone_chain_nodes,
-    "bone_anim_source_nodes": bone_anim_source_nodes,
-    "bone_anim_source_transforms": bone_anim_source_transforms,
+    "bone_anim_source_nodes": set(),
+    "bone_anim_source_transforms": set(),
+    # True when armature carries _ROOT_BASIS_FIX itself (BLOB_RENDER path).
+    # Used by core.py to apply the same fix to skinned mesh matrix_basis so
+    # they appear Z-up even though their EDM parent is a bone (not the graph root).
+    "arm_carries_basis_fix": _arm_carries_basis_fix,
   }
+
+  # Preserve bind/rest transforms when exporter computes static bone matrices.
+  # Seed the import context before retargeting so create_arganimation_actions()
+  # can see that ArgAnimatedBone channels are being redirected into the shared
+  # armature path and avoid double-applying inv_base_bone_matrix.
+  arm_data.pose_position = "REST"
+  _bone_anim_sources = _transfer_bone_actions_to_armature(graph, arm_obj, node_to_bone_name)
+  bone_anim_source_nodes = set()
+  bone_anim_source_transforms = set()
+  if _bone_anim_sources:
+    if isinstance(_bone_anim_sources, tuple) and len(_bone_anim_sources) == 2:
+      bone_anim_source_nodes = _bone_anim_sources[0] or set()
+      bone_anim_source_transforms = _bone_anim_sources[1] or set()
+    else:
+      bone_anim_source_nodes = _bone_anim_sources or set()
+
+  _import_ctx.bone_import_ctx["bone_anim_source_nodes"] = bone_anim_source_nodes
+  _import_ctx.bone_import_ctx["bone_anim_source_transforms"] = bone_anim_source_transforms
 
 
 def _bind_skin_object(mesh_obj, skin_node):
@@ -371,22 +543,61 @@ def _bind_skin_object(mesh_obj, skin_node):
     arm_mod = mesh_obj.modifiers.new(name="Armature", type="ARMATURE")
   arm_mod.object = arm_obj
 
-  # Parity: Keep original hierarchy parent if one exists. Reparenting to the 
-  # armature root (the legacy path) breaks local transform inheritance from 
-  # ancestors like wings or pylons.
-  if mesh_obj.parent is None:
+  name_bonus = getattr(skin_node, "name", "") or ""
+  def _skin_parent_candidates():
+    if not name_bonus:
+      return []
+    matches = []
+    for obj in list(getattr(bpy.data, "objects", []) or []):
+      if obj in {mesh_obj, arm_obj}:
+        continue
+      if getattr(obj, "type", "") == "MESH":
+        continue
+      dbg_tf_name = str(obj.get("_iedm_dbg_tf_name", "") or "")
+      dbg_tf_cls = str(obj.get("_iedm_dbg_tf_cls", "") or "")
+      if dbg_tf_name != name_bonus and getattr(obj, "name", "") != name_bonus:
+        continue
+      score = 0
+      if dbg_tf_cls == "TransformNode":
+        score += 40
+      elif dbg_tf_cls and dbg_tf_cls != "ArgVisibilityNode":
+        score += 20
+      elif dbg_tf_cls == "ArgVisibilityNode":
+        score += 5
+      if getattr(obj, "name", "") == name_bonus:
+        score += 10
+      matches.append((score, getattr(obj, "name", ""), obj))
+    matches.sort(key=lambda item: (-item[0], item[1]))
+    return [obj for _score, _name, obj in matches]
+
+  candidate = None
+  for obj in _skin_parent_candidates():
+    candidate = obj
+    break
+  if (
+    candidate
+    and candidate not in {mesh_obj, arm_obj}
+    and (
+      mesh_obj.parent is None
+      or mesh_obj.parent == arm_obj
+    )
+  ):
+    mesh_obj.parent = candidate
+    mesh_obj.matrix_parent_inverse = Matrix.Identity(4)
+    mesh_obj["_iedm_skin_parent_override"] = True
+  # Parity: Keep original hierarchy parent if one exists. Reparenting to the
+  # armature root (the legacy path) breaks local transform inheritance from
+  # ancestors like wings or pylons. Prefer the same-name wrapper override
+  # first; otherwise the transient armature parent can leak a stale local
+  # basis into the mesh before we reparent it back under the wrapper.
+  elif mesh_obj.parent is None:
     mesh_obj.parent = arm_obj
   else:
     # Preserve previously inherited world transform if Blender already
     # attached this mesh to a wrapper object.
     mesh_obj.matrix_parent_inverse = Matrix.Identity(4)
-  
-  name_bonus = getattr(skin_node, "name", "") or ""
-  candidate = bpy.data.objects.get(name_bonus)
-  if candidate and candidate not in {mesh_obj, arm_obj}:
-    mesh_obj.parent = candidate
-    mesh_obj.matrix_parent_inverse = Matrix.Identity(4)
-    mesh_obj["_iedm_skin_parent_override"] = True
+
+
 
   nverts = len(mesh_obj.data.vertices)
   if nverts == 0:
@@ -437,4 +648,6 @@ def _bind_skin_object(mesh_obj, skin_node):
     group_map[bone_name].add([cursor], 0.01, "ADD")
     per_vertex_group_count[cursor] += 1
     cursor = (cursor + 1) % nverts
+
+
 

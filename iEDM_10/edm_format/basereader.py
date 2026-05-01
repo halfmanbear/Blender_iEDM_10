@@ -113,13 +113,15 @@ class BaseReader(object):
     else:
       length = self.read_uint()
       assert length < 200, "Overly long string length found; {} at {}".format(length, prepos)
+      data = self.stream.read(length)
       try:
-        data = self.stream.read(length)
-        # return data.decode("UTF-8")
         return data.decode("windows-1251")
       except UnicodeDecodeError:
-        print("Bad data:100 : " + repr(data[:100]))
-        raise RuntimeError("Could not decode string with length {} at position {}".format(length, prepos))
+        try:
+          return data.decode("latin-1")
+        except Exception:
+          print("Bad data:100 : " + repr(data[:100]))
+          raise RuntimeError("Could not decode string with length {} at position {}".format(length, prepos))
 
   def read_list(self, reader):
     """Reads a length-prefixed list of something"""

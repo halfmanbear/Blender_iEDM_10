@@ -1,4 +1,5 @@
 from .core import *  # noqa: F401,F403
+from .core import _scan_to_next_v10_type_token
 
 
 def _tag_shell_family_node(node, source_type):
@@ -66,10 +67,10 @@ def _read_vertex_data(stream, classification=None):
   return vtxData
 
 def _write_vertex_data(data, writer):
-  writer.write_uint(len(data))
-  writer.write_uint(len(data[0]))
-  flat_data = list(itertools.chain(*data))
-  writer.write_floats(flat_data)
+    writer.write_uint(len(data))
+    writer.write_uint(len(data[0][0]))  # stride = floats per vertex
+    flat_data = list(itertools.chain(*data))
+    writer.write_floats(flat_data)
 
 def _read_parent_data(stream):
     # Read the parent section
@@ -198,16 +199,36 @@ class RenderNode(BaseNode):
 
   def write(self, writer):
     super(RenderNode, self).write(writer)
-    writer.write_uint(0)
-    if not isinstance(self.material, int):
-      self.material = self.material.index
-    writer.write_uint(self.material)
+    writer.write_uint(int(getattr(self, "unknown_start", 0) or 0))
+    material = self.material.index if not isinstance(self.material, int) else self.material
+    writer.write_uint(material)
 
-    # Rebuild the parentdata
-    writer.write_uint(1)
-    parent_index = self.parent.index if self.parent else 0
-    writer.write_uint(parent_index)
-    writer.write_int(-1)
+    def _node_index(ref):
+      if isinstance(ref, int):
+        return ref
+      if ref is None:
+        return 0
+      return getattr(ref, "index", 0)
+
+    parent_data = getattr(self, "parentData", None)
+    if parent_data:
+      writer.write_uint(len(parent_data))
+      if len(parent_data) == 1 and len(parent_data[0]) >= 2:
+        writer.write_uint(_node_index(parent_data[0][0]))
+        writer.write_int(int(parent_data[0][1]))
+      else:
+        for entry in parent_data:
+          parent_ref = entry[0] if len(entry) > 0 else 0
+          val1 = entry[1] if len(entry) > 1 else 0
+          val2 = entry[2] if len(entry) > 2 else -1
+          writer.write_uint(_node_index(parent_ref))
+          writer.write_int(int(val1))
+          writer.write_int(int(val2))
+    else:
+      writer.write_uint(1)
+      parent_index = _node_index(getattr(self, "parent", None))
+      writer.write_uint(parent_index)
+      writer.write_int(int(getattr(self, "damage_argument", -1)))
 
     _write_vertex_data(self.vertexData, writer)
     _write_index_data(self.indexData, len(self.vertexData), writer)
@@ -274,7 +295,9 @@ class RenderNode(BaseNode):
             tri = self.indexData[i:i+3]
             if len(tri) != 3:
               continue
-            tri_owners = [owner_values[ix] for ix in tri]
+            tri_owners = [owner_values[ix] for ix in tri if ix < len(owner_values)]
+            if len(tri_owners) != 3:
+              continue
             if tri_owners[0] == tri_owners[1] == tri_owners[2] == owner_idx:
               tri_indices.extend(tri)
               continue
@@ -378,19 +401,47 @@ class ShellNode(BaseNode):
 @reads_type("model::SkinNode")
 class SkinNode(BaseNode):
   category = NodeCategory.render
+
+  def __init__(self, name=None):
+    super(SkinNode, self).__init__(name)
+    self.unknown_start = 0
+    self.material = None
+    self.bones = []
+    self.skin_binding_value = 0
+    self.bbox = None
+    self.vertexData = []
+    self.unknown_indexPrefix = 5
+    self.indexData = []
+    # Backward-compatible aliases kept for existing importer/exporter code.
+    self.unknown = 0
+    self.post_bone = 0
+
   @classmethod
   def read(cls, stream):
     self = super(SkinNode, cls).read(stream)
-    self.unknown = stream.read_uint()
+    # SkinNode payload starts with the same reserved uint32 + properties-set
+    # id pair that RenderNode uses. The local importer still stores the resolved
+    # properties-set id in `material` for parity with the rest of the codebase.
+    self.unknown_start = stream.read_uint()
     self.material = stream.read_uint()
 
     boneCount = stream.read_uint()
     self.bones = stream.read_uints(boneCount)
-    self.post_bone = stream.read_uint()
+    # SkinNode virtual getter/setter exposes this value; preserve it with
+    # a semantic field while retaining the legacy alias used by older code.
+    self.skin_binding_value = stream.read_uint()
+
+    # When __VERSION__ > 0, readBoundingBoxf() follows —
+    # osg::BoundingBoxImpl<Vec3f> = 6 floats (min_x min_y min_z max_x max_y max_z).
+    # Not consuming these bytes desynchs all subsequent vertex/index reads.
+    if self.props.get("__VERSION__", 0):
+      self.bbox = stream.read_floats(6)
 
     # Read the vertex and index data
     self.vertexData = _read_vertex_data(stream, "__gv_bytes")
     self.unknown_indexPrefix, self.indexData = _read_index_data(stream, classification="__gi_bytes")
+    self.unknown = self.unknown_start
+    self.post_bone = self.skin_binding_value
 
     return self
 
@@ -399,6 +450,25 @@ class SkinNode(BaseNode):
 
   def audit(self):
     return _render_audit(self)
+
+  def write(self, writer):
+    super(SkinNode, self).write(writer)
+    writer.write_uint(int(getattr(self, "unknown_start", getattr(self, "unknown", 0)) or 0))
+    material = self.material.index if not isinstance(self.material, int) else self.material
+    writer.write_uint(material if material is not None else 0)
+    writer.write_uint(len(self.bones))
+    writer.write_uints([
+      bone.index if not isinstance(bone, int) else bone
+      for bone in getattr(self, "bones", []) or []
+    ])
+    writer.write_uint(int(getattr(self, "skin_binding_value", getattr(self, "post_bone", 0)) or 0))
+    if self.props.get("__VERSION__", 0):
+      bbox = list(getattr(self, "bbox", None) or [])
+      if len(bbox) != 6:
+        bbox = [0.0] * 6
+      writer.write_floats(bbox)
+    _write_vertex_data(self.vertexData, writer)
+    _write_index_data(self.indexData, len(self.vertexData), writer)
 
 @reads_type("model::ShellSkinNode")
 class ShellSkinNode(ShellNode):
@@ -430,13 +500,49 @@ class TreeShellNode(ShellNode):
     ])
     return _tag_shell_family_node(node, "model::TreeShellNode")
 
+@reads_type("model::MorphNode")
+class MorphNode(RenderNode):
+  """Morph-target renderable node.
+
+  Shares the RenderNode binary layout for the base mesh (name, material,
+  parentData, vertexData, indexData).  An additional morph-target payload
+  follows the base data; its exact layout is not yet fully reversed, so we
+  preserve those bytes as a blob until shape-key import is implemented.
+
+  Because MorphNode subclasses RenderNode, the existing create_object() and
+  graph-pipeline code handle it transparently as a regular render mesh.
+  """
+  category = NodeCategory.render
+
+  @classmethod
+  def read(cls, stream):
+    self = super(MorphNode, cls).read(stream)
+    # Preserve any morph-target data that follows the base mesh payload.
+    # Use _scan_to_next_v10_type_token to stay stream-aligned.
+    if getattr(stream, "v10", False):
+      skip = _scan_to_next_v10_type_token(stream)
+      if skip is not None and skip > 0:
+        self._morph_payload = stream.read(skip)
+        logger.warning(
+          "MorphNode '%s': preserved %d morph-target bytes "
+          "(shape key import not yet implemented)",
+          self.name,
+          len(self._morph_payload),
+        )
+    return self
+
+
 @reads_type("model::SegmentsNode")
 class SegmentsNode(BaseNode):
   category = NodeCategory.shell
   @classmethod
   def read(cls, stream):
     self = super(SegmentsNode, cls).read(stream)
-    self.unknown = stream.read_uint()
+    # v10 SegmentsNode uses the same control-node link preamble as ShellNode.
+    # The uint32 after the base node is the control-node index, not an
+    # opaque field. Treating it as "unknown" loses the authored transform
+    # chain and rotates collision lines into the wrong basis on import.
+    self.parent = stream.read_uint()
     count = stream.read_uint()
     self.data = [stream.read_floats(6) for x in range(count)]
     stream.mark_type_read("model::SegmentsNode::Segments", count)
@@ -449,8 +555,8 @@ class SegmentsNode(BaseNode):
 
   def write(self, writer):
     super(SegmentsNode, self).write(writer)
-    writer.write_uint(self.unknown)
+    parent_index = self.parent.index if self.parent else 0
+    writer.write_uint(parent_index)
     writer.write_uint(len(self.data))
     for segment in self.data:
       writer.write_floats(segment)
-
