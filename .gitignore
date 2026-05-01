@@ -8,3 +8,15 @@ tests/*.png
 *.blend1
 iEDM_10.zip
 docs/_build
+
+# Local working notes and analysis documents
+Information/
+
+# Scan output files containing local paths
+*.txt
+
+# Claude Code local config
+.claude/
+
+# Local scan/tool scripts
+tools/
