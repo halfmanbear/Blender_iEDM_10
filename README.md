@@ -8,7 +8,7 @@ Unofficial, experimental Blender addon to **import DCS World `.EDM` model files 
 - **Recommended:** Install/enable the official Eagle Dynamics `io_scene_edm` addon for best parity (materials/props integration)
 
 Official ED exporter addon (recommended):
-- `io_scene_edm` (Blender plugin build 259871): https://mods.eagle.ru/blender_plugin/io_scene_edm-259871.zip  
+- `io_scene_edm` (Blender plugin build 259871): https://mods.eagle.ru/blender_plugin/files.html  
   In Blender press `N` → **EDM Export** tab for ED object properties.
 
 ## Legal & Usage Disclaimer

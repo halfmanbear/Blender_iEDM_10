@@ -15,6 +15,7 @@ def _reset_transform_debug(options):
     "limit": limit,
     "emitted": 0,
     "log_path": None,
+    "chain_dumped": set(),
   }
   if enabled:
     filter_str = " filter='{}'".format(name_filter) if name_filter else ""
@@ -66,6 +67,16 @@ def _debug_fmt_rot_deg(rot):
 def _debug_fmt_trs(mat):
   loc, rot, scale = mat.decompose()
   return _debug_fmt_vec3(loc), _debug_fmt_rot_deg(rot), _debug_fmt_vec3(scale)
+
+
+def _debug_filter_terms():
+  dbg = getattr(_import_ctx, "transform_debug", {}) or {}
+  needle = dbg.get("filter")
+  if not needle:
+    return []
+  if isinstance(needle, str):
+    return [term.strip().lower() for term in needle.split(",") if term.strip()]
+  return [str(needle).strip().lower()]
 
 def _anim_vector_to_blender(v):
   return Vector(v)

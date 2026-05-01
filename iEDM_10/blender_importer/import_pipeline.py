@@ -227,26 +227,79 @@ def read_file(filename, options=None):
   # Walk through every node, and do the node processing
   graph.walk_tree(process_node)
 
+  def _debug_dump_stage_objects(stage_name):
+    dbg = getattr(_import_ctx, "transform_debug", {}) or {}
+    if not dbg.get("enabled"):
+      return
+    filter_terms = _debug_filter_terms()
+    if not filter_terms:
+      return
+
+    matches = []
+    for ob in list(getattr(bpy.data, "objects", []) or []):
+      name = getattr(ob, "name", "") or ""
+      lowered = name.lower()
+      if any(term in lowered for term in filter_terms):
+        matches.append(ob)
+    if not matches:
+      return
+
+    print("[iEDM][STAGE] begin stage={} matched={}".format(stage_name, len(matches)))
+    for ob in sorted(matches, key=lambda item: getattr(item, "name", "")):
+      try:
+        basis_loc, basis_rot, basis_scale = ob.matrix_basis.decompose()
+        world_loc, world_rot, world_scale = ob.matrix_world.decompose()
+        action = getattr(getattr(ob, "animation_data", None), "action", None)
+        curves = [fc.data_path for fc in getattr(action, "fcurves", [])] if action else []
+        print(
+          "[iEDM][STAGE] stage={} obj={} type={} parent={} action={} curves={} basis_loc={} basis_rot_deg={} basis_scale={} world_loc={} world_rot_deg={} world_scale={}".format(
+            stage_name,
+            ob.name,
+            getattr(ob, "type", ""),
+            getattr(getattr(ob, "parent", None), "name", None),
+            getattr(action, "name", None),
+            curves,
+            _debug_fmt_vec3(basis_loc),
+            _debug_fmt_rot_deg(basis_rot),
+            _debug_fmt_vec3(basis_scale),
+            _debug_fmt_vec3(world_loc),
+            _debug_fmt_rot_deg(world_rot),
+            _debug_fmt_vec3(world_scale),
+          )
+        )
+      except Exception as e:
+        print("[iEDM][STAGE] stage={} obj={} error={}".format(stage_name, getattr(ob, "name", "<unknown>"), e))
+    print("[iEDM][STAGE] end stage={}".format(stage_name))
+
   # Fix owner-encoded render chunks whose shared_parent differs from their graph
   # parent. At this point all transform empties exist and have matrix_basis set.
   if _import_profile_flag("owner_encoded_render_offset_fix"):
     _fix_owner_encoded_render_offsets(graph)
+  _debug_dump_stage_objects("after_process_node")
 
   # Plain-root v10 assets can carry static geometry under top-level
   # ArgVisibilityNode wrappers. Those wrappers do not pass through the normal
   # transform-application block, so apply the missing root basis at the end of
   # import after all object parenting/offset post-passes have run.
   _apply_plain_root_visibility_basis_fix(graph)
+  _debug_dump_stage_objects("after_plain_root_visibility_basis_fix")
   _apply_plain_root_visibility_object_basis_fix()
+  _debug_dump_stage_objects("after_plain_root_visibility_object_basis_fix")
   _apply_plain_root_visibility_mesh_basis_fix()
+  _debug_dump_stage_objects("after_plain_root_visibility_mesh_basis_fix")
   _apply_static_root_visibility_wrapper_basis_fix(graph)
+  _debug_dump_stage_objects("after_static_root_visibility_wrapper_basis_fix")
   _apply_root_visibility_pair_wrapper_basis_fix(graph)
+  _debug_dump_stage_objects("after_root_visibility_pair_wrapper_basis_fix")
   # Keep legacy 3ds Max wrapper-repair passes opt-in. The reader
   # preserves the authored local graph instead of applying world-space repair.
   _apply_argvis_chain_basis_fix()
+  _debug_dump_stage_objects("after_argvis_chain_basis_fix")
   _rewrite_oriented_scale_controls(graph)
+  _debug_dump_stage_objects("after_rewrite_oriented_scale_controls")
   # Post-children pass: apply LodNode properties after children are created.
   graph.walk_tree(_process_lod_post_children)
+  _debug_dump_stage_objects("after_lod_post_children")
 
   # Helper-empty rewrites improve round-trip survivability but reduce authored
   # Blender scene parity, so keep them opt-in.
@@ -258,19 +311,26 @@ def read_file(filename, options=None):
     _split_multi_arg_visibility_controls(graph)
   else:
     _split_multi_arg_rotation_controls(graph)
+  _debug_dump_stage_objects("after_multi_arg_rewrite")
 
   _apply_visibility_pair_wrapper_object_basis_fix()
+  _debug_dump_stage_objects("after_visibility_pair_wrapper_object_basis_fix")
   _rename_control_wrapper_mesh_pairs(graph)
+  _debug_dump_stage_objects("after_rename_control_wrapper_mesh_pairs")
 
   # Fix mesh orientation in BLOB_COLLISION files where parent chain broke
   # the _ROOT_BASIS_FIX rotation inheritance.
   _apply_collision_mesh_orientation_fix()
+  _debug_dump_stage_objects("after_collision_mesh_orientation_fix")
 
   # Legacy 3ds Max world-orientation repair. This is intentionally profile-
   # gated so strict DLL-aligned imports preserve the authored graph as read.
   _apply_3dsmax_mesh_orientation_fix()
+  _debug_dump_stage_objects("after_3dsmax_mesh_orientation_fix")
   _apply_3dsmax_empty_orientation_fix()
+  _debug_dump_stage_objects("after_3dsmax_empty_orientation_fix")
   _restore_skin_visibility_transform_basis()
+  _debug_dump_stage_objects("after_restore_skin_visibility_transform_basis")
 
   # Diagnostic: count EDM nodes vs created Blender objects
   _print_import_diagnostics(edm, graph)
@@ -1033,6 +1093,7 @@ def _build_arganimation_action(node, arg, basis_local, frame_mapper=None, includ
     action["_iedm_rotation_accum_args"] = int(len(rot_arg_order))
 
   static_loc, static_rot, _static_scale = basis_local.decompose()
+  pos_rot = static_rot.copy()
   if rotation_basis_local is not None:
     try:
       _rot_loc, static_rot, _rot_scale = rotation_basis_local.decompose()
@@ -1040,7 +1101,10 @@ def _build_arganimation_action(node, arg, basis_local, frame_mapper=None, includ
       pass
   leftRot = static_rot
   rightRot = Quaternion((1, 0, 0, 0))
-  leftPos = Matrix.Translation(static_loc) if posData else Matrix.Identity(4)
+  leftPos = (
+    Matrix.Translation(static_loc) @ pos_rot.to_matrix().to_4x4()
+    if posData else Matrix.Identity(4)
+  )
   rightPos = Matrix.Identity(4)
   base_scale_vec = Vector((node.base.scale[0], node.base.scale[1], node.base.scale[2]))
   key_quat_to_blender = lambda q: _anim_quaternion_to_blender(q)
@@ -1589,27 +1653,26 @@ def _apply_plain_root_visibility_basis_fix(graph):
       continue
 
     child_nodes = list(getattr(node, "children", []) or [])
-
-    # Skip ArgVis nodes whose direct graph children include any animated
-    # (non-ArgVis) transform. When use_scene_root_basis_object is False,
-    # AnimatingNode children are "child of file root" and have _ROOT_BASIS_FIX
-    # already baked into their zero_transform_local_matrix via
-    # _top_level_root_basis_baked. Applying it again here to the ArgVis parent
-    # would double-apply the basis fix and place those children at wrong locations.
-    has_anim_child_in_graph = any(
-      isinstance(getattr(ch, "transform", None), AnimatingNode)
-      and not isinstance(getattr(ch, "transform", None), ArgVisibilityNode)
-      for ch in child_nodes
-    )
-    if has_anim_child_in_graph:
-      continue
-
     descendant_nodes = []
     stack = list(child_nodes)
     while stack:
       cur = stack.pop()
       descendant_nodes.append(cur)
       stack.extend(list(getattr(cur, "children", []) or []))
+
+    # Skip ArgVis wrapper chains that hide any deeper animated transform.
+    # Plain-root v10 control branches often look like:
+    #   ArgVisibility -> ArgVisibility -> ... -> ArgRotationNode
+    # The animated leaf already has its authored/root basis baked into its
+    # zero_transform_local_matrix. Rotating the top visibility wrapper adds an
+    # extra +90 X and mirrors the whole branch in world space.
+    has_anim_descendant_in_graph = any(
+      isinstance(getattr(ch, "transform", None), AnimatingNode)
+      and not isinstance(getattr(ch, "transform", None), ArgVisibilityNode)
+      for ch in descendant_nodes
+    )
+    if has_anim_descendant_in_graph:
+      continue
 
     if any(type(getattr(child, "render", None)).__name__ == "SkinNode" for child in descendant_nodes):
       continue
@@ -2457,6 +2520,7 @@ from .prelude import (
 )
 from .graph_pipeline import (
   _anim_quaternion_to_blender,
+  _debug_filter_terms,
   _get_action_argument,
   _debug_fmt_vec3,
   _debug_fmt_rot_deg,
@@ -2567,16 +2631,83 @@ def apply_node_transform(node, obj, used_shared_parent=False):
   def _debug_set_trace(source_label, local_mat):
     if not _import_ctx.transform_debug.get("enabled"):
       return
-    needle = _import_ctx.transform_debug.get("filter")
     node_name = getattr(tfnode, "name", "") or type(tfnode).__name__
-    if needle:
-      n = needle.lower()
-      if n not in node_name.lower() and n not in obj.name.lower():
+    filter_terms = _debug_filter_terms()
+    if filter_terms:
+      if not any(term in node_name.lower() or term in obj.name.lower() for term in filter_terms):
         return
     loc, rot, scale = local_mat.decompose()
     print("[iEDM][TFSET] {} src={} obj={} loc={} rot_deg={} scale={}".format(
       node_name, source_label, obj.name, _debug_fmt_vec3(loc), _debug_fmt_rot_deg(rot), _debug_fmt_vec3(scale)
     ))
+
+  def _debug_dump_parent_chain(local_mat):
+    if not _import_ctx.transform_debug.get("enabled"):
+      return
+    filter_terms = _debug_filter_terms()
+    if not filter_terms:
+      return
+    node_name = getattr(tfnode, "name", "") or type(tfnode).__name__
+    if not any(term in node_name.lower() or term in obj.name.lower() for term in filter_terms):
+      return
+    dumped = _import_ctx.transform_debug.setdefault("chain_dumped", set())
+    dump_key = "{}::{}".format(node_name, obj.name)
+    if dump_key in dumped:
+      return
+    dumped.add(dump_key)
+
+    print("[iEDM][CHAIN] begin node={} obj={} graph_parent={} blender_parent={}".format(
+      node_name,
+      obj.name,
+      getattr(getattr(getattr(tnode, "parent", None), "transform", None), "name", "<ROOT>") if tnode is not None else "<ROOT>",
+      getattr(getattr(obj, "parent", None), "name", None),
+    ))
+    if tnode is not None:
+      cur = tnode
+      graph_parts = []
+      while cur is not None:
+        tf_cur = getattr(cur, "transform", None)
+        rn_cur = getattr(cur, "render", None)
+        if tf_cur is not None:
+          label = "{}<{}>".format(getattr(tf_cur, "name", "") or type(tf_cur).__name__, type(tf_cur).__name__)
+        elif rn_cur is not None:
+          label = "{}<{}>".format(getattr(rn_cur, "name", "") or type(rn_cur).__name__, type(rn_cur).__name__)
+        else:
+          label = "<ROOT>"
+        graph_parts.append(label)
+        cur = getattr(cur, "parent", None)
+      print("[iEDM][CHAIN] graph_path={}".format(" / ".join(reversed(graph_parts))))
+    try:
+      loc, rot, scale = local_mat.decompose()
+      print("[iEDM][CHAIN] assigned_local loc={} rot_deg={} scale={}".format(
+        _debug_fmt_vec3(loc), _debug_fmt_rot_deg(rot), _debug_fmt_vec3(scale)
+      ))
+    except Exception:
+      pass
+
+    current = obj
+    level = 0
+    while current is not None:
+      try:
+        basis_loc, basis_rot, basis_scale = current.matrix_basis.decompose()
+        world_loc, world_rot, world_scale = current.matrix_world.decompose()
+        print("[iEDM][CHAIN] level={} obj={} type={} parent={} basis_loc={} basis_rot_deg={} basis_scale={} world_loc={} world_rot_deg={} world_scale={}".format(
+          level,
+          current.name,
+          getattr(current, "type", ""),
+          getattr(getattr(current, "parent", None), "name", None),
+          _debug_fmt_vec3(basis_loc),
+          _debug_fmt_rot_deg(basis_rot),
+          _debug_fmt_vec3(basis_scale),
+          _debug_fmt_vec3(world_loc),
+          _debug_fmt_rot_deg(world_rot),
+          _debug_fmt_vec3(world_scale),
+        ))
+      except Exception as e:
+        print("[iEDM][CHAIN] level={} obj={} error={}".format(level, getattr(current, "name", "<unknown>"), e))
+      current = getattr(current, "parent", None)
+      level += 1
+    print("[iEDM][CHAIN] end node={} obj={}".format(node_name, obj.name))
 
   def _set_local_matrix(local_mat):
     try:
@@ -2733,6 +2864,7 @@ def apply_node_transform(node, obj, used_shared_parent=False):
 
   _set_local_matrix(final_local)
   _debug_set_trace(type(tfnode).__name__, final_local)
+  _debug_dump_parent_chain(final_local)
 
 
 from .mesh_create import _create_mesh
