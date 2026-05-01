@@ -274,6 +274,28 @@ def _visibility_wrapper_needs_own_object(node):
   if any(tok in vis_base for tok in ("_dam", "_DAM", "_On", "_Inv", "_LOD")):
     return True
 
+  # Preserve authored same-name visibility -> animation pairs when they are
+  # nested under another animated parent. Official exports keep a separate
+  # intermediate EMPTY in chains like Dummy670 -> Dummy598 -> Dummy598.001,
+  # and collapsing the wrapper removes the inner control basis.
+  try:
+    children = list(getattr(node, "children", []) or [])
+    if len(children) == 1:
+      ch = children[0]
+      ch_tf = getattr(ch, "transform", None)
+      parent_tf = getattr(getattr(node, "parent", None), "transform", None)
+      if (
+        isinstance(ch_tf, AnimatingNode)
+        and not isinstance(ch_tf, ArgVisibilityNode)
+        and isinstance(parent_tf, AnimatingNode)
+        and not isinstance(parent_tf, ArgVisibilityNode)
+      ):
+        ch_name = str(getattr(ch_tf, "name", "") or getattr(ch, "name", "") or "")
+        if ch_name and ch_name == vis_base:
+          return True
+  except Exception as e:
+    print(f"Warning in blender_importer\nodes\visibility.py: {e}")
+
   # Visibility controls with multiple args are usually semantic controls rather
   # than disposable wrappers; keep them explicit.
   vis_args = getattr(node.transform, "args", None)
@@ -402,6 +424,36 @@ def _visibility_wrapper_needs_own_object(node):
             return True
         except Exception as e:
           print(f"Warning in blender_importer\nodes\visibility.py: {e}")
+
+  # Preserve ALL wrappers that carry visibility animation data.
+  # The vis animation must be assigned to a Blender object for the official
+  # io_scene_edm exporter to reconstruct the ArgVisibilityNode on re-export.
+  # Collapsing a vis wrapper silently drops its animation — even when the
+  # wrapper has no visible render children, the vis data may control collision
+  # lines (landing gear), LODs, or other non-render EDM elements.
+  try:
+    tf = getattr(node, "transform", None)
+    if tf is not None and isinstance(tf, ArgVisibilityNode):
+      vd = getattr(tf, "visData", None)
+      if vd and len(vd) > 0:
+        return True
+  except Exception:
+    pass
+
+  # Preserve wrappers containing a Connector under an AnimatingNode child.
+  # Without this, the connector's parent empty gets auto-suffixed (.001) by
+  # Blender on export, leaking into the binary EDM connector ID.
+  try:
+    for child in getattr(node, "children", []) or []:
+      ch_tf = getattr(child, "transform", None)
+      if not isinstance(ch_tf, AnimatingNode) or isinstance(ch_tf, ArgVisibilityNode):
+        continue
+      for grandchild in getattr(child, "children", []) or []:
+        if isinstance(getattr(grandchild, "render", None), Connector):
+          return True
+  except Exception as e:
+    print(f"Warning in blender_importer/nodes/visibility.py: {e}")
+
   return False
 
 

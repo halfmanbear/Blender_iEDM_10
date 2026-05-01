@@ -178,15 +178,83 @@ class IEDMFallbackEDMPropsGroup(bpy.types.PropertyGroup):
         default=0.0,
         min=0.0,
     )
-    LIGHT_VOLUME_TYPE: bpy.props.StringProperty(
+    LIGHT_VOLUME_TYPE: bpy.props.EnumProperty(
         name="Volume type",
+        items=[
+            ('LANDING', 'landing', "light type: landing", 0),
+            ('NAV', 'nav', "light type: nav", 1),
+            ('TAXI', 'taxi', "light type: taxi", 2),
+            ('BANO', 'bano', "light type: bano", 3),
+            ('NONE', 'none', "", 4),
+        ],
         default="NONE",
+    )
+    OPACITY_VALUE_ARG: bpy.props.IntProperty(
+        name="Opacity value arg",
+        default=-1,
+        min=-1,
     )
 
 
 class EDMObjectSettings(bpy.types.PropertyGroup):
     is_collision_shell: bpy.props.BoolProperty(
         name="Is Collision Shell",
+        default=False
+    )
+    billboard_type: bpy.props.EnumProperty(
+        name="Billboard Type",
+        items=[
+            ('direction', 'direction', "Directional billboard", 0),
+            ('point', 'point', "Point billboard", 1),
+        ],
+        default='point',
+    )
+    billboard_axis: bpy.props.EnumProperty(
+        name="Billboard Axis",
+        items=[
+            ('all', 'all', "All axes", 0),
+            ('x', 'x', "X axis", 1),
+            ('y', 'y', "Y axis", 2),
+            ('z', 'z', "Z axis", 3),
+            ('along_x', 'along_x', "Along X", 4),
+            ('along_y', 'along_y', "Along Y", 5),
+            ('along_z', 'along_z', "Along Z", 6),
+        ],
+        default='all',
+    )
+    is_connector: bpy.props.BoolProperty(
+        name="Is Connector",
+        default=False
+    )
+    is_collision_line: bpy.props.BoolProperty(
+        name="Is Collision Line",
+        default=False
+    )
+    is_renderable: bpy.props.BoolProperty(
+        name="Is Renderable",
+        default=False
+    )
+    damage_argument: bpy.props.IntProperty(
+        name="Damage Argument",
+        default=-1,
+        min=-1,
+    )
+    is_lod_root: bpy.props.BoolProperty(
+        name="Is LOD Root",
+        default=False
+    )
+    lod_min_distance: bpy.props.FloatProperty(
+        name="LOD Min Distance",
+        default=0.0,
+        min=0.0,
+    )
+    lod_max_distance: bpy.props.FloatProperty(
+        name="LOD Max Distance",
+        default=0.0,
+        min=0.0,
+    )
+    nouse_lod_distance: bpy.props.BoolProperty(
+        name="No Use LOD Distance",
         default=False
     )
 

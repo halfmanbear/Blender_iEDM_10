@@ -1,18 +1,29 @@
 def _map_edm_material_to_official_kind(edm_material_name):
   mat = (edm_material_name or "").lower()
-  if mat in {"glass_material"}:
+  if mat in {"glass_material", "glass_instrumental_material"}:
     return "glass"
   if mat in {"mirror_material"}:
     return "mirror"
   # Keep BANO materials on regular render meshes unless the source node itself
   # is explicitly a Fake* light node. Mapping bano_material to fake_omni causes
   # RenderNode -> FakeOmniLightsNode type drift on round-trip.
-  if mat in {"fake_omni_lights", "fake_omni_lights2", "fake_als_lights"}:
+  if mat in {"fake_omni_lights", "fake_omni_lights2", "fake_als_lights",
+             "animated_fake_omni_lights2",
+             # Self-illumination materials are emissive render meshes; treat as
+             # fake_omni so the official exporter preserves the emissive kind.
+             "self_illum_material", "transparent_self_illum_material",
+             "additive_self_illum_material", "additive_self_illum_color_material",
+             "additive_self_illum_tex_material"}:
     return "fake_omni"
-  if mat in {"fake_spot_lights"}:
+  if mat in {"fake_spot_lights", "fake_spot_lights2", "fake_spot_lights2_wdir",
+             "animated_fake_spot_lights2"}:
     return "fake_spot"
   if mat in {"deck_material"}:
     return "deck"
+  # Explicit default-family names resolve to "default" rather than falling
+  # through, so unknown future names still get the fallback warning path.
+  if mat in {"def_material", "color_material", "chrome_material", "aluminium_material"}:
+    return "default"
   return "default"
 
 
@@ -99,6 +110,27 @@ def _set_group_socket_default(group_node, socket_name, value):
     return
 
 
+def _material_scalar(edm_material, *names, default=None):
+  if edm_material is None:
+    return default
+  uniforms = getattr(edm_material, "uniforms", None) or {}
+  anim_uniforms = getattr(edm_material, "animated_uniforms", None) or {}
+  for name in names:
+    value = uniforms.get(name, None)
+    if value is None:
+      value = anim_uniforms.get(name, None)
+      if value is not None and hasattr(value, "keys"):
+        keys = list(getattr(value, "keys", []) or [])
+        value = getattr(keys[0], "value", None) if keys else None
+    if value is None:
+      continue
+    try:
+      return float(value)
+    except Exception:
+      continue
+  return default
+
+
 def _find_group_input_socket(group_node, socket_name):
   if not group_node:
     return None
@@ -122,6 +154,35 @@ def _link_texture_to_group_input(links, texture_node, group_node, input_name, ou
     links.new(from_socket, to_socket)
   except Exception as e:
     print(f"Warning in blender_importer\materials_bridge.py: {e}")
+
+
+def _link_texture_to_any_group_input(links, texture_node, group_node, input_names, output_name="Color"):
+  if not texture_node or not group_node:
+    return False
+  for input_name in input_names:
+    if _find_group_input_socket(group_node, input_name) is None:
+      continue
+    _link_texture_to_group_input(links, texture_node, group_node, input_name, output_name)
+    return True
+  return False
+
+
+def _find_texture_node_by_name_substring(texture_nodes, needle):
+  if not texture_nodes or not needle:
+    return None
+  needle = str(needle).lower()
+  for tex_node in texture_nodes.values():
+    label = str(getattr(tex_node, "label", "") or "")
+    name = str(getattr(tex_node, "name", "") or "")
+    image_name = ""
+    try:
+      image_name = str(getattr(getattr(tex_node, "image", None), "name", "") or "")
+    except Exception:
+      image_name = ""
+    haystack = " ".join((label, name, image_name)).lower()
+    if needle in haystack:
+      return tex_node
+  return None
 
 
 def _ensure_uv_map_node(nodes):
@@ -314,11 +375,30 @@ def _attach_official_material_bridge(mat, edm_material, texture_nodes):
   if official_name in {names["default"], names["glass"]}:
     _set_group_socket_default(group_node, "Shadow Caster", shadow_mode)
 
+  opacity_value = _material_scalar(edm_material, "opacityValue", default=1.0)
+  emissive_value = _material_scalar(edm_material, "selfIlluminationValue", "emissiveValue", default=0.0)
+  ao_value = _material_scalar(edm_material, "aoValue", "lightMapValue", default=0.0)
+  _set_group_socket_default(group_node, "Opacity Value", opacity_value)
+  _set_group_socket_default(group_node, "Opacity Value*", opacity_value)
+  _set_group_socket_default(group_node, "Emissive Value", emissive_value)
+  _set_group_socket_default(group_node, "AO Value*", ao_value)
+  _set_group_socket_default(group_node, "LightMap Value*", ao_value)
+  _set_group_socket_default(group_node, "LightMap Value", ao_value)
+
   # Map common EDM texture channels to official group inputs.
   tex0 = texture_nodes.get(0)  # diffuse/base
   tex1 = texture_nodes.get(1)  # normal
-  tex2 = texture_nodes.get(2)  # spec/roughmet-ish
+  tex2 = texture_nodes.get(2) or texture_nodes.get(13)  # spec/roughmet-ish
   tex3 = texture_nodes.get(3)  # decal/number atlas in many default materials
+  tex4 = texture_nodes.get(4)  # deck decal roughmet
+  tex5 = texture_nodes.get(5)  # default/glass damage base or deck wet map
+  tex7 = texture_nodes.get(7)  # deck damage base
+  tex8 = texture_nodes.get(8)  # emissive/light texture
+  tex9 = texture_nodes.get(9)  # lightmap or deck damage mask
+  tex10 = texture_nodes.get(10) or tex1  # alternate normal slot
+  tex14 = texture_nodes.get(14)  # glass filter
+  tex18 = texture_nodes.get(18)  # damage mask
+  tex_flir = _find_texture_node_by_name_substring(texture_nodes, "flir")
   tex_uv_channels = _texture_uv_channel_map(edm_material)
 
   # Route explicit EDM UV-channel assignments to texture vector inputs so the
@@ -338,32 +418,56 @@ def _attach_official_material_bridge(mat, edm_material, texture_nodes):
       if uv_node:
         _link_uv_to_texture_vector(links, uv_node, tex3)
     _link_texture_to_group_input(links, tex0, group_node, "Base Color")
+    _link_texture_to_group_input(links, tex0, group_node, "Base Alpha*", "Alpha")
     _link_texture_to_group_input(links, tex3, group_node, "Decal Color")
     _link_texture_to_group_input(links, tex3, group_node, "Decal Alpha*", "Alpha")
-    _link_texture_to_group_input(links, tex1, group_node, "Normal (Non-Color)")
+    _link_texture_to_group_input(links, tex10, group_node, "Normal (Non-Color)")
     _link_texture_to_group_input(links, tex2, group_node, "RoughMet (Non-Color)")
+    _link_texture_to_group_input(links, tex9, group_node, "LightMap (Non-Color)")
+    _link_texture_to_group_input(links, tex8, group_node, "Emissive")
+    _link_texture_to_group_input(links, tex8, group_node, "Emissive Mask", "Alpha")
+    _link_texture_to_group_input(links, tex_flir, group_node, "Flir")
+    _link_texture_to_group_input(links, tex5, group_node, "Damage Base")
+    _link_texture_to_group_input(links, tex10, group_node, "Damage Normal (Non-Color)")
+    _link_texture_to_group_input(links, tex18, group_node, "Damage Map (Non-Color)")
+    _link_texture_to_group_input(links, tex18, group_node, "Damage Map Alpha", "Alpha")
   elif official_name == names["deck"]:
     _link_texture_to_group_input(links, tex0, group_node, "Tiled Base Color")
     _link_texture_to_group_input(links, tex0, group_node, "Base_Alpha", "Alpha")
-    _link_texture_to_group_input(links, tex0, group_node, "Decal Base")
-    _link_texture_to_group_input(links, tex0, group_node, "Decal Alpha", "Alpha")
-    _link_texture_to_group_input(links, tex1, group_node, "Tiled Normal (Non-Color)")
+    _link_texture_to_group_input(links, tex3, group_node, "Decal Base")
+    _link_texture_to_group_input(links, tex3, group_node, "Decal Alpha", "Alpha")
+    _link_texture_to_group_input(links, tex4, group_node, "Decal RoughMetAO (Non-Color)")
+    _link_texture_to_group_input(links, tex10, group_node, "Tiled Normal (Non-Color)")
     _link_texture_to_group_input(links, tex2, group_node, "Tiled RoughMet (Non-Color)")
+    _link_texture_to_group_input(links, tex7, group_node, "Damage Base")
+    _link_texture_to_group_input(links, tex9, group_node, "Damage Map (Non-Color)")
+    _link_texture_to_group_input(links, tex9, group_node, "Damage Map Alpha", "Alpha")
+    _link_texture_to_group_input(links, tex5, group_node, "Wet Map (Non-Color)")
   elif official_name == names["glass"]:
     _link_texture_to_group_input(links, tex0, group_node, "Diffuse Color (Dirt)")
     _link_texture_to_group_input(links, tex0, group_node, "Diffuse Alpha*", "Alpha")
-    _link_texture_to_group_input(links, tex0, group_node, "Glass Color (Color Filter)")
-    _link_texture_to_group_input(links, tex0, group_node, "Glass Alpha*", "Alpha")
-    _link_texture_to_group_input(links, tex1, group_node, "Normal (Non-Color)")
+    if tex14:
+      _link_texture_to_group_input(links, tex14, group_node, "Glass Color (Color Filter)")
+      _link_texture_to_group_input(links, tex14, group_node, "Glass Alpha*", "Alpha")
+    else:
+      # Prefer a neutral fallback when the dedicated glass-filter map is absent.
+      # Using tex0 here incorrectly aliases the dirt/albedo texture into the
+      # exporter-facing glass filter path.
+      _set_group_socket_default(group_node, "Glass Color (Color Filter)", (1.0, 1.0, 1.0, 1.0))
+      _set_group_socket_default(group_node, "Glass Alpha*", 1.0)
+    _link_texture_to_group_input(links, tex10, group_node, "Normal (Non-Color)")
     _link_texture_to_group_input(links, tex2, group_node, "RoughMet (Non-Color)")
+    _link_texture_to_group_input(links, tex_flir, group_node, "Flir")
+    _link_texture_to_group_input(links, tex5, group_node, "Damage Base")
+    _link_texture_to_group_input(links, tex18, group_node, "Damage Map (Non-Color)")
+    _link_texture_to_group_input(links, tex18, group_node, "Damage Map Alpha", "Alpha")
   elif official_name == names["mirror"]:
     _link_texture_to_group_input(links, tex0, group_node, "Base Color")
-    _link_texture_to_group_input(links, tex1, group_node, "Normal (Non-Color)")
+    _link_texture_to_group_input(links, tex10, group_node, "Normal (Non-Color)")
   else:
     _link_texture_to_group_input(links, tex0, group_node, "Emissive")
+    _link_texture_to_any_group_input(links, tex8, group_node, ("Emissive", "Emission"))
 
   material_output = _find_active_material_output(nodes)
   _link_group_surface_to_output(links, group_node, material_output)
   return True
-
-
