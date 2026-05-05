@@ -7,8 +7,8 @@ Blender-side scene heuristics:
 1. `edm_format` handles serialized layout exactly as read from disk.
 2. This module inspects the parsed graph and enables importer capabilities that
    follow from the observed file shape.
-3. Legacy exporter-family profiles remain available as a fallback for Blender
-   reconstruction heuristics that are not yet derivable from the parsed graph.
+3. Blender reconstruction behavior is selected from structural features, not
+   exporter-name guesses.
 """
 
 from dataclasses import dataclass, field
@@ -168,6 +168,9 @@ def derive_import_capabilities(edm):
       flags["graph_root_v10_basis_fix"] = True
       flags["v10_root_object_basis_fix"] = True
       flags["implicit_scene_root_basis_object"] = True
+      flags["argvis_chain_basis_fix"] = True
+      if features.has_bones or features.has_bano_material:
+        flags["scene_root_world_orientation_postfix"] = True
 
     if features.has_root_transform_payload:
       flags["v10_root_object_basis_fix"] = True
@@ -182,6 +185,7 @@ def derive_import_capabilities(edm):
         flags["bone_rest_requires_root_basis_fix"] = True
         flags["v10_root_object_basis_fix"] = True
         flags["implicit_scene_root_basis_object"] = True
+        flags["skin_mesh_geometry_root_basis_fix"] = True
 
       if features.has_owner_encoded_split_renders:
         flags["owner_encoded_render_offset_fix"] = True
@@ -212,6 +216,8 @@ def derive_import_capabilities(edm):
 
   if features.has_bones and features.edm_version >= 10:
     flags["bone_rest_requires_root_basis_fix"] = True
+    if flags.get("v10_root_object_basis_fix"):
+      flags["skin_mesh_geometry_root_basis_fix"] = True
 
   if pure_collision_payload:
     name = "DERIVED_PURE_COLLISION_PAYLOAD"

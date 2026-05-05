@@ -1,3 +1,7 @@
+# Fragment: core node processing — creates Blender objects from the EDM graph.
+# All names resolved via the shared namespace injected by reader.py.
+
+
 def _is_narrow_safe_identity_helper_name(name):
   if not name:
     return False
@@ -66,14 +70,13 @@ def _control_wrapper_prefix(tfnode):
 def _preferred_control_wrapper_name(node, base_name):
   """Disambiguate control empties from their sole visible child mesh.
 
-  BLENDER_DEF assets often import as:
+  Plain-root visibility/control assets often import as:
     tf_0466   (ArgRotation EMPTY)
       -> tf_0466.001 (RenderNode MESH)
 
   because Blender auto-suffixes the child mesh after the control empty claims
   the semantic base name. Naming the control object with its authored control
-  prefix keeps the visible mesh on the base name and matches the cleaner
-  round-trip scene shape more closely.
+  prefix keeps the visible mesh on the base name.
   """
   tf = getattr(node, "transform", None)
   if tf is None:
@@ -125,25 +128,26 @@ def _skin_bbox_local_matrix(skin_node):
     if any(math.isinf(v) or math.isnan(v) for v in min_vec) or any(math.isinf(v) or math.isnan(v) for v in max_vec):
       return None
 
-    if getattr(_import_ctx, "edm_version", 0) >= 10:
-      edm_class = getattr(_import_ctx, "edm_exporter_class", "")
-      if edm_class in ("3DSMAX_BANO", "3DSMAX_DEF"):
-        corners = [
-          (_ROOT_BASIS_FIX @ Vector((x, y, z, 1.0))).to_3d()
-          for x in (min_vec.x, max_vec.x)
-          for y in (min_vec.y, max_vec.y)
-          for z in (min_vec.z, max_vec.z)
-        ]
-        min_vec = Vector((
-          min(c.x for c in corners),
-          min(c.y for c in corners),
-          min(c.z for c in corners),
-        ))
-        max_vec = Vector((
-          max(c.x for c in corners),
-          max(c.y for c in corners),
-          max(c.z for c in corners),
-        ))
+    if (
+      getattr(_import_ctx, "edm_version", 0) >= 10
+      and _import_profile_flag("skin_mesh_geometry_root_basis_fix")
+    ):
+      corners = [
+        (_ROOT_BASIS_FIX @ Vector((x, y, z, 1.0))).to_3d()
+        for x in (min_vec.x, max_vec.x)
+        for y in (min_vec.y, max_vec.y)
+        for z in (min_vec.z, max_vec.z)
+      ]
+      min_vec = Vector((
+        min(c.x for c in corners),
+        min(c.y for c in corners),
+        min(c.z for c in corners),
+      ))
+      max_vec = Vector((
+        max(c.x for c in corners),
+        max(c.y for c in corners),
+        max(c.z for c in corners),
+      ))
 
     dims = max_vec - min_vec
     if dims.length <= 1.0e-9:
@@ -215,61 +219,12 @@ def _wrap_skin_object_with_skin_box(mesh_obj, skin_node):
     return None
 
 
-def process_node(node):
-  """Processes a single node of the transform graph"""
-  _used_shared_parent_fallback = False
-  # Root node has no processing
-  if node.parent is None:
-    return
+# ---------------------------------------------------------------------------
+# process_node helpers — each handles one clearly-named responsibility
+# ---------------------------------------------------------------------------
 
-  node._is_primary = False
-
-  # Usually collapse visibility wrappers into the child object (tighter export
-  # shape), but preserve them when the wrapped child carries transform animation.
-  # In that case, keeping a separate wrapper avoids the exporter's one-action-per-
-  # object limitation (visibility and transform args can differ).
-  if node.render is None and isinstance(node.transform, ArgVisibilityNode):
-    # Authored-pair collapse: ArgVisibilityNode + ArgAnimationNode merged into one
-    # node. The collapsed node must keep its own Blender object so the AnimatingNode's
-    # rest transform (zero_transform_local_matrix) and scale can be applied to it.
-    _collapsed_has_anim = any(
-      isinstance(tf, AnimatingNode)
-      for tf in getattr(node, "_collapsed_transforms", [])
-    )
-    if not _collapsed_has_anim and not _visibility_wrapper_needs_own_object(node):
-      tf = getattr(node, "transform", None)
-      child_count = len(getattr(node, "children", []) or [])
-      _debug_log_event(
-        "[iEDM][VISDBG] collapse-to-parent idx={} name={!r} children={} parent_obj={!r}".format(
-          getattr(tf, "_graph_idx", None),
-          getattr(tf, "name", "") if tf is not None else "",
-          child_count,
-          getattr(getattr(node.parent, "blender", None), "name", None),
-        )
-      )
-      node.blender = node.parent.blender
-      return
-    tf = getattr(node, "transform", None)
-    child_count = len(getattr(node, "children", []) or [])
-    _debug_log_event(
-      "[iEDM][VISDBG] keep-own-object idx={} name={!r} children={}".format(
-        getattr(tf, "_graph_idx", None),
-        getattr(tf, "name", "") if tf is not None else "",
-        child_count,
-      )
-    )
-
-  # EDM bone-control chains are represented by a single imported armature.
-  ctx = _import_ctx.bone_import_ctx or {}
-  arm_obj = ctx.get("armature")
-  bone_chain_nodes = ctx.get("bone_chain_nodes", set())
-  if arm_obj is not None and node.render is None and node in bone_chain_nodes:
-    node.blender = arm_obj
-    return
-
-  is_skel = getattr(node, "_is_skeleton", False)
-
-  # --- Create Blender object for this node ---
+def _create_node_object(node, ctx, is_skel):
+  """Create the Blender object for a graph node and store it in node.blender."""
   node.render_blender = None
   if node.render:
     render_name = getattr(node.render, "name", "") or ""
@@ -323,10 +278,6 @@ def process_node(node):
       elif is_segments_render and _is_generic_shell_name(final_name):
         final_name = _nearest_collision_alias(node, "segments")
 
-      # Avoid consuming semantic base names (e.g. Aileron_L / Flap_L) for generic
-      # connector objects. Visibility wrappers later export as `v_ + obj.name`, so
-      # if a connector grabs the base first Blender suffixes the wrapper (.001/.002).
-      # Connector object names are not semantically important for parity here.
       if is_connector_render:
         candidate = ""
         if node.parent and node.parent.transform:
@@ -379,44 +330,23 @@ def process_node(node):
 
     if isinstance(node.render, Connector):
       node.blender = create_connector(node.render)
-      # Fix: Blender deduplicates names within a session, so if a wrapper
-      # TransformNode Empty was already created with the same name as this
-      # Connector (the normal case in original 3ds Max EDMs), the Connector
-      # object gets auto-suffixed to ".001"/".002"/etc.  The unpatched exporter
-      # uses obj.name as the Connector ID, so ".001" leaks into the binary and
-      # breaks all external attach-point references.  Resolve by renaming the
-      # conflicting Empty (which is only needed as a hierarchy parent; its own
-      # Blender name is irrelevant for export) so the Connector object can
-      # reclaim the correct EDM name.
       try:
         _connector_edm_name = str(getattr(node.render, "name", "") or "")
         if _connector_edm_name and node.blender.name != _connector_edm_name:
           _conflict = bpy.data.objects.get(_connector_edm_name)
           if _conflict is not None and _conflict is not node.blender:
             if not _is_connector_object(_conflict):
-              # Rename the conflicting object (wrapper Empty) out of the way.
-              # Append "_tf" to signal it's a transform-hierarchy-only placeholder.
-              # With pre-naming active, this path only fires if the TF wrapper was
-              # not pre-named (e.g. a connector under an animating parent).
               _conflict.name = _connector_edm_name + "_tf"
               node.blender.name = _connector_edm_name
-            # else: another connector already owns the base name — leave both as-is;
-            # the export uses _iedm_connector_name, not the Blender object name.
           else:
             node.blender.name = _connector_edm_name
         if _connector_edm_name:
           node.blender["_iedm_connector_name"] = _connector_edm_name
       except Exception as e:
         print(f"Warning in blender_importer/nodes/core.py: {e}")
-      # Store the original wrapper TransformNode name so the export patch can
-      # produce TransformNode "BANO_0" instead of "Connector Transform" etc.
-      # In original EDMs the wrapper transform has the connector's own name.
       try:
         node.blender["_iedm_connector_apply_xfix"] = False
         parent_tf = getattr(getattr(node, "parent", None), "transform", None)
-        # Connector render nodes are often parented under a static wrapper
-        # TransformNode. For parity, take the wrapper matrix/name as the
-        # connector control transform source and bypass wrapper transform export.
         if (
           node.transform is None
           and isinstance(parent_tf, TransformNode)
@@ -500,11 +430,6 @@ def process_node(node):
 
   elif is_skel:
     empty_name = _transform_display_name(node.transform) or type(node.transform).__name__
-    # Pre-name TF wrappers that are sole parents of a Connector with "_tf" suffix,
-    # so duplicate chains get _tf/_tf.001/... rather than cascading connector renames.
-    # Also pre-name AnimatingNode parents of single Connector children, since the
-    # Connector object will claim the base name and the parent empty needs a distinct
-    # name to avoid Blender's auto-suffix (.001/.002) leaking into the EDM binary.
     _node_children_skel = getattr(node, "children", []) or []
     if (
       len(_node_children_skel) == 1
@@ -519,8 +444,6 @@ def process_node(node):
   else:
     tf_name = _transform_display_name(node.transform) or type(node.transform).__name__
     tf_name = _preferred_control_wrapper_name(node, tf_name)
-    # Pre-name empties that are sole parents of a Connector child with "_tf"
-    # suffix so the Connector object can claim the base name without collision.
     _node_children_ns = getattr(node, "children", []) or []
     if (
       len(_node_children_ns) == 1
@@ -533,16 +456,10 @@ def process_node(node):
     bpy.context.collection.objects.link(ob)
     node.blender = ob
 
-  if node.blender and isinstance(node.render, SkinNode):
-    _bind_skin_object(node.blender, node.render)
 
-  if not node.blender:
-    node.blender = node.parent.blender if node.parent else None
-    return
-
-  node._is_primary = True
-
-  # --- (2) Parent in a “parity-safe” way: identity parent inverse ---
+def _parent_node_object(node, ctx):
+  """Establish the Blender parent chain for node.blender."""
+  # Skin: look for a same-name sibling transform to use as parent
   try:
     if isinstance(getattr(node, "render", None), SkinNode):
       parent_tf = getattr(getattr(node, "parent", None), "transform", None)
@@ -600,12 +517,7 @@ def process_node(node):
       node.blender.parent = node.parent.blender
       node.blender.matrix_parent_inverse = Matrix.Identity(4)
 
-
-  # Some authored split render chunks import as mesh-only duplicate children
-  # (e.g. tf_0365 -> tf_0365.001). Keeping a mesh object as the control parent
-  # for another render mesh appears to round-trip poorly in ModelViewer2 for a
-  # subset of these chunks. Reparent the duplicate chunk to the nearest
-  # non-mesh control parent while preserving the parent's local basis.
+  # Reparent render-only duplicate chunks away from mesh parents
   try:
     ob_name = getattr(node.blender, "name", "") or ""
     parent_bl = getattr(getattr(node, "parent", None), "blender", None)
@@ -623,16 +535,12 @@ def process_node(node):
       and getattr(getattr(node, "parent", None), "render", None) is not None
     )
     if is_render_only_dup and parent_is_render_mesh and grandparent_bl is not None:
-      # Compute child's new local matrix relative to grandparent using world
-      # matrices so the child lands at the same world position as its sibling
-      # parent mesh without inheriting any scale the parent may carry.
       try:
         gp_world_inv = grandparent_bl.matrix_world.inverted_safe()
         node.blender.parent = grandparent_bl
         node.blender.matrix_parent_inverse = Matrix.Identity(4)
         node.blender.matrix_local = gp_world_inv @ parent_bl.matrix_world
       except Exception:
-        # Fallback: copy parent local but strip scale to avoid propagating it
         preserved_local = parent_bl.matrix_local.copy()
         _loc, _rot, _ = preserved_local.decompose()
         node.blender.parent = grandparent_bl
@@ -641,7 +549,10 @@ def process_node(node):
   except Exception as e:
     print(f"Warning in blender_importer/nodes/core.py: {e}")
 
-  # Preserve mapping from EDM transform node -> created blender object
+
+def _stamp_node_properties(node, ctx):
+  """Write EDM metadata and debug IDprops to node.blender."""
+  # Preserve transform -> blender object mapping
   if node.transform and node.blender:
     try:
       node.transform._blender_obj = node.blender
@@ -650,12 +561,6 @@ def process_node(node):
     if isinstance(node.transform, ArgVisibilityNode):
       try:
         vis_alias = getattr(node.transform, "name", "") or ""
-        # Store the FULL original EDM name (do not strip "v_").
-        # The visibility export patch (_extract_visibility_animation) uses the
-        # alias as-is, so "v_Gas_Tanks" → exports "v_Gas_Tanks" and plain
-        # "Dummy001" → exports "Dummy001" (no extra "v_" prepended).
-        # Only strip ar_/al_/as_ prefixes which are never part of the intended
-        # visibility node name in a well-formed EDM.
         for _pfx in ("ar_", "al_", "as_"):
           if vis_alias.startswith(_pfx):
             vis_alias = vis_alias[len(_pfx):]
@@ -694,9 +599,7 @@ def process_node(node):
         print(f"Warning in blender_importer/nodes/core.py: {e}")
     else:
       # Mark importer-created static helper empties that only contribute an
-      # identity transform and exist due Blender duplicate-name splitting
-      # (`Foo.001`, `Foo.002`, ...). The exporter otherwise emits no-op
-      # TransformNodes for these helpers.
+      # identity transform (Blender duplicate-name splitting artefacts).
       try:
         ob = node.blender
         tf_name = getattr(node.transform, "name", "") or ""
@@ -717,8 +620,6 @@ def process_node(node):
           ob["_iedm_identity_passthrough"] = True
           if _is_narrow_safe_identity_helper_name(ob_name) or _is_narrow_safe_identity_helper_name(tf_name):
             ob["_iedm_narrow_identity_passthrough"] = True
-        # Also allow a narrow fake-light helper case with no Blender suffix:
-        # v_* -> Omni_r001 (identity EMPTY) -> LightNode
         elif (
           is_static_tf
           and is_renderless_empty
@@ -775,13 +676,7 @@ def process_node(node):
     except Exception as e:
       print(f"Warning in blender_importer/nodes/core.py: {e}")
 
-  # Store the original EDM animation-node name so the export name-passthrough
-  # patch can emit the plain name (e.g. "Dummy001", "pilot_SU_helmet_glass001")
-  # instead of the prefixed name emitted by io_scene_edm ("ar_Dummy001").
-  # Applies to all animated nodes — both pure empties AND animated mesh objects
-  # — when the original EDM name has no al_/ar_/as_ prefix.  The proxy only
-  # fires when the property is present, so prefixed names in the original are
-  # never mis-renamed.
+  # Original EDM animation-node name passthrough (no al_/ar_/as_ prefix)
   if (node.transform is not None
       and isinstance(node.transform, AnimatingNode)
       and not isinstance(node.transform, (Bone, ArgAnimatedBone))):
@@ -794,8 +689,8 @@ def process_node(node):
         node.blender["_iedm_orig_anim_name"] = orig_anim_name
     except Exception as e:
       print(f"Warning in blender_importer/nodes/core.py: {e}")
-  # Preserve raw ArgAnimation payload on imported objects so problematic nodes
-  # can be inspected directly in Blender without re-reading the EDM.
+
+  # Raw ArgAnimation payload for in-Blender inspection
   if isinstance(node.transform, ArgAnimationNode) and node.blender is not None:
     try:
       raw = {}
@@ -885,8 +780,7 @@ def process_node(node):
     except Exception as e:
       print(f"Warning in blender_importer/nodes/core.py: {e}")
 
-  # Temporary importer debug stamp: helps correlate Blender objects back to source
-  # EDM transform/render classes while diagnosing cross-asset basis issues.
+  # Debug stamp: correlates Blender objects back to EDM transform/render classes
   try:
     if node.blender:
       node.blender["_iedm_dbg_tf_cls"] = type(node.transform).__name__ if node.transform is not None else ""
@@ -915,7 +809,14 @@ def process_node(node):
   except Exception as e:
     print(f"Warning in blender_importer/nodes/core.py: {e}")
 
-  # --- Render-only positioning & v10 basis handling ---
+
+def _apply_render_positioning(node):
+  """Apply local matrix for render-only nodes; tag identity passthrough helpers.
+
+  Returns _used_shared_parent_fallback (bool) for use in the animation hookup.
+  """
+  _used_shared_parent_fallback = False
+
   _is_render_only_positioning = (
     node.render and node.blender and node.blender.type == "MESH"
     and (not node.transform or isinstance(node.transform, ArgVisibilityNode))
@@ -934,14 +835,10 @@ def process_node(node):
       parent_transform is not None
       and not isinstance(parent_transform, ArgVisibilityNode)
     )
-    _used_shared_parent_fallback = False
     applied_local_bl = False
     has_parent_obj = bool(node.parent and node.parent.blender)
     shared_parent_obj = getattr(shared_parent, "_blender_obj", None) if shared_parent is not None else None
 
-    # Owner-encoded split chunks can be authored in a shared control-space.
-    # If we have no explicit owner wrapper to compensate against, fall back to
-    # the shared parent transform directly.
     if shared_parent is not None and not has_parent_obj and not parent_is_real_transform:
       apply_node_transform(shared_parent, node.blender, used_shared_parent=True)
       _used_shared_parent_fallback = True
@@ -955,9 +852,6 @@ def process_node(node):
         except Exception as e:
           print(f"Warning in blender_importer/nodes/core.py: {e}")
       else:
-        # If the shared parent transform was collapsed (no Blender object was created
-        # for it), apply that EDM transform directly to the render-only mesh object so
-        # the exporter control node does not become an identity wrapper under v_*.
         try:
           if (
             not parent_is_real_transform
@@ -986,9 +880,6 @@ def process_node(node):
           _needs_render_basis_fix = _prrbf_base and (
             getattr(_parent_node, "_is_graph_root", False)
             or (
-              # Static render child of an ArgVis that is directly under the graph
-              # root but won't receive _ROOT_BASIS_FIX itself (because it has
-              # animated children whose positions are already in Blender space).
               isinstance(getattr(_parent_node, "transform", None), ArgVisibilityNode)
               and getattr(getattr(_parent_node, "parent", None), "_is_graph_root", False)
               and any(
@@ -998,10 +889,6 @@ def process_node(node):
               )
             )
           )
-          # SkinNode meshes under bone nodes never satisfy the graph-root parent
-          # check above, but in families where the armature carries _ROOT_BASIS_FIX
-          # (BLOB_RENDER), the skinned mesh also needs _ROOT_BASIS_FIX baked into
-          # its matrix_basis so it matches the orientation of non-skinned siblings.
           if (
             not _needs_render_basis_fix
             and isinstance(getattr(node, "render", None), SkinNode)
@@ -1011,10 +898,6 @@ def process_node(node):
             if bool(_bone_ctx.get("arm_carries_basis_fix")):
               _needs_render_basis_fix = True
           if _needs_render_basis_fix:
-            # Root-level SkinNode meshes that were already rebound under a
-            # same-name wrapper inherit the authored basis from that wrapper
-            # chain. Applying the plain-root render basis again here rotates
-            # them an extra +90 X (seen on the F-16 D/Object10934997*.002 set).
             if not (
               isinstance(getattr(node, "render", None), SkinNode)
               and bool(node.blender.get("_iedm_skin_parent_override"))
@@ -1026,7 +909,6 @@ def process_node(node):
         print(f"Warning in blender_importer/nodes/core.py: {e}")
 
     if _import_ctx.edm_version >= 10 and _import_profile_flag("argvis_parent_mesh_alignment_fix"):
-      # If a visibility wrapper is acting as a control node, keep mesh aligned.
       if (
         node.parent and isinstance(node.parent.transform, ArgVisibilityNode) and node.parent.blender
         and not _used_shared_parent_fallback
@@ -1035,11 +917,11 @@ def process_node(node):
         if not applied_local_bl:
           _offset_mesh_world(node.blender, parent_loc)
 
-    # Optional pivot recentering (kept as you had it)
     if (
       _import_ctx.mesh_origin_mode == "APPROX"
       and node.parent and node.parent.blender
       and not isinstance(node.parent.transform, (ArgVisibilityNode, AnimatingNode))
+      and not isinstance(getattr(node, "render", None), SkinNode)
     ):
       if node.blender.location.length < 1e-9:
         _recenter_mesh_object_to_geometry(node.blender)
@@ -1049,9 +931,7 @@ def process_node(node):
     if isinstance(getattr(node, "render", None), SkinNode):
       _wrap_skin_object_with_skin_box(node.blender, node.render)
 
-  # Mark render-only Blender-suffixed duplicate helpers that ended up as
-  # identity transforms after importer positioning. Exporter can skip their
-  # no-op object transform wrapper safely.
+  # Tag identity passthrough for render-only nodes
   try:
     if node.blender and node.render is not None and node.transform is None:
       ob = node.blender
@@ -1077,8 +957,7 @@ def process_node(node):
   except Exception as e:
     print(f"Warning in blender_importer/nodes/core.py: {e}")
 
-  # Also handle combined transform+render fake-light helper nodes that are
-  # identity under a visibility wrapper (e.g. v_* -> Omni_r001 -> Fake Light Transform).
+  # Combined transform+render fake-light helpers under visibility wrapper
   try:
     if node.blender and node.render is not None and node.transform is not None:
       ob = node.blender
@@ -1092,39 +971,11 @@ def process_node(node):
   except Exception as e:
     print(f"Warning in blender_importer/nodes/core.py: {e}")
 
-  # --- Visibility animation hookup ---
-  _vis_source = None
-  if isinstance(node.transform, ArgVisibilityNode):
-    _vis_source = node.transform
-  elif (
-    node.parent
-    and isinstance(node.parent.transform, ArgVisibilityNode)
-    and node.parent.blender == node.blender
-  ):
-    # Only inherit visibility from parent wrapper if that wrapper was collapsed
-    # onto this same Blender object.
-    _vis_source = node.parent.transform
+  return _used_shared_parent_fallback
 
-  vis_actions = get_actions_for_node(_vis_source) if _vis_source else []
 
-  # --- Materials ---
-  material_target = node.render_blender if node.render_blender else node.blender
-  if (
-    hasattr(node.render, "material")
-    and node.render.material
-    and hasattr(node.render.material, "blender_material")
-    and node.render.material.blender_material
-    and material_target
-    and hasattr(material_target, "data")
-    and material_target.data
-  ):
-    render_cls_name = type(node.render).__name__
-    if render_cls_name not in {"FakeOmniLightsNode", "FakeSpotLightsNode", "FakeALSNode"}:
-      material_target.data.materials.append(node.render.material.blender_material)
-
-  # --- Apply transform animation / base transforms (non-visibility transforms only) ---
-  # Also enters this block for authored-pair collapsed nodes (ArgVisibilityNode +
-  # ArgAnimationNode with matching names) where _collapsed_transforms holds both.
+def _hookup_node_animations(node, ctx, vis_actions, used_shared_parent):
+  """Connect animation actions and apply the rest transform."""
   _all_collapsed = getattr(node, "_collapsed_transforms", [])
   _has_collapsed_anim = any(isinstance(tf, AnimatingNode) for tf in _all_collapsed)
   if node.transform and (not isinstance(node.transform, ArgVisibilityNode) or _has_collapsed_anim):
@@ -1138,9 +989,6 @@ def process_node(node):
     )
 
     if anim_transforms and not skip_object_anim:
-      # For authored-pair collapse (node.transform is ArgVisibilityNode), collect
-      # animation actions only from the collapsed AnimatingNodes — visibility actions
-      # are already captured in vis_actions above and must not be double-applied.
       if isinstance(node.transform, ArgVisibilityNode):
         actions = []
         for extra_tf in anim_transforms:
@@ -1175,45 +1023,35 @@ def process_node(node):
         if len(actions) == 1:
           node.blender.animation_data.action = actions[0]
         else:
-          # Multiple arguments (parallel animations): building an NLA stack
-          # to allow concurrent playback without the "Active Action" double-evaluation.
-          # For NLA tracks to take priority, the active action must be unset (None).
           nla_pushed = 0
           for action in actions:
             if _push_action_to_nla(node.blender, action):
               nla_pushed += 1
-          
           if nla_pushed > 0:
             node.blender.animation_data.action = None
           else:
-            # Fallback if NLA creation fails for some reason
             node.blender.animation_data.action = actions[0]
 
-    # For authored-pair collapse, apply the AnimatingNode's rest transform
-    # (zero_transform_local_matrix) rather than the ArgVisibilityNode (identity).
-    # Use the first non-ArgVis AnimatingNode (e.g. ArgRotationNode) so its
-    # zero_transform_local_matrix (which includes base.scale) is applied to the
-    # EMPTY, allowing transform children to inherit scale correctly.
+    # Apply rest transform: for authored-pair collapse use the AnimatingNode's
+    # zero_transform_local_matrix rather than the ArgVisibilityNode (identity).
     if isinstance(node.transform, ArgVisibilityNode) and anim_transforms:
       _tf_to_apply = next(
         (tf for tf in anim_transforms if not isinstance(tf, ArgVisibilityNode)),
         anim_transforms[0]
       )
-      apply_node_transform(_tf_to_apply, node.blender, used_shared_parent=_used_shared_parent_fallback)
-      # Register the applied transform's blender obj so shared_parent render
-      # node lookups resolve to this EMPTY rather than re-applying the scale.
+      apply_node_transform(_tf_to_apply, node.blender, used_shared_parent=used_shared_parent)
       if _tf_to_apply is not node.transform:
         try:
           _tf_to_apply._blender_obj = node.blender
         except Exception:
           pass
     else:
-      apply_node_transform(node, node.blender, used_shared_parent=_used_shared_parent_fallback)
+      apply_node_transform(node, node.blender, used_shared_parent=used_shared_parent)
 
     if node.blender.type == "EMPTY":
       distFromScale = node.blender.scale - Vector((1, 1, 1))
       if distFromScale.length < 0.01:
-          node.blender.empty_display_size = 0.01
+        node.blender.empty_display_size = 0.01
     elif vis_actions:
       node.blender.animation_data_create()
       if len(vis_actions) == 1:
@@ -1242,37 +1080,139 @@ def process_node(node):
       else:
         node.blender.animation_data.action = vis_actions[0]
 
+
+def _dump_node_diagnostics(node):
+  """Dump all numeric/vector EDM node attributes to Blender IDprops."""
+  if not node.blender:
+    return
+
+  def _dump_diag(target, prefix="EDM_RAW_"):
+    for attr in dir(target):
+      if attr.startswith("_") or attr in ("blender", "children", "parent"):
+        continue
+      try:
+        val = getattr(target, attr)
+      except Exception:
+        continue
+      idprop_val = _idprop_diag_value(val)
+      if idprop_val is None:
+        continue
+      try:
+        node.blender[prefix + attr] = idprop_val
+      except Exception:
+        pass
+
+  if node.transform:
+    _dump_diag(node.transform, "EDM_TF_")
+    if hasattr(node.transform, "base"):
+      _dump_diag(node.transform.base, "EDM_BASE_")
+  if node.render:
+    _dump_diag(node.render, "EDM_RN_")
+
+  if hasattr(node, "_local_bl"):
+    node.blender["IEDM_LOCAL_BL_MAT"] = [float(v) for row in node._local_bl for v in row]
+
+
+# ---------------------------------------------------------------------------
+# Main entry point
+# ---------------------------------------------------------------------------
+
+def process_node(node):
+  """Processes a single node of the transform graph."""
+  if node.parent is None:
+    return
+
+  node._is_primary = False
+
+  # Collapse ArgVisibilityNode wrappers onto the child object when possible.
+  # Preserve separate objects when the wrapped child carries transform animation.
+  if node.render is None and isinstance(node.transform, ArgVisibilityNode):
+    _collapsed_has_anim = any(
+      isinstance(tf, AnimatingNode)
+      for tf in getattr(node, "_collapsed_transforms", [])
+    )
+    if not _collapsed_has_anim and not _visibility_wrapper_needs_own_object(node):
+      tf = getattr(node, "transform", None)
+      child_count = len(getattr(node, "children", []) or [])
+      _debug_log_event(
+        "[iEDM][VISDBG] collapse-to-parent idx={} name={!r} children={} parent_obj={!r}".format(
+          getattr(tf, "_graph_idx", None),
+          getattr(tf, "name", "") if tf is not None else "",
+          child_count,
+          getattr(getattr(node.parent, "blender", None), "name", None),
+        )
+      )
+      node.blender = node.parent.blender
+      return
+    tf = getattr(node, "transform", None)
+    child_count = len(getattr(node, "children", []) or [])
+    _debug_log_event(
+      "[iEDM][VISDBG] keep-own-object idx={} name={!r} children={}".format(
+        getattr(tf, "_graph_idx", None),
+        getattr(tf, "name", "") if tf is not None else "",
+        child_count,
+      )
+    )
+
+  # EDM bone-control chains map to a single armature object
+  ctx = _import_ctx.bone_import_ctx or {}
+  arm_obj = ctx.get("armature")
+  bone_chain_nodes = ctx.get("bone_chain_nodes", set())
+  if arm_obj is not None and node.render is None and node in bone_chain_nodes:
+    node.blender = arm_obj
+    return
+
+  is_skel = getattr(node, "_is_skeleton", False)
+
+  _create_node_object(node, ctx, is_skel)
+
+  if node.blender and isinstance(node.render, SkinNode):
+    _bind_skin_object(node.blender, node.render)
+
+  if not node.blender:
+    node.blender = node.parent.blender if node.parent else None
+    return
+
+  node._is_primary = True
+
+  _parent_node_object(node, ctx)
+  _stamp_node_properties(node, ctx)
+
+  _used_shared_parent_fallback = _apply_render_positioning(node)
+
+  # Visibility source: own transform or collapsed parent wrapper
+  _vis_source = None
+  if isinstance(node.transform, ArgVisibilityNode):
+    _vis_source = node.transform
+  elif (
+    node.parent
+    and isinstance(node.parent.transform, ArgVisibilityNode)
+    and node.parent.blender == node.blender
+  ):
+    _vis_source = node.parent.transform
+
+  vis_actions = get_actions_for_node(_vis_source) if _vis_source else []
+
+  # Material assignment
+  material_target = node.render_blender if node.render_blender else node.blender
+  if (
+    hasattr(node.render, "material")
+    and node.render.material
+    and hasattr(node.render.material, "blender_material")
+    and node.render.material.blender_material
+    and material_target
+    and hasattr(material_target, "data")
+    and material_target.data
+  ):
+    render_cls_name = type(node.render).__name__
+    if render_cls_name not in {"FakeOmniLightsNode", "FakeSpotLightsNode", "FakeALSNode"}:
+      material_target.data.materials.append(node.render.material.blender_material)
+
+  _hookup_node_animations(node, ctx, vis_actions, _used_shared_parent_fallback)
+
   _compact_visibility_identity_intermediate(node)
 
-  # Diagnostic: Dump all numeric/vector attributes of the EDM node to Blender
-  # This allows the user to see what is being ignored by the parser.
-  if node.blender:
-    def _dump_diag(target, prefix="EDM_RAW_"):
-      for attr in dir(target):
-        if attr.startswith("_") or attr == "blender" or attr == "children" or attr == "parent":
-          continue
-        try:
-          val = getattr(target, attr)
-        except Exception:
-          continue
-        idprop_val = _idprop_diag_value(val)
-        if idprop_val is None:
-          continue
-        try:
-          node.blender[prefix + attr] = idprop_val
-        except Exception:
-          pass
-
-    if node.transform:
-      _dump_diag(node.transform, "EDM_TF_")
-      if hasattr(node.transform, "base"):
-          _dump_diag(node.transform.base, "EDM_BASE_")
-    if node.render:
-      _dump_diag(node.render, "EDM_RN_")
-    
-    # Store the importer's calculated Blender local matrix
-    if hasattr(node, "_local_bl"):
-      node.blender["IEDM_LOCAL_BL_MAT"] = [float(v) for row in node._local_bl for v in row]
+  _dump_node_diagnostics(node)
 
   _debug_dump_node_transform(node)
 
@@ -1287,8 +1227,6 @@ def _process_lod_post_children(node):
   assert node.blender.type == "EMPTY"
   node.blender.edm.is_lod_root = True
   try:
-    # Preserve the ordered EDM LOD bands on the root so Blender keeps the
-    # original structure instead of only the per-child projection.
     node.blender["IEDM_LOD_LEVELS"] = [
       [float(start), float(end)] for start, end in getattr(node.transform, "level", [])
     ]
@@ -1301,13 +1239,11 @@ def _process_lod_post_children(node):
 
 
 def _apply_shadeless(mat):
-  """Make a material 'shadeless' by routing the Base Color texture to Emission Color
-  on the Principled BSDF node, so it renders without lighting."""
+  """Make a material shadeless by routing Base Color to Emission Color."""
   if not mat.use_nodes:
     return
   nodes = mat.node_tree.nodes
   links = mat.node_tree.links
-  # Find the Principled BSDF node
   principled = None
   for node in nodes:
     if node.type == 'BSDF_PRINCIPLED':
@@ -1315,7 +1251,6 @@ def _apply_shadeless(mat):
       break
   if not principled:
     return
-  # Find what's connected to Base Color and duplicate that link to Emission Color
   base_color_input = principled.inputs['Base Color']
   if base_color_input.links:
     source_socket = base_color_input.links[0].from_socket

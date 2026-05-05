@@ -19,24 +19,6 @@ def get_root_object(obj):
   return obj
 
 
-def matrix_string(mat, title="Matrix", prefix=""):
-  pad  = len(title) * " "
-  lines = [
-    "{} ┌ {: 6.4f} {: 6.4f} {: 6.4f} {: 6.4f} ┐".format(title, *mat[0]),
-    "{} │ {: 6.4f} {: 6.4f} {: 6.4f} {: 6.4f} │".format(pad, *mat[1]),
-    "{} │ {: 6.4f} {: 6.4f} {: 6.4f} {: 6.4f} │".format(pad, *mat[2]),
-    "{} └ {: 6.4f} {: 6.4f} {: 6.4f} {: 6.4f} ┘".format(pad, *mat[3])]
-
-  return "\n".join(prefix + line for line in lines) \
-    .replace("-0.0000", " 0.0000") \
-    .replace(".0000", ".    ") \
-    .replace(" 0. ", "  . ")
-
-def vector_string(vec):
-  parts = ["{: 6.4f}".format(x) for x in vec]
-  return "[ " + ",".join(parts) + " ]"
-
-
 def print_edm_graph(root, inspector=None):
   """Prints a graph of the tree, optionally with an inspection function"""
 

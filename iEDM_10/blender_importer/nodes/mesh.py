@@ -51,9 +51,3 @@ def _is_identity_matrix_approx(mat, eps=1e-6):
     return False
 
 
-def _is_fake_light_render_node(render):
-  if render is None:
-    return False
-  return type(render).__name__ in ("FakeOmniLightsNode", "FakeSpotLightsNode", "FakeALSNode")
-
-

@@ -1,3 +1,12 @@
+import fnmatch
+import glob
+import json
+import os
+import re
+
+import bpy
+
+
 # Mapping from EDM animated-uniform names to EDMProps field names.
 _ANIMATED_UNIFORM_TO_EDMPROPS = {
   "emissiveValue":  "EMISSIVE_ARG",

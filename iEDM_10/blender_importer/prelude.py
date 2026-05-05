@@ -15,25 +15,18 @@ from ..edm_format.types import *
 from ..translation import TranslationGraph, TranslationNode
 
 import re
-import glob
-import fnmatch
 import os
 import itertools
 import math
 import json
-from .classifier import (
-  CLASS_3DSMAX_BANO,
-  CLASS_3DSMAX_DEF,
-  CLASS_BLENDER_DEF,
-  CLASS_COLLISION_MESH,
-  CLASS_BLOB_COLLISION,
-  CLASS_BLOB_RENDER,
-  CLASS_BLOB_SKELETAL,
-  CLASS_UNKNOWN,
-  CLASS_INVALID,
-)
 from .import_capabilities import DEFAULT_CAPABILITIES
-from .import_profiles import DEFAULT_PROFILE, get_legacy_import_profile
+
+
+class _ProfileStub:
+    name = "NONE"
+    description = ""
+
+DEFAULT_PROFILE = _ProfileStub()
 
 _SUFFIX_RE = re.compile(r"\.\d{3}$")  # matches ".000" to ".999" at end
 
@@ -65,8 +58,6 @@ class ImportContext(threading.local):
 
   def __init__(self):
     self.edm_version = 10
-    self.edm_exporter_class = CLASS_UNKNOWN
-    self.edm_exporter_detail = ""
     self.import_profile = DEFAULT_PROFILE
     self.import_capabilities = DEFAULT_CAPABILITIES
     self.transform_debug = _default_transform_debug_state()
@@ -81,16 +72,12 @@ class ImportContext(threading.local):
     self.file_has_bones = False
     self.use_scene_root_basis_object = True
     self.collision_geometry_basis_fix = False
+    self.verbosity = 0  # 0=info+warn, 1=debug, 2=verbose debug
 
 
-def _import_family_is(*families):
-  current = getattr(_import_ctx, "edm_exporter_class", CLASS_UNKNOWN)
-  return current in set(families)
-
-
-def _import_family_is_3dsmax_bano():
-  return _import_family_is(CLASS_3DSMAX_BANO)
-
+# ---------------------------------------------------------------------------
+# Import context accessors
+# ---------------------------------------------------------------------------
 
 def _import_capability_name():
   caps = getattr(_import_ctx, "import_capabilities", None)
@@ -120,7 +107,7 @@ def _import_profile_detail():
   detail = str(getattr(profile, "description", "") or "")
   if detail:
     return detail
-  return str(getattr(_import_ctx, "edm_exporter_detail", "") or "")
+  return ""
 
 
 def _import_profile_flag(flag_name, default=False):
@@ -135,6 +122,45 @@ def _import_profile_flag(flag_name, default=False):
 
 _import_ctx = ImportContext()
 
+
+# ---------------------------------------------------------------------------
+# Leveled logger — use _log.info / _log.warn / _log.debug throughout
+# ---------------------------------------------------------------------------
+
+class _IEDMLogger:
+  """Minimal leveled logger for the iEDM importer.
+
+  Verbosity levels (controlled via _import_ctx.verbosity):
+    0  — info + warn always shown  (default)
+    1  — also shows debug level 1  (node transforms, flag dumps)
+    2  — also shows debug level 2  (per-keyframe data)
+  """
+
+  PREFIX = "[iEDM]"
+
+  def info(self, msg):
+    print("{} Info: {}".format(self.PREFIX, msg))
+
+  def warn(self, msg, exc=None, node=None):
+    parts = ["{} Warning: {}".format(self.PREFIX, msg)]
+    if node is not None:
+      parts.append("(node={})".format(node))
+    if exc is not None:
+      parts.append("({}: {})".format(type(exc).__name__, exc))
+    print(" ".join(parts))
+
+  def debug(self, msg, level=1):
+    v = getattr(_import_ctx, "verbosity", 0)
+    if v >= level:
+      print("{} Debug[{}]: {}".format(self.PREFIX, level, msg))
+
+
+_log = _IEDMLogger()
+
+
+# ---------------------------------------------------------------------------
+# Debug log helpers (visibility / transform)
+# ---------------------------------------------------------------------------
 
 def _append_debug_log_line(line):
   dbg = getattr(_import_ctx, "visibility_debug", {}) or {}
@@ -209,14 +235,6 @@ def _log_bone_debug_event(stage, payload, *names):
   _append_transform_log_line(line)
 
 
-def _matrix_flat_rows(mat):
-  try:
-    m = Matrix(mat)
-    return [round(float(v), 9) for row in m for v in row]
-  except Exception:
-    return None
-
-
 def _matrix_trs_summary(mat):
   try:
     loc, rot, scale = Matrix(mat).decompose()
@@ -227,20 +245,6 @@ def _matrix_trs_summary(mat):
     }
   except Exception:
     return None
-
-
-def _anim_rest_debug_enabled():
-  dbg = getattr(_import_ctx, "transform_debug", {}) or {}
-  return bool(dbg.get("log_path") and dbg.get("target") == "su-25t.edm")
-
-
-def _log_anim_rest_event(stage, payload):
-  if not _anim_rest_debug_enabled():
-    return
-  try:
-    _append_transform_log_line("[iEDM][ANIMREST] {} {}".format(stage, json.dumps(payload, separators=(",", ":"), sort_keys=True)))
-  except Exception:
-    pass
 
 
 def _node_visibility_chain_args(node):
@@ -275,6 +279,10 @@ def _anim_frame_to_scene_frame(frame_value):
   except (OverflowError, ValueError):
     return 0
 
+
+# ---------------------------------------------------------------------------
+# Visibility / control-pair chain analysis
+# ---------------------------------------------------------------------------
 
 def _is_authored_argvis_control_pair(node):
   """Return True for an authored ArgVisibility -> Arg* control pair with the same name.
@@ -473,32 +481,6 @@ def _is_root_visibility_pair_child(node):
     return False
 
 
-def _is_mixed_root_visibility_direct_anim_child(node):
-  """Return True for a direct animated child inside a mixed root visibility branch."""
-  try:
-    tf = getattr(node, "transform", None)
-    if not isinstance(tf, AnimatingNode) or isinstance(tf, ArgVisibilityNode):
-      return False
-    if _is_authored_argvis_control_pair(tf):
-      return False
-    parent = getattr(node, "parent", None)
-    parent_tf = getattr(parent, "transform", parent) if parent is not None else None
-    if not isinstance(parent_tf, ArgVisibilityNode):
-      return False
-    if not _has_only_visibility_ancestors(node):
-      return False
-    children = list(getattr(parent, "children", None) or [])
-    has_render_child = any(getattr(ch, "render", None) is not None for ch in children)
-    has_anim_child = any(
-      isinstance(getattr(ch, "transform", None), AnimatingNode)
-      and not isinstance(getattr(ch, "transform", None), ArgVisibilityNode)
-      for ch in children
-    )
-    return has_render_child and has_anim_child
-  except Exception:
-    return False
-
-
 def _is_child_of_file_root(node):
   parent = getattr(node, "parent", None)
   if parent is None:
@@ -532,20 +514,6 @@ def _is_child_of_file_root(node):
   return False
 
 
-def _is_direct_child_of_file_root(node):
-  """Return True only if node is a direct child of the file root (no ArgVisibility ancestor chain).
-  
-  Unlike _is_child_of_file_root which walks through ArgVisibilityNode ancestors,
-  this only matches nodes whose immediate parent is the file root.
-  """
-  parent = getattr(node, "parent", None)
-  if parent is None:
-    if hasattr(node, "transform") and not hasattr(node, "base"):
-      return False
-    return True
-  return getattr(parent, "parent", None) is None
-
-
 def _ob_local_is_identity(o, eps=1e-6):
   """Return True if o.matrix_local is (approximately) the identity matrix."""
   try:
@@ -557,6 +525,10 @@ def _ob_local_is_identity(o, eps=1e-6):
   except Exception:
     return False
 
+
+# ---------------------------------------------------------------------------
+# Object / node classification helpers
+# ---------------------------------------------------------------------------
 
 def _is_connector_object(obj):
   if obj is None:
@@ -691,10 +663,30 @@ def _transform_display_name(tfnode):
   return name
 
 
+# ---------------------------------------------------------------------------
+# Blender object property helpers
+# ---------------------------------------------------------------------------
+
 def _set_official_special_type(obj, special_type):
   """Set official EDM exporter object type when that addon is present."""
   if hasattr(obj, "EDMProps"):
     obj.EDMProps.SPECIAL_TYPE = special_type
+
+
+def _set_edmprop(obj, prop_name, value):
+  if not hasattr(obj, "EDMProps"):
+    return
+  edm_props = obj.EDMProps
+  if hasattr(edm_props, prop_name):
+    try:
+      # Clamp integers to 32-bit signed limit for Blender's IntProperty.
+      if isinstance(value, int):
+        value = min(2147483647, max(-2147483648, value))
+      setattr(edm_props, prop_name, value)
+    except (OverflowError, ValueError):
+      pass
+    except Exception as e:
+      print(f"Warning in blender_importer\\prelude.py: {e}")
 
 
 def _ensure_official_material_bridge():
