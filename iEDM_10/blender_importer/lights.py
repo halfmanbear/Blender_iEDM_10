@@ -1,3 +1,29 @@
+import json
+import math
+import os
+
+import bpy
+from mathutils import Matrix, Vector
+
+from ..edm_format.mathtypes import vector_to_blender
+from ..utils import chdir
+from .material_setup import _find_texture_file
+from .materials_bridge import (
+  _create_official_group_node,
+  _link_texture_to_group_input,
+)
+from .prelude import (
+  _BLENDER_LAMP_ENERGY_COEFFICIENT,
+  _BLENDER_LAMP_WEAK_COEFFICIENT,
+  _PBR_WATTS_TO_LUMENS,
+  _anim_frame_to_scene_frame,
+  _ensure_official_material_bridge,
+  _import_ctx,
+  _set_edmprop,
+  _set_official_special_type,
+)
+
+
 def _extract_light_property(prop_value):
   """Return (argument, keyframes, static_value) for a light property payload."""
   argument = -1
@@ -65,22 +91,6 @@ def _edm_light_brightness_to_blender_energy(brightness_value, light_type):
   if light_type != 'SUN':
     energy *= (4.0 * math.pi)
   return max(0.0, energy)
-
-
-def _set_edmprop(obj, prop_name, value):
-  if not hasattr(obj, "EDMProps"):
-    return
-  edm_props = obj.EDMProps
-  if hasattr(edm_props, prop_name):
-    try:
-      # Clamp integers to 32-bit signed limit for Blender's IntProperty
-      if isinstance(value, int):
-        value = min(2147483647, max(-2147483648, value))
-      setattr(edm_props, prop_name, value)
-    except (OverflowError, ValueError):
-      pass
-    except Exception as e:
-      print(f"Warning in blender_importer\lights.py: {e}")
 
 
 def _new_fcurve(action, data_path, array_index=None):
@@ -750,13 +760,6 @@ def _add_fake_spot_direction_child(parent_obj, direction, distance=1.0):
   child.rotation_quaternion = quat
   bpy.context.collection.objects.link(child)
   return child
-
-
-def _unpack_uv_double(dval):
-  """Decode a double that packs two floats (UV pair) via reinterpretation."""
-  import struct
-  raw = struct.pack('<d', dval)
-  return struct.unpack('<2f', raw)
 
 
 def _safe_float(value, default=0.0):

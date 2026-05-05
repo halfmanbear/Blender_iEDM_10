@@ -1,3 +1,12 @@
+# Fragment: graph debug utilities, action helpers, and collection assignment.
+# Graph construction lives in graph_build.py; bbox utilities in bbox_utils.py.
+# All names resolved via the shared namespace injected by reader.py.
+
+
+# ---------------------------------------------------------------------------
+# Transform debug utilities
+# ---------------------------------------------------------------------------
+
 def _reset_transform_debug(options):
   options = options or {}
   enabled = bool(options.get("debug_transforms", False))
@@ -78,6 +87,7 @@ def _debug_filter_terms():
     return [term.strip().lower() for term in needle.split(",") if term.strip()]
   return [str(needle).strip().lower()]
 
+
 def _anim_vector_to_blender(v):
   return Vector(v)
 
@@ -102,20 +112,6 @@ def _is_neg90_x_basis_matrix(mat, eps=1e-3):
     return False
 
 
-def _anim_base_quaternion_q1_to_blender(node, q):
-  """Return the authored base/rest quaternion without an extra basis swap.
-
-  FA-18 style v10 control-surface nodes (e.g. Stv_F1/Stv_F2/Stv_F3) already
-  carry their rest quaternion in the same local basis as their mesh data and
-  base.position. Applying an additional quaternion_to_blender conversion here
-  breaks mirrored placement and pushes render children away from the airframe.
-  """
-  q_in = q if hasattr(q, "to_matrix") else Quaternion(q)
-  if _import_profile_flag("preserve_authored_q1_local_basis"):
-    return q_in
-  return _anim_quaternion_to_blender(q_in)
-
-
 def _anim_scale_components(value):
   if len(value) < 3:
     return (1.0, 1.0, 1.0)
@@ -129,7 +125,6 @@ def _expected_local_matrix(tfnode, blender_obj=None):
     is_connector = _is_connector_transform(tfnode, blender_obj)
     local_mat = Matrix(tfnode.matrix)
     if is_connector:
-      # Remove the exporter's fixed 90-degree X rotation instead of stripping all rotation.
       local_mat = local_mat @ Matrix.Rotation(math.radians(-90.0), 4, "X")
     if (
       blender_obj is not None
@@ -181,7 +176,6 @@ def _debug_dump_node_transform(node):
     return
 
   obj = node.blender
-  # Ensure matrix_local/world reflect latest assignments before comparison.
   bpy.context.view_layer.update()
 
   edm_local = _expected_local_matrix(getattr(node, "transform", None), obj)
@@ -218,361 +212,17 @@ def _debug_dump_node_transform(node):
 
   _import_ctx.transform_debug["emitted"] += 1
 
-def iterate_renderNodes(edmFile):
-  """Iterates all renderNodes in an edmFile - whilst ignoring any nesting
-  due to e.g. renderNode splitting"""
-  for node in edmFile.renderNodes:
-    if hasattr(node, "children") and node.children:
-      for child in node.children:
-        yield child
-    else:
-      yield node
 
-def iterate_all_objects(edmFile):
-  for node in itertools.chain(iterate_renderNodes(edmFile), edmFile.connectors, edmFile.shellNodes, edmFile.lightNodes):
-    yield node
-
-def build_graph(edmFile):
-  "Build a translation graph object from an EDM file"
-  graph = TranslationGraph()
-  # The first node is ALWAYS the root node
-  graph.root.transform = edmFile.nodes[0]
-  try:
-    edmFile.nodes[0]._translation_node = graph.root
-  except Exception:
-    pass
-  nodeLookup = {edmFile.nodes[0]: graph.root}
-
-  # Add stable indices to transform nodes for deterministic fallback naming.
-  for i, tfnode in enumerate(edmFile.nodes):
-    tfnode._graph_idx = i
-
-  # Add an entry for every other transform node
-  for tfnode in edmFile.nodes[1:]:
-    newNode = TranslationNode()
-    newNode.transform = tfnode
-    try:
-      tfnode._translation_node = newNode
-    except Exception:
-      pass
-    nodeLookup[tfnode] = newNode
-    graph.nodes.append(newNode)
-
-  # Make the parent/child links
-  for node in graph.nodes:
-    if node.transform.parent:
-      if node.transform.parent not in nodeLookup:
-        raise ValueError(f"Transform node has parent not in node list: {node.transform.parent}")
-      node.parent = nodeLookup[node.transform.parent]
-      node.parent.children.append(node)
-
-  # Verify we only have one root
-  assert len([x for x in graph.nodes if not x.parent]) == 1, "More than one root node after reading EDM"
-
-  # Connect every renderNode to it's place in the chain
-  for i, node in enumerate(iterate_all_objects(edmFile)):
-    node._graph_render_idx = i
-    if not hasattr(node, "parent") or node.parent is None:
-      if (isinstance(node, (FakeOmniLightsNode, FakeSpotLightsNode, FakeALSNode))
-          or type(node).__name__ in ("FakeOmniLightsNode", "FakeSpotLightsNode", "FakeALSNode")):
-        owner = graph.root
-      else:
-        print("Warning: Node {} has no parent attribute; skipping".format(node))
-        continue
-    elif node.parent not in nodeLookup:
-      print("Warning: Node {} parent {} not in lookup; skipping".format(node, node.parent))
-      continue
-    else:
-      owner = nodeLookup[node.parent]
-    newNode = TranslationNode()
-    newNode.render = node
-    graph.attach_node(newNode, owner)
-
-  # Keep transform and render nodes separate in general, but absorb simple
-  # connector-helper chains to avoid creating implementation-detail empties.
-  def _absorb_connector_helper(node):
-    return # DISABLED: absorbing the Connector render payload into its parent TransformNode
-           # prevents _collapse_chains from recognising that node as a "Connector Transform"
-           # dummy child, leaving a spurious model:TransformNode wrapping model:Connector
-           # objects in the Blender scene. Leave disabled so _collapse_chains can handle it.
-    if node.type != "TRANSFORM":
-      return
-    if node.render or len(node.children) != 1:
-      return
-    child = node.children[0]
-    if child.type != "RENDER" or child.children:
-      return
-    if not isinstance(child.render, Connector):
-      return
-    node.render = child.render
-    graph.remove_node(child)
-
-  graph.walk_tree(_absorb_connector_helper)
-
-  # Collapse redundant TransformNode -> RenderNode chains to reduce graph size.
-  # This merges the render component up into the transform node.
-  def _collapse_transform_render_chains(node):
-    if node.type != "TRANSFORM":
-      return
-
-    if node.render or len(node.children) != 1:
-      return
-    child = node.children[0]
-    if child.type != "RENDER":
-      return
-    # Don't absorb Connector render nodes — absorbing them gives the parent
-    # TransformNode a render payload, which prevents _collapse_chains from
-    # treating it as a collapsible "Connector Transform" dummy child, leaving
-    # a spurious model:TransformNode wrapping model:Connector in the scene.
-    if isinstance(child.render, Connector):
-      return
-    # Only collapse static TransformNodes.
-    # Collapsing ArgAnimationNode changes the basis frame for animations if the
-    # child RenderNode had a rotation (e.g. from Y-up to Z-up), leading to
-    # incorrect orientation or animation axes.
-    if not isinstance(node.transform, TransformNode):
-      return
-    # Keep direct render ownership explicit under argument-driven wrappers.
-    parent_tf = getattr(getattr(node, "parent", None), "transform", None)
-    if isinstance(parent_tf, (ArgVisibilityNode, ArgAnimationNode)):
-      return
-
-    # Move render payload to parent
-    node.render = child.render
-    # Remove child
-    graph.remove_node(child)
-
-  graph.walk_tree(_collapse_transform_render_chains)
-
-  # --- Pre-compute local/world matrices in Blender space for graph simplification ---
-  graph.root._is_graph_root = True
-  
-  # For V10+, the graph root carries the global basis fix.
-  m_root_edm = Matrix.Identity(4)
-  root_tf = graph.root.transform
-  if root_tf:
-    if hasattr(root_tf, "matrix"):
-      m_root_edm = Matrix(root_tf.matrix)
-    elif hasattr(root_tf, "base") and hasattr(root_tf.base, "matrix"):
-      m_root_edm = Matrix(root_tf.base.matrix)
-
-  if _import_ctx.edm_version >= 10 and _import_profile_flag("graph_root_v10_basis_fix"):
-    graph.root._local_bl = _ROOT_BASIS_FIX @ m_root_edm
-  else:
-    graph.root._local_bl = Matrix.Identity(4)
-    
-  graph.root._world_bl = graph.root._local_bl.copy()
-
-  for node in graph.nodes:
-    if node == graph.root:
-      continue
-    m_edm = Matrix.Identity(4)
-    tf = node.transform
-    if tf:
-      if hasattr(tf, "matrix"):
-        m_edm = Matrix(tf.matrix)
-      elif hasattr(tf, "base") and hasattr(tf.base, "matrix"):
-        m_edm = Matrix(tf.base.matrix)
-      elif isinstance(tf, Bone) and hasattr(tf, "bone_matrix"):
-        m_edm = Matrix(tf.bone_matrix)
-    rn = node.render
-    if rn:
-      m_rn = Matrix.Identity(4)
-      if hasattr(rn, "pos"):
-        m_rn = Matrix.Translation(Vector(rn.pos[:3]))
-      elif hasattr(rn, "matrix"):
-        m_rn = Matrix(rn.matrix)
-      
-      if not m_rn.is_identity:
-        m_edm = m_edm @ m_rn
-
-    # Convert to Blender space for graph decisions.
-    # For V10, no per-node axis conversion; V8 uses a full axis swap.
-    node._local_bl = m_edm
-
-  # Calculate world matrices recursively
-  _visited_world = set()
-  def _calculate_world_bl(node):
-    if id(node) in _visited_world:
-      return
-    _visited_world.add(id(node))
-    if node.parent and hasattr(node.parent, "_world_bl"):
-      node._world_bl = node.parent._world_bl @ node._local_bl
-    elif not hasattr(node, "_world_bl"):
-      node._world_bl = node._local_bl.copy()
-    for child in node.children:
-      _calculate_world_bl(child)
-
-  _calculate_world_bl(graph.root)
-
-  # --- Mark skeleton nodes before collapsing ---
-  for n in graph.nodes:
-    n._is_skeleton = is_skeleton_node(n) or (n.render is not None)
-
-  # --- Surgical elimination of exporter artifacts ---
-  if _import_profile_flag("eliminate_exporter_artifact_wrappers"):
-    nodes_to_remove = []
-    for n in graph.nodes:
-      if n == graph.root:
-        continue
-      if n.render is not None:
-        continue
-      name = _transform_display_name(n.transform)
-      # Skip identity placeholder "root" nodes directly under graph root
-      if name in {"root", ""} and n.parent == graph.root and n._local_bl.is_identity:
-        nodes_to_remove.append(n)
-        continue
-      # Skip "Connector Transform" and "Fake Light Transform" wrapper artifacts
-      if name in {"Connector Transform", "Fake Light Transform"} and n.parent:
-        nodes_to_remove.append(n)
-        continue
-
-    for n in nodes_to_remove:
-      p = n.parent
-      if p is None:
-        continue
-      insert_at = p.children.index(n) if n in p.children else len(p.children)
-      if n in p.children:
-        p.children.pop(insert_at)
-      for child in list(n.children):
-        child.parent = p
-        p.children.insert(insert_at, child)
-        insert_at += 1
-        child._local_bl = n._local_bl @ child._local_bl
-      if n in graph.nodes:
-        graph.nodes.remove(n)
-
-    # Recalculate world matrices after elimination
-    _visited_world.clear()
-    _calculate_world_bl(graph.root)
-
-  # --- Collapse redundant single-child transform chains ---
-  def _collapse_chains(node):
-    if not node.children or node.render:
-      return
-    if not hasattr(node, "_collapsed_transforms"):
-      node._collapsed_transforms = [node.transform] if node.transform else []
-
-    if len(node.children) == 1:
-      child = node.children[0]
-      if child.transform and not child.render:
-        name_self = _transform_display_name(node.transform)
-        name_child = _transform_display_name(child.transform)
-        
-        # Preserve authored same-name Visibility -> Animation pairs as explicit
-        # two-object chains. Collapsing them forces visibility and transform
-        # animation onto one Blender object, which the official exporter later
-        # re-splits into synthetic .001/.002 helpers.
-        is_authored_pair = (name_self and name_self != "_" and name_self == name_child)
-        if is_authored_pair and _import_profile_flag("preserve_authored_argvis_control_pairs"):
-          return
-
-        # Don't collapse skeleton nodes (preserves Empties for animation)
-        if getattr(node, "_is_skeleton", False) or getattr(child, "_is_skeleton", False):
-          return
-        
-        is_dummy_child = name_child in {"Connector Transform", "Fake Light Transform", ""}
-        if is_dummy_child:
-          node._local_bl = node._local_bl @ child._local_bl
-          child_tfs = getattr(child, "_collapsed_transforms", [child.transform] if child.transform else [])
-          node._collapsed_transforms.extend(child_tfs)
-          for grandchild in list(child.children):
-            grandchild.parent = node
-            node.children.append(grandchild)
-          node.children.remove(child)
-          if child in graph.nodes:
-            graph.nodes.remove(child)
-          _collapse_chains(node)
-
-  if _import_profile_flag("collapse_dummy_transform_chains"):
-    graph.walk_tree(_collapse_chains)
-
-  # Recalculate world matrices after chain collapse
-  _visited_world.clear()
-  _calculate_world_bl(graph.root)
-
-  # --- Collapse single generic-named render child into parent transform ---
-  def _collapse_to_mesh(node):
-    if node.transform is None or node.render is not None:
-      return
-    if len(node.children) != 1:
-      return
-    child = node.children[0]
-    child_name = getattr(child.render, "name", "")
-    if not child.render:
-      return
-    tf = node.transform
-    # Keep explicit control-node structure under most argument-driven wrappers.
-    # A plain ArgVisibility wrapper around one mesh is usually just an authored
-    # visibility action on that mesh, so collapse it for Blender scene parity.
-    if isinstance(tf, ArgAnimationNode):
-      return
-    if (
-      isinstance(tf, ArgVisibilityNode)
-      and len(node.children) == 1
-      and _import_profile_flag("collapse_single_argvis_mesh_wrapper")
-    ):
-      pass
-    elif isinstance(tf, ArgVisibilityNode):
-      return
-
-    render_cls_name = type(child.render).__name__
-    is_mesh_like_render = render_cls_name in {"RenderNode", "ShellNode", "NumberNode"}
-    
-    # Structural check: collapse single render children into parent transform
-    # if the child is a basic mesh and parent is not an argument-driven guard.
-    is_anim_tf_for_generic_guard = isinstance(tf, AnimatingNode) and not isinstance(tf, ArgVisibilityNode)
-    
-    # We collapse if the mesh doesn't have a shared parent (to avoid breaking v10 split nodes)
-    # and isn't bone-related.
-    render_shared = getattr(child.render, "shared_parent", None) is not None
-    bone_related = _is_bone_transform(tf)
-
-    should_collapse = (
-      is_mesh_like_render 
-      and not is_anim_tf_for_generic_guard 
-      and not render_shared 
-      and not bone_related
-    )
-
-    if should_collapse:
-      node.render = child.render
-      node.children = child.children
-      for c in node.children:
-        c.parent = node
-      if child in graph.nodes:
-        graph.nodes.remove(child)
-      _collapse_to_mesh(node)
-
-  if _import_profile_flag("collapse_single_mesh_render_to_parent"):
-    graph.walk_tree(_collapse_to_mesh)
-
-  # Deterministic traversal ordering for round-trip parity:
-  # preserve original transform stream ordering first, and only use render
-  # stream ordering for render-only nodes that have no transform owner.
-  def _child_sort_key(child):
-    if child.transform is not None:
-      tf_idx = getattr(child.transform, "_graph_idx", 1 << 30)
-      tf_name = getattr(child.transform, "name", "") or ""
-      return (0, tf_idx, tf_name)
-
-    render_idx = 1 << 30
-    if child.render is not None:
-      render_idx = getattr(child.render, "_graph_render_idx", render_idx)
-    render_name = getattr(child.render, "name", "") if child.render is not None else ""
-    return (1, render_idx, render_name)
-
-  def _sort_children(node):
-    if node.children:
-      node.children.sort(key=_child_sort_key)
-
-  graph.walk_tree(_sort_children)
-
-  return graph
-
+# ---------------------------------------------------------------------------
+# Semantic name mapping (populated by import capabilities)
+# ---------------------------------------------------------------------------
 
 _SEMANTIC_NAME_MAP = {}
 
+
+# ---------------------------------------------------------------------------
+# Action helpers
+# ---------------------------------------------------------------------------
 
 def _get_action_argument(action):
   if action is None:
@@ -583,13 +233,13 @@ def _get_action_argument(action):
       if arg >= 0:
         return arg
   except Exception as e:
-    print(f"Warning in blender_importer\graph_pipeline.py: {e}")
+    _log.warn("action.argument read: {}".format(e), exc=e)
   try:
     prefix = str(getattr(action, "name", "")).split("_", 1)[0]
     if prefix and (prefix.isdigit() or (prefix.startswith("-") and prefix[1:].isdigit())):
       return int(prefix)
   except Exception as e:
-    print(f"Warning in blender_importer\graph_pipeline.py: {e}")
+    _log.warn("action name prefix parse: {}".format(e), exc=e)
   return None
 
 
@@ -607,7 +257,7 @@ def _copy_fcurve_points(src_curve, dst_curve):
       new_kp.handle_right_type = kp.handle_right_type
       new_kp.easing = kp.easing
     except Exception as e:
-      print(f"Warning in blender_importer\graph_pipeline.py: {e}")
+      _log.debug("fcurve interpolation copy: {}".format(e), level=2)
 
 
 def _merge_actions_by_argument(actions):
@@ -664,16 +314,21 @@ def _push_action_to_nla(ob, action):
     track.name = action.name
     strip = track.strips.new(action.name, 0, action)
     strip.extrapolation = 'HOLD'
-    # For visibility actions, use 'COMBINED' blend type; otherwise 'REPLACE'.
-    # This allows multiple visibility actions to correctly overlap.
     if "Visib" in action.name:
       strip.blend_type = 'COMBINED'
     else:
       strip.blend_type = 'REPLACE'
     return True
-  except Exception:
+  except Exception as e:
+    _log.warn("NLA push for '{}' on '{}': {}".format(
+      getattr(action, "name", "<action>"),
+      getattr(ob, "name", "<unknown>"), e), exc=e)
     return False
 
+
+# ---------------------------------------------------------------------------
+# Collection assignment
+# ---------------------------------------------------------------------------
 
 def _assign_collections(graph):
   """Create named import collections and assign Blender objects to them.
@@ -682,7 +337,7 @@ def _assign_collections(graph):
   - ShellNode / SegmentsNode meshes and their ancestor empties -> "Collision"
   - Animated/hierarchical render meshes -> "Vehicle"
   - Identity-style root render helpers -> "Texture_Animation"
-  - Other nodes (SkinNode, NumberNode, LightNode, FakeLight, authored root meshes) stay in Scene Collection
+  - Other nodes stay in Scene Collection
   - Empties and connectors inherit the category of their nearby branch
   """
   scene = bpy.context.scene
@@ -755,8 +410,7 @@ def _assign_collections(graph):
         obj_category[n.blender] = "vehicle"
         changed = True
 
-  # Helper empties and connectors inserted after graph construction should
-  # follow the category of their categorized parent chain.
+  # Helper empties inserted after graph construction follow their categorized parent
   changed = True
   while changed:
     changed = False
@@ -776,11 +430,7 @@ def _assign_collections(graph):
     "texture_anim": col_tex_anim,
   }
 
-  # Move _EDMFileRoot to Vehicle collection when all categorized children are vehicle
-  # content. This prevents the visual duplication in Blender's outliner where children
-  # appear under _EDMFileRoot in Scene Collection but are also listed in Vehicle.
-  # The hierarchy is preserved via parent links, so this only affects collection
-  # organization for cleaner UX.
+  # Move _EDMFileRoot to Vehicle when all categorized children are vehicle content
   if graph.root.blender:
     root_name = getattr(graph.root.blender, 'name', '')
     if root_name == '_EDMFileRoot' and graph.root.blender.parent is None:
@@ -789,7 +439,6 @@ def _assign_collections(graph):
         cat = obj_category.get(child_obj)
         if cat:
           child_cats.add(cat)
-      # If all categorized children are vehicle and none are collision, move root to Vehicle
       if "vehicle" in child_cats and "collision" not in child_cats:
         obj_category[graph.root.blender] = "vehicle"
 
@@ -801,7 +450,8 @@ def _assign_collections(graph):
       try:
         cur_col.objects.unlink(obj)
       except Exception as e:
-        print(f"Warning in blender_importer\graph_pipeline.py: {e}")
+        _log.warn("collection unlink '{}': {}".format(
+          getattr(obj, "name", "<unknown>"), e), exc=e)
     try:
       target.objects.link(obj)
     except RuntimeError:
@@ -817,158 +467,3 @@ def _assign_collections(graph):
     return False
 
   _exclude_layer_collection(bpy.context.view_layer.layer_collection, "Texture_Animation")
-
-
-def _transform_aabb_to_blender(fix, bmin, bmax):
-  """Transform an EDM AABB by an orthogonal matrix into Blender space.
-
-  Applies *fix* to all 8 corners of the axis-aligned box and returns the
-  new (bmin, bmax) in the target coordinate frame.  Required because a pure
-  rotation remaps which axis is min/max, so transforming only the two
-  diagonal corners is not sufficient.
-  """
-  corners = [
-    fix @ Vector((x, y, z))
-    for x in (bmin.x, bmax.x)
-    for y in (bmin.y, bmax.y)
-    for z in (bmin.z, bmax.z)
-  ]
-  return (
-    Vector((min(c.x for c in corners), min(c.y for c in corners), min(c.z for c in corners))),
-    Vector((max(c.x for c in corners), max(c.y for c in corners), max(c.z for c in corners))),
-  )
-
-
-def create_bounding_box_from_root(root, coord_fix=None):
-  """Create an empty cube representing the EDM bounding box.
-
-  *coord_fix* is an optional Matrix applied to the raw EDM AABB corners
-  before placement (use _ROOT_BASIS_FIX when a scene root basis object
-  carries the Y→Z conversion for the rest of the scene).
-  """
-  if not hasattr(root, "boundingBoxMin"):
-    return None
-  bmin = vector_to_blender(root.boundingBoxMin)
-  bmax = vector_to_blender(root.boundingBoxMax)
-  if coord_fix is not None:
-    bmin, bmax = _transform_aabb_to_blender(coord_fix, bmin, bmax)
-  center = (bmin + bmax) * 0.5
-  dims = Vector((abs(bmax.x - bmin.x), abs(bmax.y - bmin.y), abs(bmax.z - bmin.z)))
-  ob = bpy.data.objects.new("Bounding_Box", None)
-  ob.empty_display_type = "CUBE"
-  ob.location = center
-  ob.scale = dims * 0.5
-  ob.empty_display_size = 1.0
-  try:
-    ob["_iedm_raw_bbox"] = json.dumps([
-      float(root.boundingBoxMin[0]), float(root.boundingBoxMin[1]), float(root.boundingBoxMin[2]),
-      float(root.boundingBoxMax[0]), float(root.boundingBoxMax[1]), float(root.boundingBoxMax[2]),
-    ], separators=(",", ":"))
-  except Exception as e:
-    print(f"Warning in blender_importer\graph_pipeline.py: {e}")
-  _set_official_special_type(ob, "BOUNDING_BOX")
-  bpy.context.collection.objects.link(ob)
-  return ob
-
-
-def _has_special_box(special_type):
-  """Return True if a scene object already represents a given special box type."""
-  for obj in bpy.data.objects:
-    if hasattr(obj, "EDMProps") and getattr(obj.EDMProps, "SPECIAL_TYPE", "") == special_type:
-      return True
-  return False
-
-
-def _get_special_box(special_type):
-  for obj in bpy.data.objects:
-    if hasattr(obj, "EDMProps") and getattr(obj.EDMProps, "SPECIAL_TYPE", "") == special_type:
-      return obj
-  return None
-
-
-def _cache_root_aabb_payloads_on_scene(root):
-  """Cache raw imported AABB payloads on the scene for export fallback."""
-  scn = bpy.context.scene
-  try:
-    if hasattr(root, "boundingBoxMin") and hasattr(root, "boundingBoxMax"):
-      scn["_iedm_raw_bbox"] = json.dumps([
-        float(root.boundingBoxMin[0]), float(root.boundingBoxMin[1]), float(root.boundingBoxMin[2]),
-        float(root.boundingBoxMax[0]), float(root.boundingBoxMax[1]), float(root.boundingBoxMax[2]),
-      ], separators=(",", ":"))
-  except Exception as e:
-    print(f"Warning in blender_importer\graph_pipeline.py: {e}")
-  try:
-    user_box = getattr(root, "user_box", None)
-    if user_box is not None:
-      min_vec_edm = Vector(user_box[0])
-      max_vec_edm = Vector(user_box[1])
-      if not any(math.isinf(v) for v in min_vec_edm) and not any(math.isinf(v) for v in max_vec_edm):
-        scn["_iedm_raw_user_box"] = json.dumps([
-          float(min_vec_edm[0]), float(min_vec_edm[1]), float(min_vec_edm[2]),
-          float(max_vec_edm[0]), float(max_vec_edm[1]), float(max_vec_edm[2]),
-        ], separators=(",", ":"))
-  except Exception as e:
-    print(f"Warning in blender_importer\graph_pipeline.py: {e}")
-  try:
-    light_box = getattr(root, "light_box", None)
-    if light_box is not None:
-      min_vec_edm = Vector(light_box[0])
-      max_vec_edm = Vector(light_box[1])
-      if not any(math.isinf(v) for v in min_vec_edm) and not any(math.isinf(v) for v in max_vec_edm):
-        scn["_iedm_raw_light_box"] = json.dumps([
-          float(min_vec_edm[0]), float(min_vec_edm[1]), float(min_vec_edm[2]),
-          float(max_vec_edm[0]), float(max_vec_edm[1]), float(max_vec_edm[2]),
-        ], separators=(",", ":"))
-  except Exception as e:
-    print(f"Warning in blender_importer\\graph_pipeline.py: {e}")
-
-
-def _create_special_box(name, special_type, min_vec_edm, max_vec_edm, raw_prop_name, coord_fix=None):
-  min_vec = vector_to_blender(min_vec_edm)
-  max_vec = vector_to_blender(max_vec_edm)
-  if coord_fix is not None:
-    min_vec, max_vec = _transform_aabb_to_blender(coord_fix, min_vec, max_vec)
-  center = (min_vec + max_vec) * 0.5
-  dims = Vector((abs(max_vec.x - min_vec.x), abs(max_vec.y - min_vec.y), abs(max_vec.z - min_vec.z)))
-  ob = _get_special_box(special_type)
-  if ob is None:
-    ob = bpy.data.objects.new(name, None)
-    ob.empty_display_type = "CUBE"
-    ob.empty_display_size = 1.0
-    _set_official_special_type(ob, special_type)
-    bpy.context.collection.objects.link(ob)
-  ob.location = center
-  ob.scale = dims * 0.5
-  try:
-    ob[raw_prop_name] = json.dumps([
-      float(min_vec_edm[0]), float(min_vec_edm[1]), float(min_vec_edm[2]),
-      float(max_vec_edm[0]), float(max_vec_edm[1]), float(max_vec_edm[2]),
-    ], separators=(",", ":"))
-  except Exception as e:
-    print(f"Warning in blender_importer\\graph_pipeline.py: {e}")
-  _set_official_special_type(ob, special_type)
-  return ob
-
-
-def _create_user_box_from_root(root, coord_fix=None):
-  """Create an empty cube representing the EDM user box when distinct."""
-  user_box = getattr(root, "user_box", None)
-  if user_box is None:
-    return None
-  min_vec_edm = Vector(user_box[0])
-  max_vec_edm = Vector(user_box[1])
-  if any(math.isinf(v) for v in min_vec_edm) or any(math.isinf(v) for v in max_vec_edm):
-    return None
-  return _create_special_box("User_Box", "USER_BOX", min_vec_edm, max_vec_edm, "_iedm_raw_user_box", coord_fix=coord_fix)
-
-
-def _create_light_box_from_root(root, coord_fix=None):
-  """Create an empty cube representing the EDM light box when present."""
-  light_box = getattr(root, "light_box", None)
-  if light_box is None:
-    return None
-  min_vec_edm = Vector(light_box[0])
-  max_vec_edm = Vector(light_box[1])
-  if any(math.isinf(v) for v in min_vec_edm) or any(math.isinf(v) for v in max_vec_edm):
-    return None
-  return _create_special_box("Light_Box", "LIGHT_BOX", min_vec_edm, max_vec_edm, "_iedm_raw_light_box", coord_fix=coord_fix)
