@@ -1,26 +1,47 @@
 # EDM model files – Blender Import Addon (EDM v10)
 
-Unofficial, experimental Blender addon to **import DCS World `.EDM` model files (EDM v10)** into Blender.
+Unofficial, experimental Blender addon that enables modders to migrate their own EDM assets into Blender to align with the new official Eagle Dynamics exporter workflow.
 
-## Compatibility
-- **Blender:** 4.5 LTS (tested on **4.5.6+**)
-- **EDM format:** v10 (primary target)
-- **Recommended:** Install/enable the official Eagle Dynamics `io_scene_edm` addon for best parity (materials/props integration)
-
-Official ED exporter addon (recommended):
-- `io_scene_edm` (Blender plugin build 259871): https://mods.eagle.ru/blender_plugin/files.html  
-  In Blender press `N` → **EDM Export** tab for ED object properties.
-
-## Legal & Usage Disclaimer
-This project is **unofficial** and not affiliated with Eagle Dynamics.
-All `.EDM` files/assets remain the property of their rights holders and are subject to the DCS World EULA.
-
-Intended for personal/private use, mod development, technical research, preservation, diagnostics, and learning.
-Not for commercial use or redistribution of proprietary ED assets.
+> [!IMPORTANT]
+> **Blender 4.5 LTS required** (tested on 4.5.6+). EDM v10 format only.
 
 ---
 
-## What works (current)
+## Table of Contents
+
+- [Installation](#installation)
+- [Compatibility](#compatibility)
+- [What Works](#what-works)
+- [Import Options](#import-options)
+- [Known Limitations](#known-limitations)
+- [Roadmap](#roadmap)
+- [Legal & Usage Disclaimer](#legal--usage-disclaimer)
+- [Acknowledgements](#acknowledgements)
+
+---
+
+## Installation
+
+1. Clone or download this repository.
+2. In Blender: **Edit → Preferences → Add-ons → Install From Disk**
+3. Select the `iEDM_10` folder (or zip it first and select the zip).
+4. Enable **EDM v10 Importer** in the add-ons list.
+
+**Recommended:** Also install the official Eagle Dynamics exporter addon for best material and property parity:
+- [`io_scene_edm`](https://github.com/EagleDynamics/Blender-EDM-Exporter)
+- In Blender press `N` → **EDM Export** tab for ED object properties.
+
+---
+
+## Compatibility
+
+- **Blender:** 4.5 LTS (tested on 4.5.6+)
+- **EDM format:** v10 (primary target)
+
+---
+
+## What Works
+
 ### Import core
 - Reads and parses EDM **v10** file data
 - Imports geometry and object hierarchies (empties, parent/child structure)
@@ -43,25 +64,51 @@ Not for commercial use or redistribution of proprietary ED assets.
 
 ---
 
-## Import options (File → Import → DCS World (.edm))
-- **Shadeless:** import materials without lighting dependencies
-- **Mesh Origins:** `Approximate` (recenter for practical pivots) or `Raw EDM` (preserve raw mesh coordinates)
-- **Import Bounding Box / User Box**
-- **Debug Transforms:** prints EDM vs Blender transform details
+## Import Options
+
+Access via **File → Import → DCS World (.edm)**
+
+| Option | Description |
+|--------|-------------|
+| **Shadeless** | Import materials without lighting dependencies |
+| **Mesh Origins** | `Approximate` — recenter for practical pivots; `Raw EDM` — preserve raw mesh coordinates |
+| **Import Bounding Box** | Import EDM bounding box as a cube empty |
+| **Import User Box** | Import EDM user box as a cube empty |
+| **Debug Transforms** | Print EDM vs Blender transform details to console |
 
 ---
 
-## Known limitations
-- **Single-file import only** (multi-select UI is ignored; only the chosen file is imported)
+## Known Limitations
+
+- **Single-file import only** — multi-select UI is ignored; only the chosen file is imported
 - Original mesh object names cannot be perfectly recovered from EDM v10 alone (exporter strips some info)
 - Quad reconstruction (triangles → quads) is heuristic-based and may vary
 - Some exporter-side conventions are inferred and may differ in rare edge cases (bones/visibility/light helper chains)
 
-## In progress / not fully validated
-- Further validation against less common EDM feature combinations
-- Refinement of topology/quad merging heuristics and naming consistency
+---
+
+## Roadmap
+
+- [ ] Validate against less common EDM feature combinations
+- [ ] Refine topology/quad merging heuristics
+- [ ] Improve naming consistency across node types
+- [ ] Multi-file import support
 
 ---
 
-## Further information
-Project docs / background: https://ndevenish.github.io/Blender_ioEDM/
+## Legal & Usage Disclaimer
+
+This project is **unofficial** and not affiliated with Eagle Dynamics.
+All `.EDM` files/assets remain the property of their rights holders and are subject to the DCS World EULA.
+
+This addon is for **personal/private use only**: mod development, technical research, preservation, diagnostics, and learning.
+Not for commercial use or redistribution of proprietary ED assets.
+
+**License:** This project is released for non-commercial personal use. No warranty is provided.
+
+---
+
+## Acknowledgements
+
+- [ndevenish/Blender_ioEDM](https://ndevenish.github.io/Blender_ioEDM/) — prior art and EDM format research that informed this work
+- [Eagle Dynamics](https://github.com/EagleDynamics) — official exporter addon (`io_scene_edm`) used for material/property parity

@@ -150,7 +150,7 @@ _material_entry_lookup = {
 }
 
 class ShadowSettings(object):
-  # DLL stores bit0=cast, bit2=cast_only; bit1 is read but discarded by the engine.
+  # Shadow flags: bit0=cast, bit2=cast_only; bit1 is read but discarded by the engine.
   def __init__(self, value=None, **kwargs):
     if value is not None:
       self.cast = bool(value & 1)
