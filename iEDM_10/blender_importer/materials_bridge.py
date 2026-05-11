@@ -82,6 +82,8 @@ def _official_transparency_enum(blending):
     1: "ALPHA_BLENDING",
     2: "ALPHA_TEST",
     3: "SUM_BLENDING",
+    4: "SUM_BLENDING_SI",
+    6: "SHADOWED_BLENDING",
   }.get(value, "OPAQUE")
 
 
@@ -461,6 +463,9 @@ def _attach_official_material_bridge(mat, edm_material, texture_nodes):
     _link_texture_to_group_input(links, tex5, group_node, "Damage Base")
     _link_texture_to_group_input(links, tex18, group_node, "Damage Map (Non-Color)")
     _link_texture_to_group_input(links, tex18, group_node, "Damage Map Alpha", "Alpha")
+    mat_lower = (getattr(edm_material, "material_name", "") or "").lower()
+    glass_type_val = 'GLASS_COCKPIT' if mat_lower == 'glass_material' else 'GLASS_INSTRUMENTAL'
+    _set_group_enum_property(group_node, "glass_type", glass_type_val)
   elif official_name == names["mirror"]:
     _link_texture_to_group_input(links, tex0, group_node, "Base Color")
     _link_texture_to_group_input(links, tex10, group_node, "Normal (Non-Color)")

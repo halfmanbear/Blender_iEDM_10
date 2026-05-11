@@ -429,11 +429,53 @@ def _finish_import_postprocess(edm, graph, options):
   bpy.context.view_layer.update()
 
 
+def _run_skin_transform_postprocess():
+  """Apply object-level transforms on all skinned meshes bound to an armature.
+
+  SkinNode meshes may carry a localized matrix_basis after bind-rest resolution.
+  Applying it bakes vertex positions to the new rest and resets the object to
+  identity so the official exporter reads clean transforms on re-export.
+  """
+  view_layer = bpy.context.view_layer
+  prev_active = view_layer.objects.active
+  for o in list(bpy.context.selected_objects):
+    o.select_set(False)
+  applied = 0
+  for obj in list(bpy.data.objects):
+    if obj.type != 'MESH':
+      continue
+    if not any(m.type == 'ARMATURE' for m in obj.modifiers):
+      continue
+    try:
+      if obj.matrix_basis == Matrix.Identity(4):
+        continue
+    except Exception:
+      continue
+    try:
+      obj.select_set(True)
+      view_layer.objects.active = obj
+      bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
+      obj.select_set(False)
+      applied += 1
+    except Exception as e:
+      _log.warn("transform_apply on skin mesh '{}': {}".format(
+        getattr(obj, "name", "?"), e), exc=e)
+      try:
+        obj.select_set(False)
+      except Exception:
+        pass
+  if prev_active is not None:
+    view_layer.objects.active = prev_active
+  if applied:
+    _log.debug("Applied transforms on {} skinned mesh object(s).".format(applied))
+
+
 def _run_import_postprocess(edm, graph, options):
   _run_render_offset_postprocess(graph)
   _run_visibility_basis_postprocess(graph)
   _run_control_rewrite_postprocess(graph, options)
   _run_orientation_postprocess()
+  _run_skin_transform_postprocess()
   _finish_import_postprocess(edm, graph, options)
 
 

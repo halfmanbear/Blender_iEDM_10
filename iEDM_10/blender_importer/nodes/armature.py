@@ -620,6 +620,37 @@ def _finalize_bone_import_ctx(arm_obj, node_to_bone_name, bone_chain_nodes, arm_
 # Main entry point
 # ---------------------------------------------------------------------------
 
+def _apply_armature_transforms(arm_obj):
+  """Apply the armature's object-level transforms into its bone rest positions."""
+  if arm_obj is None:
+    return
+  try:
+    if arm_obj.matrix_basis == Matrix.Identity(4):
+      return
+  except Exception:
+    pass
+  view_layer = bpy.context.view_layer
+  prev_active = view_layer.objects.active
+  try:
+    for o in list(bpy.context.selected_objects):
+      o.select_set(False)
+    arm_obj.select_set(True)
+    view_layer.objects.active = arm_obj
+    if bpy.context.mode != 'OBJECT':
+      bpy.ops.object.mode_set(mode='OBJECT')
+    bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
+  except Exception as e:
+    _log.warn("transform_apply on armature '{}': {}".format(
+      getattr(arm_obj, "name", "?"), e), exc=e)
+  finally:
+    try:
+      arm_obj.select_set(False)
+    except Exception:
+      pass
+    if prev_active is not None:
+      view_layer.objects.active = prev_active
+
+
 def _prepare_bone_import(graph, parent_obj=None):
   """Create a single armature for EDM Bone/ArgAnimatedBone nodes."""
   _import_ctx.bone_import_ctx = None
@@ -651,6 +682,7 @@ def _prepare_bone_import(graph, parent_obj=None):
     graph,
     apply_bone_root_fix,
   )
+  _apply_armature_transforms(arm_obj)
 
 
 def _bind_skin_object(mesh_obj, skin_node):
