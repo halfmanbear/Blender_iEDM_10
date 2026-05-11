@@ -474,3 +474,27 @@ def _assign_collections(graph):
     return False
 
   _exclude_layer_collection(bpy.context.view_layer.layer_collection, "Texture_Animation")
+
+  # Create exporter-compatible named LOD collections (LOD_<id>_<dist>) so that
+  # round-tripped files preserve their LOD distance assignments on re-export.
+  for n in graph.nodes:
+    if not getattr(n, "_lod_post_children", False):
+      continue
+    levels = getattr(getattr(n, "transform", None), "level", [])
+    for i, ((start, end), child) in enumerate(zip(levels, n.children)):
+      if not getattr(child, "blender", None):
+        continue
+      col_name = "LOD_{}_{}".format(i, int(end))
+      col_lod = _get_or_create_child_col(col_vehicle, col_name)
+      objs_to_move = [child.blender] + list(child.blender.children_recursive)
+      for obj in objs_to_move:
+        if obj.name in col_vehicle.objects:
+          try:
+            col_vehicle.objects.unlink(obj)
+          except Exception:
+            pass
+        if obj.name not in col_lod.objects:
+          try:
+            col_lod.objects.link(obj)
+          except Exception:
+            pass
