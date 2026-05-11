@@ -1,7 +1,124 @@
 # Session orchestration fragment.
-# All names resolved via the shared namespace injected by reader.py.
 # Functions here drive the top-level import sequence; the pipeline detail
 # (graph construction, node processing, animations) lives in import_pipeline.py.
+
+import os
+from dataclasses import dataclass, field
+from typing import Mapping
+
+import bpy
+
+from ..edm_format import EDMFile
+from ..edm_format.mathtypes import Matrix
+from ..edm_format.types import AnimatingNode, LodNode, TransformNode
+from ..utils import chdir, print_edm_graph
+from .bbox_utils import (
+  _cache_root_aabb_payloads_on_scene,
+  _create_light_box_from_root,
+  _create_user_box_from_root,
+  _has_special_box,
+  create_bounding_box_from_root,
+)
+from .ctrl_splits import (
+  _rename_control_wrapper_mesh_pairs,
+  _split_multi_arg_nonarmature_controls,
+  _split_multi_arg_rotation_controls,
+)
+from .graph_build import build_graph
+from .graph_pipeline import (
+  _assign_collections,
+  _debug_filter_terms,
+  _debug_fmt_rot_deg,
+  _debug_fmt_vec3,
+  _reset_mesh_origin_mode,
+  _reset_transform_debug,
+)
+from .graph_postprocess import (
+  _apply_plain_root_visibility_mesh_basis_fix,
+  _apply_plain_root_visibility_object_basis_fix,
+  _apply_root_visibility_pair_wrapper_basis_fix,
+  _apply_static_root_visibility_wrapper_basis_fix,
+  _fix_owner_encoded_render_offsets,
+  _zero_render_child_mesh_locals_under_transform,
+)
+from .import_capabilities import derive_import_capabilities, inspect_import_graph
+from .material_setup import create_material
+from .node_transform import apply_node_transform
+from .nodes.armature import _prepare_bone_import
+from .nodes.core import _apply_shadeless, _process_lod_post_children, process_node
+from .nodes.diagnostics import _print_import_diagnostics
+from .orient_fixes import (
+  _apply_collision_mesh_orientation_fix,
+  _apply_scene_root_empty_orientation_fix,
+  _apply_scene_root_mesh_orientation_fix,
+)
+from .orient_scale import _rewrite_oriented_scale_controls
+from .prelude import (
+  DEFAULT_PROFILE,
+  FRAME_SCALE,
+  _ROOT_BASIS_FIX,
+  _import_capability_detail,
+  _import_capability_name,
+  _import_ctx,
+  _import_profile_detail,
+  _import_profile_flag,
+  _import_profile_name,
+  _log,
+)
+from .skin_rewrites import _resolve_skin_parent_overrides_by_bind_rest
+from .vis_rewrites import (
+  _apply_argvis_chain_basis_fix,
+  _apply_plain_root_visibility_basis_fix,
+  _apply_visibility_pair_wrapper_object_basis_fix,
+  _fix_inverse_scaled_visibility_rest_offset,
+  _restore_skin_visibility_transform_basis,
+  _split_multi_arg_visibility_controls,
+)
+
+
+@dataclass(frozen=True)
+class SceneBoxOptions:
+  bounding_box: bool = True
+  user_box: bool = True
+  light_box: bool = True
+
+  def any_enabled(self):
+    return self.bounding_box or self.user_box or self.light_box
+
+
+@dataclass(frozen=True)
+class ImportOptions:
+  raw: Mapping[str, object] = field(default_factory=dict)
+  scene_boxes: SceneBoxOptions = field(default_factory=SceneBoxOptions)
+
+  @classmethod
+  def from_mapping(cls, options):
+    if isinstance(options, cls):
+      return options
+    raw = dict(options or {})
+    return cls(raw=raw, scene_boxes=_resolve_scene_box_options(raw))
+
+  def get(self, key, default=None):
+    return self.raw.get(key, default)
+
+
+def _resolve_scene_box_options(options):
+  """Resolve scene-box creation flags from legacy and per-box options."""
+  has_individual_options = any(
+    key in options
+    for key in ("import_bounding_box", "import_user_box", "import_light_box")
+  )
+
+  if "preserve_scene_boxes" in options:
+    default_enabled = bool(options.get("preserve_scene_boxes"))
+  else:
+    default_enabled = not has_individual_options
+
+  return SceneBoxOptions(
+    bounding_box=bool(options.get("import_bounding_box", default_enabled)),
+    user_box=bool(options.get("import_user_box", default_enabled)),
+    light_box=bool(options.get("import_light_box", default_enabled)),
+  )
 
 
 def _start_import_session(filename, options):
@@ -111,8 +228,8 @@ def _store_import_metadata(edm):
     bpy.context.scene["_iedm_import_profile_detail"] = str(_import_profile_detail())
     bpy.context.scene["_iedm_import_capabilities"] = str(_import_capability_name())
     bpy.context.scene["_iedm_import_capability_detail"] = str(_import_capability_detail())
-  except Exception:
-    pass
+  except Exception as e:
+    _log.warn("store import metadata", exc=e)
 
 
 def _create_graph_root_object(graph, options, features):
@@ -180,13 +297,15 @@ def _create_graph_root_object(graph, options, features):
     graph.root.blender = None
 
 
-def _create_import_scene_boxes(edm_root, preserve_scene_boxes):
-  if preserve_scene_boxes:
+def _create_import_scene_boxes(edm_root, box_options):
+  if box_options.any_enabled():
     bbox_coord_fix = _ROOT_BASIS_FIX if _import_ctx.use_scene_root_basis_object else None
-    if not _has_special_box("BOUNDING_BOX"):
+    if box_options.bounding_box and not _has_special_box("BOUNDING_BOX"):
       create_bounding_box_from_root(edm_root, coord_fix=bbox_coord_fix)
-    _create_user_box_from_root(edm_root, coord_fix=bbox_coord_fix)
-    _create_light_box_from_root(edm_root, coord_fix=bbox_coord_fix)
+    if box_options.user_box:
+      _create_user_box_from_root(edm_root, coord_fix=bbox_coord_fix)
+    if box_options.light_box:
+      _create_light_box_from_root(edm_root, coord_fix=bbox_coord_fix)
 
 
 def _debug_dump_stage_objects(stage_name):
@@ -319,7 +438,7 @@ def _run_import_postprocess(edm, graph, options):
 
 
 def read_file(filename, options=None):
-  options = options or {}
+  options = ImportOptions.from_mapping(options)
 
   edm, features = _start_import_session(filename, options)
   _configure_mesh_origin_mode(options, features)
@@ -329,14 +448,13 @@ def read_file(filename, options=None):
 
   _import_ctx.file_has_bones = bool(features.has_bones)
 
-  preserve_scene_boxes = bool(options.get("preserve_scene_boxes", True))
   _cache_root_aabb_payloads_on_scene(edm.root)
 
   graph = build_graph(edm)
   graph.print_tree()
 
   _create_graph_root_object(graph, options, features)
-  _create_import_scene_boxes(edm.root, preserve_scene_boxes)
+  _create_import_scene_boxes(edm.root, options.scene_boxes)
 
   _prepare_bone_import(graph, graph.root.blender)
 

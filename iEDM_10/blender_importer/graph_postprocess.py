@@ -8,6 +8,7 @@ from .prelude import (
   _import_profile_flag,
   _is_root_visibility_pair_child,
   _is_static_root_visibility_wrapper,
+  _log,
 )
 
 
@@ -59,7 +60,7 @@ def _fix_owner_encoded_render_offsets(graph):
       node.blender.pop("_iedm_identity_passthrough", None)
       node.blender.pop("_iedm_narrow_identity_passthrough", None)
     except Exception as e:
-      print(f"Warning in _fix_owner_encoded_render_offsets: {e}")
+      _log.warn("_fix_owner_encoded_render_offsets", exc=e)
 
 
 def _zero_render_child_mesh_locals_under_transform(graph):
@@ -84,7 +85,7 @@ def _zero_render_child_mesh_locals_under_transform(graph):
         continue
       ob.matrix_basis = Matrix.Identity(4)
     except Exception as e:
-      print(f"Warning in _zero_render_child_mesh_locals_under_transform: {e}")
+      _log.warn("_zero_render_child_mesh_locals_under_transform", exc=e)
 
 
 def _basis_is_identity(obj, eps=1e-6):
@@ -132,7 +133,7 @@ def _apply_plain_root_visibility_object_basis_fix():
       try:
         child.matrix_basis = _ROOT_BASIS_FIX @ child.matrix_basis
       except Exception as e:
-        print(f"Warning in _apply_plain_root_visibility_object_basis_fix: {e}")
+        _log.warn("_apply_plain_root_visibility_object_basis_fix", exc=e)
 
 
 def _apply_plain_root_visibility_mesh_basis_fix():
@@ -157,7 +158,7 @@ def _apply_plain_root_visibility_mesh_basis_fix():
     try:
       ob.matrix_basis = _ROOT_BASIS_FIX @ ob.matrix_basis
     except Exception as e:
-      print(f"Warning in _apply_plain_root_visibility_mesh_basis_fix: {e}")
+      _log.warn("_apply_plain_root_visibility_mesh_basis_fix", exc=e)
 
 
 def _apply_root_visibility_pair_wrapper_basis_fix(graph):
@@ -176,7 +177,7 @@ def _apply_root_visibility_pair_wrapper_basis_fix(graph):
     try:
       ob.matrix_basis = _ROOT_BASIS_FIX.inverted() @ ob.matrix_basis
     except Exception as e:
-      print(f"Warning in _apply_root_visibility_pair_wrapper_basis_fix: {e}")
+      _log.warn("_apply_root_visibility_pair_wrapper_basis_fix", exc=e)
 
 
 def _apply_static_root_visibility_wrapper_basis_fix(graph):
@@ -201,4 +202,4 @@ def _apply_static_root_visibility_wrapper_basis_fix(graph):
     try:
       ob.matrix_basis = _ROOT_BASIS_FIX @ ob.matrix_basis
     except Exception as e:
-      print(f"Warning in _apply_static_root_visibility_wrapper_basis_fix: {e}")
+      _log.warn("_apply_static_root_visibility_wrapper_basis_fix", exc=e)

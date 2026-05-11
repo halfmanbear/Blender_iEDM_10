@@ -1,5 +1,10 @@
 # Fragment: post-pass world orientation fixes for meshes and empties.
-# All names resolved via the shared namespace injected by reader.py.
+
+import math
+
+import bpy
+
+from .prelude import _ROOT_BASIS_FIX, _import_ctx, _import_profile_flag, _log
 
 
 def _apply_collision_mesh_orientation_fix():
@@ -33,7 +38,7 @@ def _apply_collision_mesh_orientation_fix():
       if world_x_deg < 5.0 or world_x_deg > 175.0:
         ob.matrix_basis = _ROOT_BASIS_FIX @ ob.matrix_basis
     except Exception as e:
-      print(f"Warning in _apply_collision_mesh_orientation_fix: {e}")
+      _log.warn("_apply_collision_mesh_orientation_fix", exc=e)
 
 
 def _apply_scene_root_mesh_orientation_fix():
@@ -44,17 +49,17 @@ def _apply_scene_root_mesh_orientation_fix():
   applied. For animated meshes with only visibility fcurves, the fix may be applied
   to the ArgVisibilityNode parent instead.
   """
-  print("[DEBUG] _apply_scene_root_mesh_orientation_fix: starting")
+  _log.debug("_apply_scene_root_mesh_orientation_fix: starting", level=1)
   if _import_ctx.edm_version < 10:
-    print("[DEBUG] _apply_scene_root_mesh_orientation_fix: skipped (version < 10)")
+    _log.debug("_apply_scene_root_mesh_orientation_fix: skipped (version < 10)", level=1)
     return
   if not _import_profile_flag("scene_root_world_orientation_postfix"):
-    print("[DEBUG] _apply_scene_root_mesh_orientation_fix: skipped (capability disabled)")
+    _log.debug("_apply_scene_root_mesh_orientation_fix: skipped (capability disabled)", level=1)
     return
   use_root_basis = getattr(_import_ctx, "use_scene_root_basis_object", True)
-  print(f"[DEBUG] _apply_scene_root_mesh_orientation_fix: use_scene_root_basis_object={use_root_basis}")
+  _log.debug("_apply_scene_root_mesh_orientation_fix: use_scene_root_basis_object={}".format(use_root_basis), level=1)
   if not use_root_basis:
-    print("[DEBUG] _apply_scene_root_mesh_orientation_fix: skipped (no root basis)")
+    _log.debug("_apply_scene_root_mesh_orientation_fix: skipped (no root basis)", level=1)
     return
 
   bpy.context.view_layer.update()
@@ -130,7 +135,7 @@ def _apply_scene_root_mesh_orientation_fix():
             if world_x_deg2 > 5.0:
               parent_fixed += 1
               fixed_count += 1
-              print(f"[DEBUG] mesh_fix (rot_fcurves parent): {ob.name} world_x={world_x_deg:.2f} -> {world_x_deg2:.2f}deg")
+              _log.debug("mesh_fix (rot_fcurves parent): {} world_x={:.2f} -> {:.2f}deg".format(ob.name, world_x_deg, world_x_deg2), level=1)
               continue
             else:
               parent.matrix_basis = _ROOT_BASIS_FIX.inverted() @ parent.matrix_basis
@@ -172,10 +177,10 @@ def _apply_scene_root_mesh_orientation_fix():
             if world_x_deg2 > 5.0:
               cleared_anim_count += 1
               fixed_count += 1
-              print(f"[DEBUG] mesh_fix (cleared_anim): {ob.name} world_x={world_x_deg:.2f} -> {world_x_deg2:.2f}deg")
+              _log.debug("mesh_fix (cleared_anim): {} world_x={:.2f} -> {:.2f}deg".format(ob.name, world_x_deg, world_x_deg2), level=1)
             else:
               parent_world_x = _mat_to_euler_x_deg(parent.matrix_world) if parent else 0
-              print(f"[DEBUG] mesh_fix: {ob.name} FAILED world_x={world_x_deg:.2f} -> after_fix={world_x_deg2:.2f}deg (parent_world={parent_world_x:.2f})")
+              _log.debug("mesh_fix: {} FAILED world_x={:.2f} -> after_fix={:.2f}deg (parent_world={:.2f})".format(ob.name, world_x_deg, world_x_deg2, parent_world_x), level=1)
               still_broken += 1
               ob.animation_data_create()
               ad = ob.animation_data
@@ -192,16 +197,26 @@ def _apply_scene_root_mesh_orientation_fix():
         world_x_deg2 = _mat_to_euler_x_deg(ob.matrix_world)
         if world_x_deg2 > 5.0:
           fixed_count += 1
-          print(f"[DEBUG] mesh_fix (direct): {ob.name} world_x={world_x_deg:.2f} -> {world_x_deg2:.2f}deg")
+          _log.debug("mesh_fix (direct): {} world_x={:.2f} -> {:.2f}deg".format(ob.name, world_x_deg, world_x_deg2), level=1)
         else:
           still_broken += 1
-          print(f"[DEBUG] mesh_fix (direct): {ob.name} FAILED world_x={world_x_deg:.2f} -> {world_x_deg2:.2f}deg")
+          _log.debug("mesh_fix (direct): {} FAILED world_x={:.2f} -> {:.2f}deg".format(ob.name, world_x_deg, world_x_deg2), level=1)
       else:
         still_broken += 1
     except Exception as e:
-      print(f"Warning in _apply_scene_root_mesh_orientation_fix: {e}")
+      _log.warn("_apply_scene_root_mesh_orientation_fix", exc=e)
 
-  print(f"[DEBUG] _apply_scene_root_mesh_orientation_fix: fixed {fixed_count} ({parent_fixed} via parent, {cleared_anim_count} cleared anim), skipped {skipped_rotation_fcurves} rotation, {still_broken} still broken, {visibility_only_count} visibility-only")
+  _log.debug(
+    "_apply_scene_root_mesh_orientation_fix: fixed {} ({} via parent, {} cleared anim), skipped {} rotation, {} still broken, {} visibility-only".format(
+      fixed_count,
+      parent_fixed,
+      cleared_anim_count,
+      skipped_rotation_fcurves,
+      still_broken,
+      visibility_only_count,
+    ),
+    level=1,
+  )
 
 
 def _apply_scene_root_empty_orientation_fix():
@@ -259,11 +274,18 @@ def _apply_scene_root_empty_orientation_fix():
         world_x_deg2 = _mat_to_euler_x_deg(ob.matrix_world)
 
         if world_x_deg2 > 5.0:
-          print(f"[DEBUG] scene_root_empty_fix: {ob.name} world_x={world_x_deg:.2f}deg -> AFTER FIX world_x={world_x_deg2:.2f}deg")
+          _log.debug("scene_root_empty_fix: {} world_x={:.2f}deg -> after_fix={:.2f}deg".format(ob.name, world_x_deg, world_x_deg2), level=1)
           fixed_count += 1
         else:
           still_broken += 1
     except Exception as e:
-      print(f"Warning in _apply_scene_root_empty_orientation_fix: {e}")
+      _log.warn("_apply_scene_root_empty_orientation_fix", exc=e)
 
-  print(f"[DEBUG] _apply_scene_root_empty_orientation_fix: fixed {fixed_count}, skipped {skipped_rotation_fcurves} rotation, {still_broken} still broken")
+  _log.debug(
+    "_apply_scene_root_empty_orientation_fix: fixed {}, skipped {} rotation, {} still broken".format(
+      fixed_count,
+      skipped_rotation_fcurves,
+      still_broken,
+    ),
+    level=1,
+  )
