@@ -442,7 +442,7 @@ def _visibility_wrapper_needs_own_object(node):
 
   # Preserve wrappers containing a Connector under an AnimatingNode child.
   # Without this, the connector's parent empty gets auto-suffixed (.001) by
-  # Blender on export, leaking into the binary EDM connector ID.
+  # Blender on export, leaking into the EDM connector ID.
   try:
     for child in getattr(node, "children", []) or []:
       ch_tf = getattr(child, "transform", None)

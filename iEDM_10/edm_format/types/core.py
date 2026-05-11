@@ -511,7 +511,7 @@ class BaseNode(GraphNode):
     if name.startswith("'") and name.endswith("'") and len(name) >= 2:
         name = name[1:-1]
     node.name = name
-    # The DLL reads this uint but discards it without storing or using it.
+    # This uint is read but discarded without storing or using it.
     # We preserve it for lossless round-trips.
     # This is NOT the __VERSION__ value — that comes from the PropertiesSet below.
     node.version = stream.read_uint()
@@ -700,7 +700,7 @@ class ArgAnimationBase(object):
     self.matrix = stream.read_matrixd()
     self.position = stream.read_vec3d()
     self.quat_1 = stream.read_quaternion()
-    # Record the file offset of quat_2 so binary patchers can overwrite it.
+    # Record the file offset of quat_2 so it can be overwritten by patchers.
     if hasattr(stream, 'tell'):
       self._quat_2_file_offset = stream.tell()
     self.quat_2 = stream.read_quaternion()
@@ -869,7 +869,7 @@ class ArgScaleNode(ArgAnimationNode):
     arg = stream.read_uint()
     count = stream.read_uint()
     # Set 1 (4-component): scale orientation quaternion Q.
-    # The DLL applies scale as Q * diag(sx,sy,sz) * Q^-1.
+    # Scale is applied as Q * diag(sx,sy,sz) * Q^-1.
     # When Q is identity this reduces to plain axis-aligned scale.
     keys = [ScaleKey.read(stream, 4) for _ in range(count)]
     count2 = stream.read_uint()
