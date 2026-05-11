@@ -1,5 +1,20 @@
 # Fragment: visibility graph basis-fix passes.
-# All names resolved via the shared namespace injected by reader.py.
+
+import math
+
+import bpy
+from mathutils import Matrix
+
+from ..edm_format.types import AnimatingNode, ArgVisibilityNode
+from .anim_actions import (
+  _clear_object_animation_tracks,
+  _collect_merged_transform_actions_for_graph_node,
+  get_actions_for_node,
+)
+from .animation import _is_pos90_x_basis_matrix
+from .graph_pipeline import _is_neg90_x_basis_matrix
+from .graph_postprocess import _reparent_preserve_world
+from .prelude import _ROOT_BASIS_FIX, _import_ctx, _import_profile_flag, _log, _ob_local_is_identity
 
 
 def _split_multi_arg_visibility_controls(graph):
@@ -118,7 +133,7 @@ def _apply_plain_root_visibility_basis_fix(graph):
     try:
       ob.matrix_basis = _ROOT_BASIS_FIX @ ob.matrix_basis
     except Exception as e:
-      print(f"Warning in _apply_plain_root_visibility_basis_fix: {e}")
+      _log.warn("_apply_plain_root_visibility_basis_fix", exc=e)
 
 
 def _apply_visibility_pair_wrapper_object_basis_fix():
@@ -153,7 +168,7 @@ def _apply_visibility_pair_wrapper_object_basis_fix():
     try:
       ob.matrix_basis = _ROOT_BASIS_FIX.inverted() @ ob.matrix_basis
     except Exception as e:
-      print(f"Warning in _apply_visibility_pair_wrapper_object_basis_fix: {e}")
+      _log.warn("_apply_visibility_pair_wrapper_object_basis_fix", exc=e)
 
 
 def _restore_skin_visibility_transform_basis():
@@ -244,7 +259,7 @@ def _restore_skin_visibility_transform_basis():
       vis_ob.matrix_basis = Matrix.Identity(4)
       helper.matrix_basis = authored_local
     except Exception as e:
-      print(f"Warning in _restore_skin_visibility_transform_basis: {e}")
+      _log.warn("_restore_skin_visibility_transform_basis", exc=e)
       continue
 
     for mesh_ob in vis_skin_children:
@@ -252,13 +267,13 @@ def _restore_skin_visibility_transform_basis():
         _reparent_preserve_world(mesh_ob, helper)
         mesh_ob["_iedm_dbg_skin_helper_name"] = helper.name
       except Exception as e:
-        print(f"Warning in _restore_skin_visibility_transform_basis reparent: {e}")
+        _log.warn("_restore_skin_visibility_transform_basis reparent", exc=e)
 
     for mesh_ob in helper_skin_children:
       try:
         mesh_ob["_iedm_dbg_skin_helper_name"] = helper.name
       except Exception as e:
-        print(f"Warning in _restore_skin_visibility_transform_basis tag: {e}")
+        _log.warn("_restore_skin_visibility_transform_basis tag", exc=e)
 
 
 def _fix_inverse_scaled_visibility_rest_offset():
@@ -357,7 +372,7 @@ def _fix_inverse_scaled_visibility_rest_offset():
       ob["_iedm_inverse_scaled_visibility_candidate"] = getattr(candidate, "name", "")
       changed = True
     except Exception as e:
-      print(f"Warning in _fix_inverse_scaled_visibility_rest_offset: {e}")
+      _log.warn("_fix_inverse_scaled_visibility_rest_offset", exc=e)
 
   if changed:
     try:
@@ -435,13 +450,13 @@ def _apply_argvis_chain_basis_fix():
           ob.matrix_basis = _ROOT_BASIS_FIX.inverted() @ ob.matrix_basis
           case1_fixed += 1
         except Exception as e:
-          print(f"Warning in _apply_argvis_chain_basis_fix: {e}")
+          _log.warn("_apply_argvis_chain_basis_fix", exc=e)
       elif _is_pos90_x_basis_matrix(mat):
         try:
           ob.matrix_basis = Matrix.Identity(4)
           case1_fixed += 1
         except Exception as e:
-          print(f"Warning in _apply_argvis_chain_basis_fix (pos90): {e}")
+          _log.warn("_apply_argvis_chain_basis_fix pos90", exc=e)
 
     # Case 2: Animated child under ArgVisibilityNode parent carrying a basis-only rotation.
     elif parent_type == "ArgVisibilityNode":
@@ -464,6 +479,11 @@ def _apply_argvis_chain_basis_fix():
           ob.matrix_basis = _ROOT_BASIS_FIX.inverted() @ ob.matrix_basis
           case2_fixed += 1
       except Exception as e:
-        print(f"Warning in _apply_argvis_chain_basis_fix (animated): {e}")
+        _log.warn("_apply_argvis_chain_basis_fix animated", exc=e)
 
-  print(f"[DEBUG] _apply_argvis_chain_basis_fix: case1_fixed={case1_fixed}, case2_fixed={case2_fixed}")
+  _log.debug(
+    "_apply_argvis_chain_basis_fix: case1_fixed={}, case2_fixed={}".format(
+      case1_fixed, case2_fixed
+    ),
+    level=1,
+  )

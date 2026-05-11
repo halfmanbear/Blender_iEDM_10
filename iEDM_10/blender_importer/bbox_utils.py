@@ -1,5 +1,12 @@
 # Fragment: EDM bounding box and special-box creation utilities.
-# All names resolved via the shared namespace injected by reader.py.
+
+import json
+import math
+
+import bpy
+
+from ..edm_format.mathtypes import Vector, vector_to_blender
+from .prelude import _log, _set_official_special_type
 
 
 def _transform_aabb_to_blender(fix, bmin, bmax):

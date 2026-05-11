@@ -1,5 +1,21 @@
 # Fragment: apply_node_transform — assigns the local matrix to a Blender object.
-# All names resolved via the shared namespace injected by reader.py.
+
+import math
+
+from mathutils import Matrix, Vector
+
+from ..edm_format.types import AnimatingNode, ArgAnimationNode, Connector, TransformNode
+from .animation import _is_pos90_x_basis_matrix, _normalize_euler_xyz
+from .graph_pipeline import _debug_filter_terms, _debug_fmt_rot_deg, _debug_fmt_vec3, _is_neg90_x_basis_matrix
+from .prelude import (
+  _ROOT_BASIS_FIX,
+  _import_ctx,
+  _import_profile_flag,
+  _is_child_of_file_root,
+  _is_connector_object,
+  _is_connector_transform,
+  _log,
+)
 
 
 def _transform_uses_quaternion_rotation(tfnode, obj=None):

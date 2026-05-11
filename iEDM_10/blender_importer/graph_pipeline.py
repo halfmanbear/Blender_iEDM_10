@@ -1,6 +1,13 @@
 # Fragment: graph debug utilities, action helpers, and collection assignment.
 # Graph construction lives in graph_build.py; bbox utilities in bbox_utils.py.
-# All names resolved via the shared namespace injected by reader.py.
+
+import math
+
+import bpy
+from mathutils import Matrix, Quaternion, Vector
+
+from ..edm_format.types import AnimatingNode, ArgVisibilityNode, TransformNode
+from .prelude import _import_ctx, _is_connector_transform, _log, _transform_display_name
 
 
 # ---------------------------------------------------------------------------
