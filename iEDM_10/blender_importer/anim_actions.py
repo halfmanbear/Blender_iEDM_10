@@ -5,6 +5,8 @@
 def create_visibility_actions(visNode):
   """Creates visibility actions from an ArgVisibilityNode"""
   def _vis_arg_to_frame(value):
+    if getattr(_import_ctx, "bonetransform_prefix_matrix", None) is not None:
+      return int(round(max(0.0, min(1.0, float(value))) * (FRAME_SCALE / 2.0)))
     return int(round((value + 1.0) * FRAME_SCALE / 2.0))
 
   actions = []
@@ -98,6 +100,77 @@ def _plain_root_unit_interval_frame_mapper(node):
   if not rot_sets:
     return None
   return lambda value: int(round((FRAME_SCALE / 2.0) + float(value) * FRAME_SCALE / 2.0))
+
+
+def _frame_value_components(value):
+  if hasattr(value, "to_matrix"):
+    return tuple(float(v) for v in value)
+  try:
+    return tuple(float(v) for v in value)
+  except Exception:
+    try:
+      return (float(value),)
+    except Exception:
+      return ()
+
+
+def _frame_values_close(a, b, eps=1e-5):
+  av = _frame_value_components(a)
+  bv = _frame_value_components(b)
+  if len(av) != len(bv):
+    return False
+  if not av:
+    return False
+  if all(abs(x - y) <= eps for x, y in zip(av, bv)):
+    return True
+  if len(av) == 4:
+    return all(abs(x + y) <= eps for x, y in zip(av, bv))
+  return False
+
+
+def _bonetransform_prefix_argument_frame_mapper(node, arg):
+  """Map DCS argument values to Blender's 0..100 argument timeline.
+
+  Bonetransform-prefix skeletal EDMs without SkinNodes store mechanical
+  animation keys as DCS argument values, where the useful range is 0..1.
+  The generic [-1..1] mapper pushes those keys into frames 100..200.  Control
+  surfaces can use the negative side as real authored motion, so only collapse
+  negative keys when they are identical to the first non-negative rest key.
+  """
+  if getattr(_import_ctx, "bonetransform_prefix_matrix", None) is None:
+    return None
+  if not getattr(_import_ctx, "file_has_bones", False):
+    return None
+  keyed_sets = []
+  keyed_sets.extend(keys for entry_arg, keys in (getattr(node, "posData", None) or []) if entry_arg == arg and keys)
+  keyed_sets.extend(keys for entry_arg, keys in (getattr(node, "rotData", None) or []) if entry_arg == arg and keys)
+  for entry_arg, scale_pair in (getattr(node, "scaleData", None) or []):
+    if entry_arg != arg:
+      continue
+    keys = scale_pair[1] if isinstance(scale_pair, tuple) and len(scale_pair) > 1 else []
+    if keys:
+      keyed_sets.append(keys)
+  if not keyed_sets:
+    return None
+  found_collapsible_negative_rest = False
+  for keys in keyed_sets:
+    frames = [float(getattr(k, "frame", 0.0)) for k in keys]
+    if not frames or max(frames) > 1.0 + 1e-6:
+      return None
+    nonnegative = [k for k in keys if float(getattr(k, "frame", 0.0)) >= -1e-6]
+    negative = [k for k in keys if float(getattr(k, "frame", 0.0)) < -1e-6]
+    if not nonnegative:
+      return None
+    if not negative:
+      continue
+    ref = min(nonnegative, key=lambda k: float(getattr(k, "frame", 0.0))).value
+    for key in negative:
+      if not _frame_values_close(key.value, ref):
+        return None
+    found_collapsible_negative_rest = True
+  if not found_collapsible_negative_rest:
+    return None
+  return lambda value: int(round(max(0.0, min(1.0, float(value))) * (FRAME_SCALE / 2.0)))
 
 
 def _is_plain_root_unit_interval_argrot(node):
@@ -335,6 +408,26 @@ def create_arganimation_actions(node):
   else:
     local_bl = local_edm
 
+  # BT-prefix no-armature: root ArgAnimatedBone nodes (direct children of the
+  # Bonetransform chain) sit at their bind-pose world position in DCS space.
+  # bt_world = Rz(-90°)@RBF (compound cancels through root_inv × BT1 × BT2), so
+  # local_bl must be ibm_inv (the DCS bind-pose world matrix) for the bone empty to
+  # land at Rz(-90°)@RBF@ibm_inv in Blender world space.
+  if (
+    type(node).__name__ == "ArgAnimatedBone"
+    and getattr(_import_ctx, "bonetransform_prefix_matrix", None) is not None
+    and getattr(_import_ctx, "file_has_bones", False)
+    and getattr(_import_ctx, "bone_import_ctx", None) is None
+    and hasattr(node, "inv_base_bone_matrix")
+    and isinstance(getattr(node, "parent", None), TransformNode)
+    and (getattr(node.parent, "name", "") or "").lower() == "bonetransform"
+  ):
+    try:
+      ibm = Matrix(node.inv_base_bone_matrix)
+      local_bl = ibm.inverted()
+    except Exception as e:
+      _log.warn("BT-prefix root-bone local_bl correction: {}".format(e), exc=e)
+
   dcLoc, dcRot, dcScale = local_bl.decompose()
   base_scale_vec = Vector((node.base.scale[0], node.base.scale[1], node.base.scale[2]))
   q1_raw = node.base.quat_1 if hasattr(node.base.quat_1, "to_matrix") else Quaternion(node.base.quat_1)
@@ -375,8 +468,13 @@ def create_arganimation_actions(node):
     _node_name,
   )
   for arg in node.get_all_args():
-    frame_mapper = _plain_root_unit_interval_frame_mapper(node)
-    actions.append(_build_arganimation_action(node, arg, local_bl, frame_mapper=frame_mapper, include_scale=True))
+    frame_mapper = _plain_root_unit_interval_frame_mapper(node) or _bonetransform_prefix_argument_frame_mapper(node, arg)
+    include_scale = not (
+      getattr(_import_ctx, "bonetransform_prefix_matrix", None) is not None
+      and getattr(_import_ctx, "file_has_bones", False)
+      and type(node).__name__ == "ArgAnimatedBone"
+    )
+    actions.append(_build_arganimation_action(node, arg, local_bl, frame_mapper=frame_mapper, include_scale=include_scale))
   return actions
 
 

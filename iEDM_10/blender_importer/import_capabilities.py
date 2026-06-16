@@ -22,6 +22,7 @@ from ..edm_format.types import (
   RenderNode,
   SegmentsNode,
   ShellNode,
+  SkinNode,
   TransformNode,
 )
 
@@ -37,6 +38,7 @@ class ImportGraphFeatures:
   has_root_transform_payload: bool
   has_bones: bool
   has_arganimated_bones: bool
+  has_skin_nodes: bool
   has_owner_encoded_split_renders: bool
   has_generic_render_chunks: bool
   has_shell_nodes: bool
@@ -83,6 +85,7 @@ def inspect_import_graph(edm):
   has_root_transform_payload = isinstance(root_tf, (TransformNode, AnimatingNode))
   has_bones = any(isinstance(node, Bone) for node in edm.nodes)
   has_arganimated_bones = any(isinstance(node, ArgAnimatedBone) for node in edm.nodes)
+  has_skin_nodes = any(isinstance(node, SkinNode) for node in edm.renderNodes)
   has_owner_encoded_split_renders = any(getattr(obj, "shared_parent", None) is not None for obj in _iter_all_objects(edm))
   has_generic_render_chunks = any(
     isinstance(obj, RenderNode) and str(getattr(obj, "name", "") or "").startswith("_")
@@ -109,6 +112,7 @@ def inspect_import_graph(edm):
     has_root_transform_payload=has_root_transform_payload,
     has_bones=has_bones,
     has_arganimated_bones=has_arganimated_bones,
+    has_skin_nodes=has_skin_nodes,
     has_owner_encoded_split_renders=has_owner_encoded_split_renders,
     has_generic_render_chunks=has_generic_render_chunks,
     has_shell_nodes=has_shell_nodes,

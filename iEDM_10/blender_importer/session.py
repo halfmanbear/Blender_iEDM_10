@@ -11,6 +11,7 @@ import bpy
 from ..edm_format import EDMFile
 from ..edm_format.mathtypes import Matrix
 from ..edm_format.types import AnimatingNode, LodNode, TransformNode
+from ..edm_format.types.render_shell import SkinNode
 from ..utils import chdir, print_edm_graph
 from .bbox_utils import (
   _cache_root_aabb_payloads_on_scene,
@@ -51,6 +52,7 @@ from .orient_fixes import (
   _apply_collision_mesh_orientation_fix,
   _apply_scene_root_empty_orientation_fix,
   _apply_scene_root_mesh_orientation_fix,
+  _fix_bonetransform_bone_child_render_world_positions,
 )
 from .orient_scale import _rewrite_oriented_scale_controls
 from .prelude import (
@@ -232,6 +234,62 @@ def _store_import_metadata(edm):
     _log.warn("store import metadata", exc=e)
 
 
+def _detect_bonetransform_prefix_compound(graph, root_tf):
+  """Walk leading Bonetransform chain and return the compound prefix matrix.
+
+  Some community-exported EDMs place one or more TransformNodes named
+  'Bonetransform' between the graph root and the actual scene content.
+  Without intervention _EDMFileRoot gets RBF, creating a world chain of
+    RBF @ M1 @ M2 @ ...  which over-rotates the aircraft.
+
+  This function walks the single-child chain from graph.root, collecting each
+  consecutive TransformNode named 'Bonetransform', and returns their compound
+  matrix  compound = M1 @ M2 @ ...  as a mathutils.Matrix, or None if no such
+  chain exists.
+
+  The call site then sets:
+    _EDMFileRoot = RBF @ inv(compound)
+  so the effective world transform collapses:
+    (RBF @ inv(compound)) @ compound @ content = RBF @ content
+  """
+  # For plain-root v10 the graph root carries a bare unnamed Node (no matrix/base).
+  # Only bail if root_tf actually carries transform data.
+  if root_tf is not None and (hasattr(root_tf, "matrix") or hasattr(root_tf, "base")):
+    return None
+
+  MBl = type(_ROOT_BASIS_FIX)  # mathutils.Matrix
+  compound = MBl.Identity(4)
+  node = graph.root
+  found_count = 0
+  chain_nodes = []
+
+  while True:
+    children = getattr(node, "children", []) or []
+    if len(children) != 1:
+      break
+    child = children[0]
+    child_tf = getattr(child, "transform", None)
+    if not isinstance(child_tf, TransformNode):
+      break
+    child_name = (getattr(child_tf, "name", "") or "").lower()
+    if child_name != "bonetransform":
+      break
+    if not hasattr(child_tf, "matrix"):
+      break
+    m = Matrix(child_tf.matrix)
+    m_bl = MBl([[float(m[r][c]) for c in range(4)] for r in range(4)])
+    compound = compound @ m_bl
+    chain_nodes.append(child)
+    found_count += 1
+    node = child
+
+  if found_count == 0:
+    return None
+
+  _import_ctx.bonetransform_prefix_nodes = chain_nodes
+  return compound
+
+
 def _create_graph_root_object(graph, options, features):
   root_tf = getattr(graph.root, "transform", None)
   has_root_transform_payload = isinstance(root_tf, (TransformNode, AnimatingNode))
@@ -290,7 +348,21 @@ def _create_graph_root_object(graph, options, features):
         m_root = Matrix(root_tf.matrix)
       elif hasattr(root_tf, "base") and hasattr(root_tf.base, "matrix"):
         m_root = Matrix(root_tf.base.matrix)
-      root_obj.matrix_basis = _ROOT_BASIS_FIX @ m_root
+      # Detect a non-standard Bonetransform prefix: a single TransformNode child
+      # chain before the standard ROOT_BASIS_FIX node.
+      _bonetransform_compound = _detect_bonetransform_prefix_compound(graph, root_tf)
+      if _bonetransform_compound is not None:
+        _import_ctx.bonetransform_prefix_matrix = _bonetransform_compound
+        # The compound (M1@M2) collapses via inv(compound), leaving RBF as the
+        # effective world transform.  For Bonetransform-prefix EDMs the raw
+        # geometry has its nose along local -Z, which RBF maps to Blender +Y.
+        # An extra Rz(-90°) rotates that +Y → +X to match DCS/Blender convention.
+        # Rz(-90°) = [[0,1,0,0],[-1,0,0,0],[0,0,1,0],[0,0,0,1]]
+        _MBl = type(_ROOT_BASIS_FIX)
+        _Rz_neg90 = _MBl(((0,1,0,0),(-1,0,0,0),(0,0,1,0),(0,0,0,1)))
+        root_obj.matrix_basis = _Rz_neg90 @ _ROOT_BASIS_FIX @ _bonetransform_compound.inverted()
+      else:
+        root_obj.matrix_basis = _ROOT_BASIS_FIX @ m_root
     elif has_root_transform_payload:
       apply_node_transform(graph.root, graph.root.blender, used_shared_parent=False)
   else:
@@ -398,6 +470,8 @@ def _run_control_rewrite_postprocess(graph, options):
 
 
 def _run_orientation_postprocess():
+  _fix_bonetransform_bone_child_render_world_positions()
+  _debug_dump_stage_objects("after_bonetransform_bone_child_render_fix")
   _apply_collision_mesh_orientation_fix()
   _debug_dump_stage_objects("after_collision_mesh_orientation_fix")
   _apply_scene_root_mesh_orientation_fix()
@@ -498,9 +572,22 @@ def read_file(filename, options=None):
   _create_graph_root_object(graph, options, features)
   _create_import_scene_boxes(edm.root, options.scene_boxes)
 
-  _prepare_bone_import(graph, graph.root.blender)
+  has_skin_nodes = any(isinstance(getattr(n, "render", None), SkinNode) for n in graph.nodes)
+  if has_skin_nodes:
+    _prepare_bone_import(graph, graph.root.blender)
 
   graph.walk_tree(process_node)
+
+  # Tag Bonetransform prefix empties so orient_fix passes skip them.
+  # Their matrices must be preserved exactly for EDMFileRoot @ compound = RBF.
+  for _pnode in (getattr(_import_ctx, "bonetransform_prefix_nodes", []) or []):
+    _bl = getattr(_pnode, "blender", None)
+    if _bl is not None:
+      try:
+        _bl["_iedm_bt_prefix"] = True
+      except Exception:
+        pass
+
   _run_import_postprocess(edm, graph, options)
 
 

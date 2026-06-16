@@ -459,6 +459,13 @@ def _create_node_object(node, ctx, is_skel):
 
 def _parent_node_object(node, ctx):
   """Establish the Blender parent chain for node.blender."""
+  def _direct_bone_parent():
+    bone_nodes = (ctx or {}).get("bone_name_by_node", {}) or {}
+    cur = getattr(node, "parent", None)
+    if cur in bone_nodes:
+      return cur, bone_nodes[cur]
+    return None, None
+
   # Skin: look for a same-name sibling transform to use as parent
   try:
     if isinstance(getattr(node, "render", None), SkinNode):
@@ -510,7 +517,31 @@ def _parent_node_object(node, ctx):
     except Exception as e:
       print(f"Warning in blender_importer/nodes/core.py: {e}")
 
-    if sibling_skin_helper is not None:
+    bone_parent_node, bone_parent_name = _direct_bone_parent()
+    arm_obj = (ctx or {}).get("armature")
+    if (
+      sibling_skin_helper is None
+      and arm_obj is not None
+      and bone_parent_name
+      and node is not bone_parent_node
+      and node.blender is not arm_obj
+      and not isinstance(getattr(node, "transform", None), (Bone, ArgAnimatedBone))
+    ):
+      try:
+        bone = getattr(getattr(arm_obj, "data", None), "bones", {}).get(bone_parent_name)
+        tail_len = 0.0
+        if bone is not None:
+          tail_len = float(getattr(bone, "length", 0.0))
+
+        node.blender.parent = arm_obj
+        node.blender.parent_type = 'BONE'
+        node.blender.parent_bone = bone_parent_name
+        node.blender.matrix_parent_inverse = Matrix.Identity(4)
+        node.blender["_iedm_parented_to_bone"] = bone_parent_name
+        node.blender["_iedm_compensate_bone_tail_export"] = tail_len
+      except Exception as e:
+        print(f"Warning in blender_importer/nodes/core.py: {e}")
+    elif sibling_skin_helper is not None:
       node.blender.parent = sibling_skin_helper
       node.blender.matrix_parent_inverse = Matrix.Identity(4)
     elif node.parent and node.parent.blender and node.parent.blender != node.blender:
@@ -1047,6 +1078,19 @@ def _hookup_node_animations(node, ctx, vis_actions, used_shared_parent):
           pass
     else:
       apply_node_transform(node, node.blender, used_shared_parent=used_shared_parent)
+
+    try:
+      tail_len = float(node.blender.get("_iedm_compensate_bone_tail_export", 0.0))
+    except Exception:
+      tail_len = 0.0
+    if abs(tail_len) > 1e-8:
+      try:
+        # The official exporter inserts an implicit "End Of <bone>" transform
+        # for direct bone children.  Pre-apply the inverse so imported authored
+        # controls round-trip at their EDM positions instead of at the bone tail.
+        node.blender.matrix_basis = Matrix.Translation((0.0, -tail_len, 0.0)) @ node.blender.matrix_basis
+      except Exception as e:
+        print(f"Warning in blender_importer/nodes/core.py: {e}")
 
     if node.blender.type == "EMPTY":
       distFromScale = node.blender.scale - Vector((1, 1, 1))
