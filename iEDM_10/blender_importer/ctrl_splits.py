@@ -10,6 +10,7 @@ from .anim_actions import (
     _action_has_visibility_curve,
     _build_arganimation_action,
     _build_nonarmature_action_plan,
+    _clone_action_filtered,
     _clear_object_animation_tracks,
     _collect_merged_transform_actions_for_graph_node,
     _needs_multi_arg_rotation_helper_split,
@@ -79,6 +80,31 @@ def _split_multi_arg_rotation_controls(graph):
             continue
 
         # Keys carry the owner's static loc/rot; only the outermost carrier may keep it.
+        # An argument driving both position and a later rotation occupies two
+        # places in the chain, so carry each part in its own action.
+        divided = []
+        for action in planned_actions:
+            paths = _action_paths(action)
+            sort_value = _action_chain_sort_value(action, -1)
+            if (
+                sort_value > 0
+                and "location" in paths
+                and "rotation_quaternion" in paths
+            ):
+                position_part = _clone_action_filtered(
+                    action, "_pos", include_paths={"location"}
+                )
+                rotation_part = _clone_action_filtered(
+                    action, "_rot", exclude_paths={"location"}
+                )
+                if position_part is not None and rotation_part is not None:
+                    position_part["_iedm_chain_sort"] = -1
+                    rotation_part["_iedm_chain_sort"] = sort_value
+                    divided.extend((position_part, rotation_part))
+                    continue
+            divided.append(action)
+        planned_actions = divided
+
         # EDM applies position, then rotations in authored order: T @ R0 @ R1 ...
         planned_actions.sort(
             key=lambda action: (
@@ -86,14 +112,26 @@ def _split_multi_arg_rotation_controls(graph):
                 _action_chain_sort_value(action, -1),
             )
         )
-        static_loc, _static_rot, static_scale = ob.matrix_basis.decompose()
+        static_loc, static_rot, static_scale = ob.matrix_basis.decompose()
         seen_paths = set()
         for action in planned_actions:
             paths = _action_paths(action)
             if paths & seen_paths & {"location", "rotation_quaternion"}:
                 _relative_keys_from_source(action, node)
             seen_paths |= paths
-        if "rotation_quaternion" in seen_paths - _action_paths(planned_actions[0]):
+        later_paths = set()
+        for action in planned_actions[1:]:
+            later_paths |= _action_paths(action)
+        inner_static = None
+        if "location" in later_paths:
+            # Position deltas are neither rotated nor scaled: keep static R @ S innermost.
+            ob.matrix_basis = Matrix.Translation(static_loc)
+            inner_static = Matrix.LocRotScale(
+                None,
+                None if "rotation_quaternion" in later_paths else static_rot,
+                static_scale,
+            )
+        elif "rotation_quaternion" in later_paths - _action_paths(planned_actions[0]):
             ob.matrix_basis = Matrix.LocRotScale(static_loc, None, static_scale)
 
         direct_children = [ch for ch in list(ob.children)]
@@ -119,6 +157,19 @@ def _split_multi_arg_rotation_controls(graph):
                 helper["_iedm_vis_passthrough"] = True
             created_helpers.append(helper)
             parent_for_chain = helper
+
+        if inner_static is not None and any(
+            abs(inner_static[r][c] - (1.0 if r == c else 0.0)) > 1e-6
+            for r in range(4)
+            for c in range(4)
+        ):
+            static_helper = bpy.data.objects.new(ob.name, None)
+            static_helper.empty_display_size = 0.1
+            scene_collection.objects.link(static_helper)
+            static_helper.parent = parent_for_chain
+            static_helper.matrix_basis = inner_static
+            created_helpers.append(static_helper)
+            parent_for_chain = static_helper
 
         if created_helpers:
             target_parent = created_helpers[-1]

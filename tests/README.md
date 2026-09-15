@@ -88,3 +88,18 @@ panels, lights or damage geometry:
 This compares every mesh vertex transformed by its object matrix at frame 100,
 plus sampled vertices at frames 0, 150 and 200, and visibility in both modes.
 It does not evaluate modifier-deformed vertices or establish EDM export fidelity.
+
+## Source-matrix mesh regression
+
+Rebuilds each static RenderNode's world transform from the parsed EDM node chain
+(base matrix, position, rotation and oriented-scale keys) and compares sampled
+world vertices against Blender at frames 100, 150 and 200 (tolerance 2 mm):
+
+```powershell
+& 'C:\Program Files\Blender Foundation\Blender 4.5\blender.exe' --background --factory-startup --python-exit-code 1 --python tests/regression_source_meshes.py -- '../EDM_Files/F-14A-135-GR.edm' '../EDM_Files/F-15E_Suite4.EDM' '../EDM_Files/SU-27/su-27.edm' '../EDM_Files/A-10.EDM' '../EDM_Files/C130J/C130J_30.edm'
+```
+
+Skinned meshes and render nodes split into several Blender objects are not
+checked; the skin paths are covered by the aircraft regression above. The
+reference model is the importer's own reading of the EDM transform order, not
+DCS ModelViewer output.

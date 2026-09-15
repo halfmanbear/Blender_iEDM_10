@@ -325,6 +325,19 @@ def _build_arganimation_action(
             pass
     leftRot = static_rot
     rightRot = Quaternion((1, 0, 0, 0))
+    if rotation_basis_local is None and basis_local.to_3x3().determinant() < 0:
+        # decompose() folds a single-axis mirror F into the rotation (R @ F);
+        # animated keys belong between R and F, not after R @ F.
+        base_scale = Vector(node.base.scale)
+        flip = Matrix.Diagonal([-1.0 if s >= 0 else 1.0 for s in base_scale])
+        if flip.determinant() > 0:
+            flip_quat = flip.to_quaternion()
+            authored = static_rot @ flip_quat.inverted()
+            rebuilt = authored.to_matrix() @ Matrix.Diagonal(base_scale)
+            target = basis_local.to_3x3()
+            if max(abs(rebuilt[r][c] - target[r][c]) for r in range(3) for c in range(3)) < 1e-4:
+                leftRot = authored
+                rightRot = flip_quat
     leftPos = (
         # Position deltas precede the default rotation in the EDM transform.
         Matrix.Translation(static_loc) @ Matrix(node.base.matrix).to_3x3().to_4x4()

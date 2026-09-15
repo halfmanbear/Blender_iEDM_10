@@ -165,6 +165,9 @@ def _compact_visibility_identity_intermediate(node):
             and helper_local is not None
             and not _is_identity_matrix_approx(helper_local)
             and _is_identity_matrix_approx(semantic_obj.matrix_basis)
+            # Hoisting moves every sibling. Blender children do not exist yet at
+            # this point, so the graph decides whether the helper is alone.
+            and len(getattr(helper_parent_graph, "children", []) or []) == 1
         ):
             if _set_local(semantic_obj, helper_local):
                 _trace("case1 moved helper_local to semantic")
@@ -237,6 +240,11 @@ def _compact_visibility_identity_intermediate(node):
         return
     if not _is_identity_matrix_approx(semantic_obj.matrix_basis):
         _trace("skip case2 semantic basis non-identity")
+        return
+    # Hoisting moves every sibling. Blender children do not exist yet at this
+    # point, so the graph decides whether the helper is alone.
+    if len(getattr(semantic_graph, "children", []) or []) != 1:
+        _trace("skip case2 semantic has siblings")
         return
 
     if _set_local(semantic_obj, helper_local):
