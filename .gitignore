@@ -26,6 +26,12 @@ tools/
 *.dds
 *.tga
 tests/*.blend
-f-117-tests/*.blend
-diagnostics/*.blend
 !tests/empty.blend
+
+# Scratch test/diagnostic dirs - contain licensed assets and personal paths
+f-117-tests/
+diagnostics/
+
+# Log files and one-off debug scripts often embed local absolute paths
+*.log
+tests/_tmp_*
