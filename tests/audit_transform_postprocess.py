@@ -39,7 +39,7 @@ def main():
     parser.add_argument("--save-blend")
     parser.add_argument("--report")
     args = parser.parse_args(sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else [])
-    paths = args.paths or [str(p) for p in sorted((ROOT / "tests").glob("*.edm"))]
+    paths = args.paths or [str(p) for p in sorted((ROOT / "tests" / "assets").glob("*.edm"))]
     if args.save_blend and len(paths) != 1:
         parser.error("--save-blend requires exactly one EDM")
     reports = []

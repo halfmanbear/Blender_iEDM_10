@@ -1,3 +1,6 @@
+from mathutils import Euler
+
+
 def _arg_anim_vector_to_blender(node, value):
   # v10 top-level pylon positions are already in Z-up (Blender) space —
   # no basis conversion needed; _anim_vector_to_blender handles the Y/Z swap.

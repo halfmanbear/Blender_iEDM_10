@@ -10,7 +10,6 @@
 | `utils.py` | Utility functions: `chdir` context manager for directory switching, `get_root_object` to find top-level parents, `print_edm_graph` for debugging the EDM node tree |
 | `rna.py` | Extends Blender data model with EDM-specific properties (`EDMProps`, `EDMObjectSettings`); handles registration of custom properties for objects, materials, and actions |
 | `translation.py` | Defines `TranslationNode` and `TranslationGraph` classes that map EDM transform/render nodes to Blender objects; handles tree walking, node insertion, and parent/child relationships |
-| `replace_exceptions.py` | Batch-fix script that replaces bare `except Exception: pass` with `except Exception as e: print(f"Warning in {filepath}: {e}")` across all `blender_importer/**/*.py` files for proper error reporting |
 
 ## `edm_format/` - EDM File Format Parsing
 

@@ -255,6 +255,8 @@ for filename in sys.argv[sys.argv.index('--')+1:]:
     assert not invalid_drivers, invalid_drivers[:10]
     print('PASS', path.name, 'skins', len(expected_skin), 'max_error', error,
           'visibility_checks', checked, 'hidden_meshes', sum(o.hide_viewport for o in bpy.data.objects if o.type == 'MESH'))
-    bpy.ops.wm.save_as_mainfile(filepath=str(ROOT / 'diagnostics' / ('corrected_' + path.stem + '.blend')))
+    out_dir = ROOT / 'local' / 'diagnostics'
+    out_dir.mkdir(parents=True, exist_ok=True)
+    bpy.ops.wm.save_as_mainfile(filepath=str(out_dir / ('corrected_' + path.stem + '.blend')))
 
 
