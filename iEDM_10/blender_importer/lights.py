@@ -130,7 +130,11 @@ def _push_object_action_to_nla(obj, action):
   try:
     track = anim_data.nla_tracks.new()
     track.name = action.name
-    strip = track.strips.new(action.name, 0, action)
+    # Start the strip at the action's first key so keys keep their scene frames.
+    start = float(action.frame_range[0])
+    strip = track.strips.new(action.name, int(start), action)
+    if abs(strip.frame_start - start) > 1e-6 and hasattr(strip, "frame_start_ui"):
+      strip.frame_start_ui = start
     strip.extrapolation = 'HOLD'
     strip.blend_type = 'REPLACE'
     return True
@@ -195,7 +199,7 @@ def _import_light_properties(node, obj, light_data, light_type):
       volume_types = {0: "LANDING", 1: "NAV", 2: "TAXI", 3: "BANO"}
       _set_edmprop(obj, "LIGHT_VOLUME_TYPE", volume_types.get(vol_type_int, "NONE"))
     except Exception as e:
-      print(f"Warning in blender_importer\lights.py: {e}")
+      print(f"Warning in blender_importer/lights.py: {e}")
   if light_type == 'SPOT':
     spot_arg = phi_arg if phi_arg >= 0 else theta_arg
     if spot_arg >= 0:
@@ -382,7 +386,12 @@ def _create_textured_light_surrogate(node):
     try:
       _import_light_properties(node, obj, preview_light, 'SPOT')
     finally:
+      preview_ad = preview_light.animation_data
+      preview_action = preview_ad.action if preview_ad else None
       bpy.data.lights.remove(preview_light)
+      # The preview light's animation has no remaining user once the light is gone.
+      if preview_action is not None and preview_action.users == 0:
+        bpy.data.actions.remove(preview_action)
     bpy.context.collection.objects.link(obj)
     return obj
 
@@ -431,7 +440,7 @@ def _create_official_render_material(obj_name, kind="default"):
     try:
       links.new(group_node.outputs[0], output_node.inputs['Surface'])
     except Exception as e:
-      print(f"Warning in blender_importer\\lights.py: {e}")
+      print(f"Warning in blender_importer/lights.py: {e}")
   return mat
 
 
@@ -485,7 +494,7 @@ def _create_billboard_surrogate_mesh(name, axis_name, matrix_value, pivot_value)
     for loop_index, uv in enumerate(uv_values):
       uv_layer.data[loop_index].uv = uv
   except Exception as e:
-    print(f"Warning in blender_importer\\lights.py: {e}")
+    print(f"Warning in blender_importer/lights.py: {e}")
 
   return mesh
 
@@ -584,7 +593,7 @@ def _create_fake_light_material(obj_name, kind="fake_omni"):
     try:
       links.new(group_node.outputs[0], output_node.inputs['Surface'])
     except Exception as e:
-      print(f"Warning in blender_importer\lights.py: {e}")
+      print(f"Warning in blender_importer/lights.py: {e}")
 
   return mat
 
@@ -980,7 +989,7 @@ def _has_animated_fake_omni_payload(node):
   )
 
 
-def _apply_animated_fake_omni_brightness(ob, node, light_count):
+def _apply_animated_fake_omni_brightness(ob, node, light_count, verts_per_light=1):
   """Reconstruct per-light brightness animation from AnimatedFakeOmniLightsNode payload.
 
   The binary stores lightCount * 128 float32 brightness values — each light's
@@ -998,6 +1007,17 @@ def _apply_animated_fake_omni_brightness(ob, node, light_count):
   if not anim_data_raw or data_count == 0 or light_count <= 0:
     return
 
+  available = len(anim_data_raw) // 4
+  if data_count > available:
+    print(
+      "Warning: animated fake light '{}': anim_data_count={} but payload holds {} floats; truncating".format(
+        getattr(node, "name", ""), data_count, available
+      )
+    )
+    data_count = available
+    if data_count < light_count:
+      return
+
   # Format spec: anim_sample_rate must be 128. Use the explicit field when
   # available and consistent; fall back to data_count // light_count otherwise.
   explicit_rate = getattr(node, "anim_sample_rate", None)
@@ -1010,6 +1030,13 @@ def _apply_animated_fake_omni_brightness(ob, node, light_count):
       )
     n_samples = int(explicit_rate)
   if n_samples == 0:
+    return
+  if light_count * n_samples > data_count:
+    print(
+      "Warning: animated fake light '{}': {} lights x {} samples exceeds {} floats; skipping brightness animation".format(
+        getattr(node, "name", ""), light_count, n_samples, data_count
+      )
+    )
     return
 
   all_floats = _struct.unpack_from("<{}f".format(data_count), anim_data_raw)
@@ -1033,11 +1060,14 @@ def _apply_animated_fake_omni_brightness(ob, node, light_count):
         best_shift = shift
     delays.append(min(best_shift / n_samples * 2.0, 1.0))
 
-  # Assign delay weights — one vertex group, one weight per vertex.
+  # Assign delay weights — one vertex group; every vertex of a light (4 per
+  # quad in surface mode) carries that light's delay.
   delay_group = ob.vertex_groups.new(name="brightness_delay")
-  for vi, delay in enumerate(delays):
-    if vi < len(ob.data.vertices):
-      delay_group.add([vi], float(delay), 'REPLACE')
+  vertex_count = len(ob.data.vertices)
+  for li, delay in enumerate(delays):
+    indices = [vi for vi in range(li * verts_per_light, (li + 1) * verts_per_light) if vi < vertex_count]
+    if indices:
+      delay_group.add(indices, float(delay), 'REPLACE')
 
   # Build brightness action from master curve.
   # 128 samples span Blender frames [0, 200]; frame_i = i * 200 / n_samples.
@@ -1284,7 +1314,7 @@ def create_fake_spot_lights(node):
       ob.EDMProps.UV_LB_BACK = back_lb
       ob.EDMProps.UV_RT_BACK = back_rt
   if _has_animated_fake_omni_payload(node):
-    _apply_animated_fake_omni_brightness(ob, node, len(node.data))
+    _apply_animated_fake_omni_brightness(ob, node, len(node.data), verts_per_light=4 if mode == "surface" else 1)
   else:
     _apply_fake_light_animation_payload(ob, getattr(node, "material", None))
 
