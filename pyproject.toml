@@ -1,0 +1,48 @@
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.ruff.lint]
+# E/W: pycodestyle, F: pyflakes, I: import order, B: bugbear, C90: mccabe
+# complexity, S: bandit/OpenSSF-aligned security checks.
+select = ["E", "W", "F", "I", "B", "C90", "S"]
+ignore = [
+  "S101", # assert is fine in this codebase (no assert-stripping deployment)
+]
+
+[tool.ruff.lint.per-file-ignores]
+# reader.py intentionally builds a shared namespace across blender_importer
+# modules; names resolved through that injection (and prelude.py's star
+# imports feeding it) are invisible to pyflakes until that architecture is
+# replaced (see plan phase 3).
+"iEDM_10/reader.py" = ["F401"]
+"iEDM_10/blender_importer/prelude.py" = ["F403", "F405"]
+"iEDM_10/blender_importer/*.py" = ["F821", "F405"]
+"iEDM_10/blender_importer/nodes/*.py" = ["F821", "F405"]
+# Same star-import-from-core pattern as prelude.py, already inline-noqa'd
+# for F401/F403; F405 needs the same treatment.
+"iEDM_10/edm_format/types/*.py" = ["F405"]
+
+[tool.ruff.lint.mccabe]
+# Cyclomatic complexity, not nesting depth. 15 flags genuinely tangled
+# functions without firing on ordinary Blender-import branching code.
+max-complexity = 15
+
+[tool.ruff.format]
+indent-style = "space"
+
+[tool.mypy]
+python_version = "3.11"
+# Not strict repo-wide: bpy has no complete type stubs, and reader.py's
+# shared-namespace injection defeats static name resolution until phase 3
+# of the cleanup plan replaces it. edm_format/ is pure Python and holds to
+# a stricter profile below.
+warn_return_any = true
+warn_unused_ignores = true
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "edm_format.*"
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+strict = true
