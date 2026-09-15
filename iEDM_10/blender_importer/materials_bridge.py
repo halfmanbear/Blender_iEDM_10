@@ -43,7 +43,7 @@ def _create_official_group_node(nodes, bridge, official_kind, official_name):
       if getattr(custom_node, "node_tree", None) is not None:
         return custom_node
     except Exception as e:
-      print(f"Warning in blender_importer\materials_bridge.py: {e}")
+      print(f"Warning in blender_importer/materials_bridge.py: {e}")
 
   if node_tree is None:
     return None
@@ -63,7 +63,7 @@ def _set_group_enum_property(group_node, prop_name, value):
   try:
     setattr(group_node, prop_name, value)
   except Exception as e:
-    print(f"Warning in blender_importer\materials_bridge.py: {e}")
+    print(f"Warning in blender_importer/materials_bridge.py: {e}")
 
 
 def _map_edm_material_to_official_name(edm_material_name, bridge):
@@ -108,7 +108,7 @@ def _set_group_socket_default(group_node, socket_name, value):
     try:
       socket.default_value = value
     except Exception as e:
-      print(f"Warning in blender_importer\materials_bridge.py: {e}")
+      print(f"Warning in blender_importer/materials_bridge.py: {e}")
     return
 
 
@@ -155,7 +155,7 @@ def _link_texture_to_group_input(links, texture_node, group_node, input_name, ou
   try:
     links.new(from_socket, to_socket)
   except Exception as e:
-    print(f"Warning in blender_importer\materials_bridge.py: {e}")
+    print(f"Warning in blender_importer/materials_bridge.py: {e}")
 
 
 def _link_texture_to_any_group_input(links, texture_node, group_node, input_names, output_name="Color"):
@@ -215,11 +215,11 @@ def _link_uv_to_texture_vector(links, uv_node, texture_node):
     for link in list(to_socket.links):
       links.remove(link)
   except Exception as e:
-    print(f"Warning in blender_importer\materials_bridge.py: {e}")
+    print(f"Warning in blender_importer/materials_bridge.py: {e}")
   try:
     links.new(from_socket, to_socket)
   except Exception as e:
-    print(f"Warning in blender_importer\materials_bridge.py: {e}")
+    print(f"Warning in blender_importer/materials_bridge.py: {e}")
 
 
 def _uv_map_name_from_channel(channel_index):
@@ -306,11 +306,11 @@ def _link_group_surface_to_output(links, group_node, material_output):
     try:
       links.remove(link)
     except Exception as e:
-      print(f"Warning in blender_importer\materials_bridge.py: {e}")
+      print(f"Warning in blender_importer/materials_bridge.py: {e}")
   try:
     links.new(from_socket, to_socket)
   except Exception as e:
-    print(f"Warning in blender_importer\materials_bridge.py: {e}")
+    print(f"Warning in blender_importer/materials_bridge.py: {e}")
 
 
 def _resolve_official_material_tree(bridge, official_material_name):
@@ -320,7 +320,7 @@ def _resolve_official_material_tree(bridge, official_material_name):
     try:
       return desc.create()
     except Exception as e:
-      print(f"Warning in blender_importer\materials_bridge.py: {e}")
+      print(f"Warning in blender_importer/materials_bridge.py: {e}")
 
   node_tree = bpy.data.node_groups.get(official_material_name)
   if node_tree is not None:
