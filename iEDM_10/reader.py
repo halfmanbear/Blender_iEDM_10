@@ -28,50 +28,50 @@ from .blender_importer.nodes import mesh as _node_mesh
 from .blender_importer.nodes import visibility as _node_visibility
 
 _MODULES = (
-  _prelude,
-  _import_capabilities,
-  _materials_bridge,
-  _graph_build,
-  _graph_pipeline,
-  _mesh_create,
-  _object_create,
-  _bbox_utils,
-  _material_setup,
-  _animation,
-  _graph_postprocess,
-  _anim_actions,
-  _orient_scale,
-  _vis_rewrites,
-  _skin_rewrites,
-  _orient_fixes,
-  _ctrl_splits,
-  _node_transform,
-  _node_mesh,
-  _node_visibility,
-  _node_armature,
-  _node_core,
-  _node_diagnostics,
-  _session,
-  _import_pipeline,
-  _lights,
+    _prelude,
+    _import_capabilities,
+    _materials_bridge,
+    _graph_build,
+    _graph_pipeline,
+    _mesh_create,
+    _object_create,
+    _bbox_utils,
+    _material_setup,
+    _animation,
+    _graph_postprocess,
+    _anim_actions,
+    _orient_scale,
+    _vis_rewrites,
+    _skin_rewrites,
+    _orient_fixes,
+    _ctrl_splits,
+    _node_transform,
+    _node_mesh,
+    _node_visibility,
+    _node_armature,
+    _node_core,
+    _node_diagnostics,
+    _session,
+    _import_pipeline,
+    _lights,
 )
 
 
 def _exportable_items(module):
-  for name, value in vars(module).items():
-    if name.startswith("__") and name.endswith("__"):
-      continue
-    yield name, value
+    for name, value in vars(module).items():
+        if name.startswith("__") and name.endswith("__"):
+            continue
+        yield name, value
 
 
 _SHARED = {}
 for _module in _MODULES:
-  _SHARED.update(dict(_exportable_items(_module)))
+    _SHARED.update(dict(_exportable_items(_module)))
 
 # Mirror prior single-file behavior: each part can resolve names that were
 # originally defined in other sections of the monolithic reader.py.
 for _module in _MODULES:
-  _module.__dict__.update(_SHARED)
+    _module.__dict__.update(_SHARED)
 
 globals().update(_SHARED)
 

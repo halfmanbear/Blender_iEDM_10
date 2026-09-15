@@ -9,20 +9,20 @@ _MODULES = (_core, _render_shell, _lights, _number)
 
 
 def _exportable_items(module):
-  for name, value in vars(module).items():
-    if name.startswith("__") and name.endswith("__"):
-      continue
-    yield name, value
+    for name, value in vars(module).items():
+        if name.startswith("__") and name.endswith("__"):
+            continue
+        yield name, value
 
 
 _SHARED = {}
 for _module in _MODULES:
-  _SHARED.update(dict(_exportable_items(_module)))
+    _SHARED.update(dict(_exportable_items(_module)))
 
 # Mirror the original single-module behavior: all symbols are visible in each
 # part module's global namespace, regardless of where they were originally defined.
 for _module in _MODULES:
-  _module.__dict__.update(_SHARED)
+    _module.__dict__.update(_SHARED)
 
 globals().update(_SHARED)
 

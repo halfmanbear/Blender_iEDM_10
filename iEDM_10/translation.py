@@ -42,11 +42,7 @@ class TranslationNode(object):
             return "bl:" + self.blender.name
 
         elif self.render and self.render.name:
-            return (
-                _prefixLookup[self.render.category.value]
-                + ":"
-                + self.render.name
-            )
+            return _prefixLookup[self.render.category.value] + ":" + self.render.name
 
         elif self.transform and self.transform.name:
             return "tf:" + self.transform.name
@@ -120,7 +116,7 @@ class TranslationGraph(object):
             )
 
             if inspector is not None:
-                inspectPrefix = (" ┃ " if node.children else "   ")
+                inspectPrefix = " ┃ " if node.children else "   "
                 inspector(node, prefix + inspectPrefix)
 
             for child in node.children:
@@ -173,8 +169,12 @@ class TranslationGraph(object):
     def attach_node(self, node, parent):
         """Adds a new child to a parent node"""
         # O(1) structural checks: list membership scans made graph building quadratic.
-        assert parent is self.root or parent.parent is not None, "Parent must exist in node graph"
-        assert node.parent is None and node is not self.root, "Attempting to reattach child already in graph"
+        assert parent is self.root or parent.parent is not None, (
+            "Parent must exist in node graph"
+        )
+        assert node.parent is None and node is not self.root, (
+            "Attempting to reattach child already in graph"
+        )
         assert not node.children, "New child must not have children"
 
         node.graph = self
