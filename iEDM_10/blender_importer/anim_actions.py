@@ -182,8 +182,16 @@ def _needs_multi_arg_rotation_helper_split(node):
     tf = getattr(node, "transform", None)
     if tf is None or not isinstance(tf, ArgAnimationNode):
         return False
-    rot_args = [arg for arg, keys in (getattr(tf, "rotData", None) or []) if keys]
-    return len(rot_args) > 1
+    # A non-armature object can only hold one active Blender action. Any node driven
+    # by more than one distinct control argument - whether they all rotate, or split
+    # across pos/rot/scale like a translate-then-rotate actuator - would otherwise be
+    # pushed onto NLA tracks, which the EDM exporter only reads off ARMATURE objects.
+    args = set()
+    for attr in ("posData", "rotData", "scaleData"):
+        for arg, keys in getattr(tf, attr, None) or []:
+            if keys:
+                args.add(arg)
+    return len(args) > 1
 
 
 def _has_nonidentity_scale_orientation_keys(keys4):
