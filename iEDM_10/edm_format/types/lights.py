@@ -1,7 +1,7 @@
 import struct
 
 from .core import *  # noqa: F401,F403
-from .core import _scan_to_next_v10_type_token
+from .core import _scan_to_next_v10_type_token, _V10_CATEGORY_KEYS
 from .render_shell import _read_index_data, _read_vertex_data  # noqa: F401
 
 
@@ -302,7 +302,7 @@ class FakeSpotLightsNode(BaseNode):
             stream.seek(tpos)
 
       preserve_from = stream.tell()
-      skip = _scan_to_next_v10_type_token(stream, validate_node_header=True)
+      skip = _scan_to_next_v10_type_token(stream, validate_node_header=True, stop_tokens=_V10_CATEGORY_KEYS)
       stream.seek(preserve_from)
       if skip is not None and skip > 0:
         self.trailing_blob_offset = preserve_from
@@ -407,7 +407,7 @@ class FakeSpotLights3Node(FakeSpotLightsNode):
 
     # Restore and preserve any unknown trailing payload until the next model token.
     stream.seek(pos)
-    skip = _scan_to_next_v10_type_token(stream)
+    skip = _scan_to_next_v10_type_token(stream, stop_tokens=_V10_CATEGORY_KEYS)
     if skip is not None and skip > 0:
       self.v3_trailing_blob_offset = stream.tell()
       self.v3_trailing_blob = stream.read(skip)

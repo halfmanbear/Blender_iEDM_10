@@ -76,6 +76,7 @@ def _read_with_layout_fallback(stream, readers):
   """Try alternative reader layouts from the same stream offset."""
   start = stream.tell()
   best = None
+  best_end = start
   errors = []
   for layout, reader in readers:
     stream.seek(start)
@@ -87,23 +88,32 @@ def _read_with_layout_fallback(stream, readers):
         return node
       if best is None:
         best = node
+        best_end = stream.tell()
         setattr(best, "_layout_variant", layout)
     except Exception as exc:
       errors.append((layout, exc))
   if best is not None:
+    stream.seek(best_end)
     return best
   stream.seek(start)
   error_summary = ", ".join("{}: {}".format(name, type(exc).__name__) for name, exc in errors)
   raise IOError("All fallback readers failed ({})".format(error_summary))
 
 
-def _scan_to_next_v10_type_token(stream, max_bytes=16384, validate_node_header=False):
+# Top-level object-dictionary category keys; a node payload scan must never run past one.
+_V10_CATEGORY_KEYS = frozenset(("CONNECTORS", "LIGHT_NODES", "RENDER_NODES", "SHELL_NODES"))
+
+
+def _scan_to_next_v10_type_token(stream, max_bytes=16384, validate_node_header=False, stop_tokens=None):
   """Find next likely model:: token index in v10 string table on 4-byte boundaries.
 
   validate_node_header: when True, also require that the 4 bytes immediately
   following the candidate type token decode to a plausible inline BaseNode name
   length (< 80).  This rejects false-positive token matches where an unrelated
   binary value happens to be a valid string-table index.
+
+  stop_tokens: string-table tokens that also end the scan (e.g. the category key
+  that follows the last node of a category).
   """
   if not getattr(stream, "v10", False) or not getattr(stream, "strings", None):
     return None
@@ -117,6 +127,8 @@ def _scan_to_next_v10_type_token(stream, max_bytes=16384, validate_node_header=F
     if not (0 <= idx < len(stream.strings)):
       continue
     token = stream.strings[idx]
+    if stop_tokens and token in stop_tokens:
+      return off
     if not (isinstance(token, str) and token.startswith("model::")):
       continue
     if validate_node_header:

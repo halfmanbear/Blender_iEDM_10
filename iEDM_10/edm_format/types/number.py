@@ -1,4 +1,5 @@
 from .core import *  # noqa: F401,F403
+from .core import _V10_CATEGORY_KEYS
 from .render_shell import _read_index_data, _read_vertex_data  # noqa: F401
 import struct
 
@@ -18,11 +19,7 @@ def _peek_lookup_token(stream):
 def _number_boundary_tokens(stream):
   if not getattr(stream, "strings", None):
     return set()
-  return {
-    "CONNECTORS",
-    "LIGHT_NODES",
-    "RENDER_NODES",
-    "SHELL_NODES",
+  return set(_V10_CATEGORY_KEYS) | {
     "model::FakeOmniLightsNode",
     "model::AnimatedFakeOmniLightsNode",
     "model::FakeSpotLightsNode",
@@ -199,7 +196,7 @@ class NumberNode(BaseNode):
     self.number_params_raw = (
       stream.read_int(),
       stream.read_int(),
-      stream.read_int(),
+      stream.read_float(),  # x_scale (float32; stock files hold 0x3F800000 = 1.0)
       stream.read_int(),
       stream.read_float(),
     )

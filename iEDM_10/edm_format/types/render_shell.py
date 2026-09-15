@@ -1,5 +1,5 @@
 from .core import *  # noqa: F401,F403
-from .core import _scan_to_next_v10_type_token
+from .core import _scan_to_next_v10_type_token, _V10_CATEGORY_KEYS
 
 
 def _tag_shell_family_node(node, source_type):
@@ -520,7 +520,7 @@ class MorphNode(RenderNode):
     # Preserve any morph-target data that follows the base mesh payload.
     # Use _scan_to_next_v10_type_token to stay stream-aligned.
     if getattr(stream, "v10", False):
-      skip = _scan_to_next_v10_type_token(stream)
+      skip = _scan_to_next_v10_type_token(stream, stop_tokens=_V10_CATEGORY_KEYS)
       if skip is not None and skip > 0:
         self._morph_payload = stream.read(skip)
         logger.warning(
