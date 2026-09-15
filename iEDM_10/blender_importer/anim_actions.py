@@ -4,11 +4,6 @@
 
 def create_visibility_actions(visNode):
   """Creates visibility actions from an ArgVisibilityNode"""
-  def _vis_arg_to_frame(value):
-    if getattr(_import_ctx, "bonetransform_prefix_matrix", None) is not None:
-      return int(round(max(0.0, min(1.0, float(value))) * (FRAME_SCALE / 2.0)))
-    return int(round((value + 1.0) * FRAME_SCALE / 2.0))
-
   actions = []
   for (arg, ranges) in visNode.visData:
     vis_name = visNode.name or "node"
@@ -34,23 +29,10 @@ def create_visibility_actions(visNode):
       _add_constant_key(curve_visible, frame, vis_val)
       _add_constant_key(curve_hide_vp, frame, hide_val)
 
-    # Visibility ranges in EDM are [start, end) where end is the first OFF frame
-    # boundary. Emit an initial off-key at frame 0 when the first range starts
-    # after frame 0 so constant extrapolation doesn't bleed visible from the start.
-    if ranges:
-      first_frameStart = max(0, min(FRAME_SCALE, _vis_arg_to_frame(ranges[0][0])))
-      if first_frameStart > 0:
-        _add_vis_keys(0, False)
-    for (start, end) in ranges:
-      frameStart = max(0, min(FRAME_SCALE, _vis_arg_to_frame(start)))
-      frameOff = FRAME_SCALE + 1 if end > 1.0 else _vis_arg_to_frame(end)
-      if frameOff <= frameStart:
-        frameOff = frameStart + 1
-      frameEndVisible = frameOff - 1
-      _add_vis_keys(frameStart, True)
-      if frameOff <= FRAME_SCALE:
-        _add_vis_keys(frameEndVisible, True)
-        _add_vis_keys(frameOff, False)
+    for frame, visible in _visibility_scene_keys(ranges):
+      _add_vis_keys(frame, visible)
+    curve_visible.update()
+    curve_hide_vp.update()
   return actions
 
 
@@ -99,7 +81,7 @@ def _plain_root_unit_interval_frame_mapper(node):
   rot_sets = _plain_root_unit_interval_rot_sets(node)
   if not rot_sets:
     return None
-  return lambda value: int(round((FRAME_SCALE / 2.0) + float(value) * FRAME_SCALE / 2.0))
+  return _anim_frame_to_scene_frame
 
 
 def _frame_value_components(value):
@@ -126,51 +108,6 @@ def _frame_values_close(a, b, eps=1e-5):
   if len(av) == 4:
     return all(abs(x + y) <= eps for x, y in zip(av, bv))
   return False
-
-
-def _bonetransform_prefix_argument_frame_mapper(node, arg):
-  """Map DCS argument values to Blender's 0..100 argument timeline.
-
-  Bonetransform-prefix skeletal EDMs without SkinNodes store mechanical
-  animation keys as DCS argument values, where the useful range is 0..1.
-  The generic [-1..1] mapper pushes those keys into frames 100..200.  Control
-  surfaces can use the negative side as real authored motion, so only collapse
-  negative keys when they are identical to the first non-negative rest key.
-  """
-  if getattr(_import_ctx, "bonetransform_prefix_matrix", None) is None:
-    return None
-  if not getattr(_import_ctx, "file_has_bones", False):
-    return None
-  keyed_sets = []
-  keyed_sets.extend(keys for entry_arg, keys in (getattr(node, "posData", None) or []) if entry_arg == arg and keys)
-  keyed_sets.extend(keys for entry_arg, keys in (getattr(node, "rotData", None) or []) if entry_arg == arg and keys)
-  for entry_arg, scale_pair in (getattr(node, "scaleData", None) or []):
-    if entry_arg != arg:
-      continue
-    keys = scale_pair[1] if isinstance(scale_pair, tuple) and len(scale_pair) > 1 else []
-    if keys:
-      keyed_sets.append(keys)
-  if not keyed_sets:
-    return None
-  found_collapsible_negative_rest = False
-  for keys in keyed_sets:
-    frames = [float(getattr(k, "frame", 0.0)) for k in keys]
-    if not frames or max(frames) > 1.0 + 1e-6:
-      return None
-    nonnegative = [k for k in keys if float(getattr(k, "frame", 0.0)) >= -1e-6]
-    negative = [k for k in keys if float(getattr(k, "frame", 0.0)) < -1e-6]
-    if not nonnegative:
-      return None
-    if not negative:
-      continue
-    ref = min(nonnegative, key=lambda k: float(getattr(k, "frame", 0.0))).value
-    for key in negative:
-      if not _frame_values_close(key.value, ref):
-        return None
-    found_collapsible_negative_rest = True
-  if not found_collapsible_negative_rest:
-    return None
-  return lambda value: int(round(max(0.0, min(1.0, float(value))) * (FRAME_SCALE / 2.0)))
 
 
 def _is_plain_root_unit_interval_argrot(node):
@@ -468,7 +405,7 @@ def create_arganimation_actions(node):
     _node_name,
   )
   for arg in node.get_all_args():
-    frame_mapper = _plain_root_unit_interval_frame_mapper(node) or _bonetransform_prefix_argument_frame_mapper(node, arg)
+    frame_mapper = _anim_frame_to_scene_frame
     include_scale = not (
       getattr(_import_ctx, "bonetransform_prefix_matrix", None) is not None
       and getattr(_import_ctx, "file_has_bones", False)

@@ -49,9 +49,6 @@ from .nodes.armature import _prepare_bone_import
 from .nodes.core import _apply_shadeless, _process_lod_post_children, process_node
 from .nodes.diagnostics import _print_import_diagnostics
 from .orient_fixes import (
-  _apply_collision_mesh_orientation_fix,
-  _apply_scene_root_empty_orientation_fix,
-  _apply_scene_root_mesh_orientation_fix,
   _fix_bonetransform_bone_child_render_world_positions,
 )
 from .orient_scale import _rewrite_oriented_scale_controls
@@ -461,6 +458,9 @@ def _run_control_rewrite_postprocess(graph, options):
     _split_multi_arg_visibility_controls(graph)
   else:
     _split_multi_arg_rotation_controls(graph)
+    # The official exporter only reads active visibility actions on objects.
+    # Visibility splits are required even without transform helper rewrites.
+    _split_multi_arg_visibility_controls(graph)
   _debug_dump_stage_objects("after_multi_arg_rewrite")
 
   _apply_visibility_pair_wrapper_object_basis_fix()
@@ -470,14 +470,11 @@ def _run_control_rewrite_postprocess(graph, options):
 
 
 def _run_orientation_postprocess():
+  # A world Euler angle cannot identify missing coordinate conversion: valid
+  # authored child rotations can cancel the root basis. Preserve the graph's
+  # composed transforms instead of rotating meshes and then their parents.
   _fix_bonetransform_bone_child_render_world_positions()
   _debug_dump_stage_objects("after_bonetransform_bone_child_render_fix")
-  _apply_collision_mesh_orientation_fix()
-  _debug_dump_stage_objects("after_collision_mesh_orientation_fix")
-  _apply_scene_root_mesh_orientation_fix()
-  _debug_dump_stage_objects("after_scene_root_mesh_orientation_fix")
-  _apply_scene_root_empty_orientation_fix()
-  _debug_dump_stage_objects("after_scene_root_empty_orientation_fix")
   _restore_skin_visibility_transform_basis()
   _debug_dump_stage_objects("after_restore_skin_visibility_transform_basis")
   _resolve_skin_parent_overrides_by_bind_rest()
@@ -497,7 +494,7 @@ def _finish_import_postprocess(edm, graph, options):
       _log.info("Transform debug reached output limit of {}".format(_import_ctx.transform_debug["limit"]))
     _log.info("Transform debug emitted {} record(s)".format(_import_ctx.transform_debug["emitted"]))
 
-  _propagate_visibility_hide_to_render_nodes()
+  _propagate_visibility_hide_to_render_nodes(graph)
 
   bpy.context.scene.frame_set(100)
   bpy.context.view_layer.update()
@@ -549,8 +546,12 @@ def _run_import_postprocess(edm, graph, options):
   _run_visibility_basis_postprocess(graph)
   _run_control_rewrite_postprocess(graph, options)
   _run_orientation_postprocess()
+  bpy.context.scene.frame_set(100)
+  bpy.context.view_layer.update()
+  _finalize_skin_bind_space(graph)
   _run_skin_transform_postprocess()
   _finish_import_postprocess(edm, graph, options)
+  _finalize_render_origins(graph)
 
 
 def read_file(filename, options=None):
@@ -591,11 +592,157 @@ def read_file(filename, options=None):
   _run_import_postprocess(edm, graph, options)
 
 
-def _propagate_visibility_hide_to_render_nodes():
-  """Viewport-visibility propagation from ArgVisibilityNode empties to descendants.
+def _finalize_skin_bind_space(graph):
+  """Localize absolute skin vertices against the settled neutral-pose parent.
 
-  Not implemented: keyframe-based and driver-based approaches both have
-  unavoidable side effects (see import_pipeline.py for full rationale).
-  The ArgVisibilityNode empty already carries an animated hide_viewport fcurve.
+  Initial binding subtracts the bind translation, before helper rewrites have
+  settled. Undo that translation and use the full object inverse here; otherwise
+  rotated/scaled helpers rotate/scale absolute skeleton vertices a second time.
+  Only meshes localized by this import participate.
   """
-  pass
+  from mathutils import Matrix as BlenderMatrix, Vector
+
+  seen = set()
+  for node in graph.nodes:
+    obj = node.blender
+    if obj is None or obj in seen or obj.type != 'MESH':
+      continue
+    seen.add(obj)
+    if not obj.get('_iedm_skin_localized_to_bind') or obj.get('_iedm_skin_bind_space_finalized'):
+      continue
+    loc = obj.get('_iedm_skin_bind_target_loc')
+    if loc is None:
+      continue
+    try:
+      correction = obj.matrix_world.inverted() @ BlenderMatrix.Translation(Vector(loc))
+    except ValueError:
+      _log.warn("Cannot localize skin '{}': singular neutral transform".format(obj.name))
+      continue
+    obj.data.transform(correction)
+    obj.data.update()
+    obj['_iedm_skin_bind_space_finalized'] = True
+
+
+def _visibility_frame_intervals(vis_data):
+  """Intersect argument controls, union each control's ranges on the preview timeline."""
+  intervals = [(0, FRAME_SCALE + 1)]
+  for _arg, ranges in vis_data:
+    control = _visibility_scene_ranges(ranges)
+    intervals = [(max(a, c), min(b, d)) for a, b in intervals
+                 for c, d in control if max(a, c) < min(b, d)]
+  return intervals
+
+
+def _propagate_visibility_hide_to_render_nodes(graph):
+  """Preview inherited visibility using actions that obey exporter argument muting.
+
+  Each distinct argument/range set has a custom-property action. The official
+  exporter ignores that property, while its argument tools mute the action just
+  like the authored VISIBLE actions. Mesh hide drivers read these evaluated
+  properties instead of bypassing action muting with direct frame expressions.
+  """
+  controllers = {}
+
+  def controller_for(arg, ranges):
+    signature = (arg, tuple(tuple(pair) for pair in ranges))
+    if signature in controllers:
+      return controllers[signature]
+    helper = bpy.data.objects.new('IEDM_Visibility_{}'.format(arg), None)
+    bpy.context.collection.objects.link(helper)
+    helper.empty_display_size = 0.01
+    helper['_iedm_visibility_preview_control'] = True
+    intervals = sorted(_visibility_frame_intervals([(arg, ranges)]))
+    merged = []
+    for start, end in intervals:
+      if merged and start <= merged[-1][1]:
+        merged[-1] = (merged[-1][0], max(end, merged[-1][1]))
+      else:
+        merged.append((start, end))
+    helper['_iedm_visible'] = float(any(a <= 100 < b for a, b in merged))
+    action = bpy.data.actions.new('{}_IEDM_VisibilityPreview'.format(arg))
+    if hasattr(action, 'argument'):
+      action.argument = arg
+    curve = action.fcurves.new(data_path='["_iedm_visible"]')
+    for frame, value in _visibility_scene_keys(ranges):
+      curve.keyframe_points.add(1)
+      key = curve.keyframe_points[-1]
+      key.co = (frame, value)
+      key.interpolation = 'CONSTANT'
+    curve.update()
+    helper.animation_data_create()
+    helper.animation_data.action = action
+    controllers[signature] = helper
+    return helper
+
+  def add_hide_driver(obj, path, controls, invert=True):
+    driver = obj.driver_add(path).driver
+    driver.type = 'SCRIPTED'
+    for variable in list(driver.variables):
+      driver.variables.remove(variable)
+    for index, control in enumerate(controls):
+      variable = driver.variables.new()
+      variable.name = 'v{}'.format(index)
+      variable.type = 'SINGLE_PROP'
+      variable.targets[0].id = control
+      variable.targets[0].data_path = '["_iedm_visible"]'
+    expression = ' and '.join('v{}'.format(i) for i in range(len(controls)))
+    driver.expression = 'not (' + expression + ')' if invert else expression
+
+  for node in graph.nodes:
+    obj = node.blender
+    if obj is None or obj.type != 'MESH' or node.render is None:
+      continue
+    controls = []
+    ancestor = node
+    seen = set()
+    while ancestor is not None:
+      transforms = [ancestor.transform] + list(getattr(ancestor, '_collapsed_transforms', None) or [])
+      for transform in transforms:
+        if transform is not None and id(transform) not in seen:
+          seen.add(id(transform))
+          for arg, ranges in getattr(transform, 'visData', None) or []:
+            control = controller_for(arg, ranges)
+            if control not in controls:
+              controls.append(control)
+      ancestor = ancestor.parent
+    if not controls:
+      continue
+    # Keep expressions below Blender's driver length limit for deep hierarchies.
+    while len(controls) > 24:
+      combined = []
+      for offset in range(0, len(controls), 24):
+        helper = bpy.data.objects.new('IEDM_VisibilityIntersection', None)
+        bpy.context.collection.objects.link(helper)
+        helper.empty_display_size = 0.01
+        helper['_iedm_visible'] = 1.0
+        add_hide_driver(helper, '["_iedm_visible"]', controls[offset:offset + 24], invert=False)
+
+
+        combined.append(helper)
+      controls = combined
+    for path in ('hide_viewport', 'hide_render'):
+      add_hide_driver(obj, path, controls)
+
+def _finalize_render_origins(graph):
+  """Change editing origins only after authored transforms are finalized."""
+  from .nodes.mesh import _recenter_mesh_object_to_geometry
+  transform_paths = {'location', 'rotation_euler', 'rotation_quaternion',
+                     'rotation_axis_angle', 'scale', 'delta_location',
+                     'delta_rotation_euler', 'delta_rotation_quaternion', 'delta_scale'}
+  for node in graph.nodes:
+    obj = node.blender
+    if not getattr(node, '_recenter_render_origin', False) or obj is None:
+      continue
+    # Preserve children, animated pivots, and unevaluated hidden meshes.
+    if obj.children or obj.type != 'MESH' or not obj.visible_get():
+      continue
+    ad = obj.animation_data
+    if ad:
+      actions = ([ad.action] if ad.action else []) + [
+        strip.action for track in ad.nla_tracks for strip in track.strips if strip.action]
+      if any(fc.data_path in transform_paths for action in actions for fc in action.fcurves):
+        continue
+      if any(fc.data_path in transform_paths for fc in ad.drivers):
+        continue
+    _recenter_mesh_object_to_geometry(obj)
+  bpy.context.view_layer.update()

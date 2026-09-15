@@ -36,8 +36,8 @@ class ImportEDM(Operator, ImportHelper):
       description="Import materials as shadeless (no lights required in blender)",
       default=False)
   import_bounding_box: BoolProperty(name="Import Bounding Box",
-      description="Create an Empty that visualises the EDM bounding box",
-      default=False)
+      description="Preserve the EDM bounding box (required to export models with bones)",
+      default=True)
   import_user_box: BoolProperty(name="Import User Box",
       description="Create an Empty that visualises the EDM user box",
       default=False)

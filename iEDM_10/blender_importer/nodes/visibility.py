@@ -96,22 +96,11 @@ def _compact_visibility_identity_intermediate(node):
     child = children[0]
     if preferred_child is not None and child is not preferred_child:
       return False
-    try:
-      child_world = child.matrix_world.copy()
-    except Exception:
-      child_world = None
-    try:
-      child.parent = semantic_obj
-      if child_world is not None:
-        child.matrix_world = child_world
-      else:
-        child.matrix_parent_inverse = semantic_obj.matrix_world.inverted()
-      bpy.data.objects.remove(helper_obj, do_unlink=True)
-      _trace("collapsed redundant helper empty '{}'".format(helper_name))
-      return True
-    except Exception as e:
-      _trace("failed collapsing helper '{}' ({})".format(helper_name, e))
-      return False
+    # This helper is still owned by a translation-graph node and its source
+    # transform. Retain it as an identity passthrough: deleting it here leaves
+    # dangling RNA references for later graph passes (notably on C130J lights).
+    helper_obj["_iedm_identity_passthrough"] = True
+    return False
 
   # Case 1: v_* -> identity helper -> fake-light (legacy helper compaction)
   helper_parent_graph = getattr(helper_graph, "parent", None)

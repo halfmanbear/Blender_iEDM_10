@@ -14,10 +14,9 @@ def _recenter_mesh_object_to_geometry(obj):
   center = (min_v + max_v) * 0.5
   if center.length < 1e-8:
     return
-  for v in obj.data.vertices:
-    v.co -= center
-  # Mesh vertex coordinates are already in Blender local space here.
-  obj.location += center
+  obj.data.transform(Matrix.Translation(-center))
+  # Include object rotation and scale when compensating in mesh-local space.
+  obj.matrix_basis = obj.matrix_basis @ Matrix.Translation(center)
   obj.data.update()
 
 

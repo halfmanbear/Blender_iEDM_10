@@ -173,8 +173,6 @@ def derive_import_capabilities(edm):
       flags["v10_root_object_basis_fix"] = True
       flags["implicit_scene_root_basis_object"] = True
       flags["argvis_chain_basis_fix"] = True
-      if features.has_bones or features.has_bano_material:
-        flags["scene_root_world_orientation_postfix"] = True
 
     if features.has_root_transform_payload:
       flags["v10_root_object_basis_fix"] = True

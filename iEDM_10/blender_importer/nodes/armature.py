@@ -66,18 +66,18 @@ def _choose_skin_bind_target(skin_bones, bone_rest_matrix_by_name, mesh_obj, ski
     packed_bone_index_offset = pos_slice[0] + 3
 
   weight_sums = {}
-  if slice21 and packed_bone_index_offset is not None:
+  if slice21:
     for src in getattr(skin_node, "vertexData", []) or []:
-      if packed_bone_index_offset >= len(src):
-        continue
-      decoded = _decode_packed_bone_indices(src[packed_bone_index_offset])
-      if not decoded:
-        continue
+      decoded = None
+      if packed_bone_index_offset is not None and packed_bone_index_offset < len(src):
+        decoded = _decode_packed_bone_indices(src[packed_bone_index_offset])
+        if not decoded or not any(0 <= int(idx) < len(skin_bones) for idx in decoded):
+          decoded = None
       weights = [float(x) for x in src[slice21[0]:slice21[1]]]
       for bi, weight in enumerate(weights[:4]):
-        if weight <= 1e-6 or bi >= len(decoded):
+        if weight <= 1e-6:
           continue
-        bone_index = int(decoded[bi])
+        bone_index = int(decoded[bi]) if decoded and bi < len(decoded) else bi
         if 0 <= bone_index < len(skin_bones):
           weight_sums[bone_index] = weight_sums.get(bone_index, 0.0) + weight
 
@@ -123,8 +123,8 @@ def _localize_skin_mesh_to_bind_target(mesh_obj, bind_target_loc):
     # meshes stay near the origin and must not be shifted a second time.
     if center.length <= 1.0 or bind_target_loc.length <= 1.0:
       return False
-    if (center - bind_target_loc).length > max(2.0, extent * 2.0):
-      return False
+    # A palette anchor can be far from its geometry; distance is not evidence
+    # that vertices are already local (for example Su-27 Object10934817).
     for vert in mesh_obj.data.vertices:
       vert.co -= bind_target_loc
     mesh_obj.data.update()
@@ -886,8 +886,6 @@ def _bind_skin_object(mesh_obj, skin_node):
   packed_bone_index_offset = None
   if pos_slice is not None and (pos_slice[1] - pos_slice[0]) >= 4:
     packed_bone_index_offset = pos_slice[0] + 3
-  per_vertex_group_count = [0] * nverts
-  used_bone_indices = set()
 
   for vi in range(nverts):
     # Skinned meshes use the original EDM vertex index directly.
@@ -906,37 +904,28 @@ def _bind_skin_object(mesh_obj, skin_node):
       if decoded and any(0 <= int(idx) < len(skin_bones) for idx in decoded):
         bone_indices = decoded
 
-    assigned = False
+    # Multiple packed slots may reference the same bone. Accumulate them before
+    # assigning groups, then normalize the actual influences (never add fake ones).
+    influences = {}
     for bi, weight in enumerate(weights[:4]):
       bone_index = int(bone_indices[bi]) if bone_indices and bi < len(bone_indices) else bi
-      if bone_index >= len(skin_bones):
-        break
-      if weight <= 1e-6:
+      if not 0 <= bone_index < len(skin_bones) or weight <= 0.0:
         continue
-      group_map[skin_bones[bone_index]].add([vi], weight, "REPLACE")
-      per_vertex_group_count[vi] += 1
-      used_bone_indices.add(bone_index)
-      assigned = True
-
-    if not assigned:
+      name = skin_bones[bone_index]
+      influences[name] = influences.get(name, 0.0) + weight
+    total = sum(influences.values())
+    # The official exporter discards influences below 0.001, but its own
+    # normalization tolerance can leave the surviving weights summing below 1.
+    # Normalize exactly the influences that will survive that export filter.
+    if total > 0.0:
+      influences = {name: weight for name, weight in influences.items()
+                    if weight / total >= 0.001}
+      total = sum(influences.values())
+    if total > 0.0:
+      for name, weight in influences.items():
+        group_map[name].add([vi], weight / total, "REPLACE")
+    else:
       group_map[skin_bones[0]].add([vi], 1.0, "REPLACE")
-      per_vertex_group_count[vi] += 1
-      used_bone_indices.add(0)
-
-  # Ensure every SkinNode bone appears at least once so exporter keeps palette.
-  cursor = 0
-  for bi, bone_name in enumerate(skin_bones):
-    if bi in used_bone_indices:
-      continue
-    attempts = 0
-    while attempts < nverts and per_vertex_group_count[cursor] >= 4:
-      cursor = (cursor + 1) % nverts
-      attempts += 1
-    if attempts >= nverts:
-      break
-    group_map[bone_name].add([cursor], 0.01, "ADD")
-    per_vertex_group_count[cursor] += 1
-    cursor = (cursor + 1) % nverts
 
   _bake_skin_mesh_object_transforms(mesh_obj)
 

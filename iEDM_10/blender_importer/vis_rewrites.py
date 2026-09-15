@@ -65,7 +65,8 @@ def _split_multi_arg_visibility_controls(graph):
         if child in created_helpers:
           continue
         if child.parent == ob:
-          _reparent_preserve_world(child, target_parent)
+          # Identity visibility wrappers preserve the authored child local.
+          child.parent = target_parent
 
 
 def _apply_plain_root_visibility_basis_fix(graph):

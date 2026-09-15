@@ -20,3 +20,12 @@ Information/
 
 # Local scan/tool scripts
 tools/
+
+# Licensed DCS game assets (extracted models/textures) - never publish these
+*.edm
+*.dds
+*.tga
+tests/*.blend
+f-117-tests/*.blend
+diagnostics/*.blend
+!tests/empty.blend

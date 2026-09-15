@@ -51,7 +51,11 @@ def _split_multi_arg_nonarmature_controls(graph):
         if child in created_helpers:
           continue
         if child.parent == ob:
-          _reparent_preserve_world(child, target_parent)
+          # The new controls are identity wrappers at rest. Preserve the
+          # authored child local transform; their world matrices are not yet
+          # evaluated here, so world-preserving reparenting duplicates the
+          # original parent's transform in the child.
+          child.parent = target_parent
 
 
 def _split_multi_arg_rotation_controls(graph):
@@ -107,7 +111,11 @@ def _split_multi_arg_rotation_controls(graph):
         if child in created_helpers:
           continue
         if child.parent == ob:
-          _reparent_preserve_world(child, target_parent)
+          # The new controls are identity wrappers at rest. Preserve the
+          # authored child local transform; their world matrices are not yet
+          # evaluated here, so world-preserving reparenting duplicates the
+          # original parent's transform in the child.
+          child.parent = target_parent
 
 
 def _rename_control_wrapper_mesh_pairs(graph):

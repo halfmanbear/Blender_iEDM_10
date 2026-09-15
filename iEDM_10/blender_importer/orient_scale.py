@@ -45,6 +45,8 @@ def _object_collection_targets(ob):
 
 def _insert_parent_wrapper_object(child, name, local_matrix=None, reset_child_local=False):
   parent = getattr(child, "parent", None)
+  parent_type = child.parent_type
+  parent_bone = child.parent_bone
   helper = bpy.data.objects.new(name, None)
   helper.empty_display_size = 0.1
   for collection in _object_collection_targets(child):
@@ -53,9 +55,13 @@ def _insert_parent_wrapper_object(child, name, local_matrix=None, reset_child_lo
     except RuntimeError:
       pass
   helper.parent = parent
+  helper.parent_type = parent_type
+  helper.parent_bone = parent_bone
   helper.matrix_parent_inverse = Matrix.Identity(4)
   helper.matrix_basis = local_matrix.copy() if hasattr(local_matrix, "copy") else (local_matrix or Matrix.Identity(4))
   child.parent = helper
+  child.parent_type = 'OBJECT'
+  child.parent_bone = ''
   child.matrix_parent_inverse = Matrix.Identity(4)
   if reset_child_local:
     child.matrix_basis = Matrix.Identity(4)

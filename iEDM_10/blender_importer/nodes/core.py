@@ -955,9 +955,9 @@ def _apply_render_positioning(node):
       and not isinstance(getattr(node, "render", None), SkinNode)
     ):
       if node.blender.location.length < 1e-9:
-        _recenter_mesh_object_to_geometry(node.blender)
-        if _import_ctx.edm_version >= 10:
-          node.blender.location = (node.parent.blender.matrix_basis @ node.blender.location.to_4d()).to_3d()
+        # Later identity/basis rewrites discard an early compensating offset.
+        # Defer editing-origin changes until the authored graph has settled.
+        node._recenter_render_origin = True
 
     if isinstance(getattr(node, "render", None), SkinNode):
       _wrap_skin_object_with_skin_box(node.blender, node.render)
