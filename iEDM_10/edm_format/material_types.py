@@ -1,9 +1,12 @@
-from collections import OrderedDict, namedtuple, Counter
+from __future__ import annotations
+
+from collections import Counter, OrderedDict, namedtuple
+from typing import Any, Callable
 
 from .typereader import AnimatedProperty, ArgumentProperty
 
 from .mathtypes import Vector
-from .propertiesset import PropertiesSet
+from .propertiesset import PropertiesSet, StreamReader
 
 # Known vertex channels observed in official exporter output and real EDM assets.
 # Keep this map broad enough to avoid dropping recognized payload layouts.
@@ -26,15 +29,20 @@ Texture = namedtuple("Texture", ["index", "name", "matrix"])
 class VertexFormat(object):
     """Represents the vertex format for an array of vertices"""
 
-    def __init__(self, channelData=None):
+    data: bytes
+    nposition: int
+    nnormal: int
+    ntexture: int
+
+    def __init__(
+        self, channelData: str | bytes | dict[str, int] | None = None
+    ) -> None:
         """Initialise vertex format. takes a byte array, numeric per-channel string,
         or a dictionary naming each count."""
         if isinstance(channelData, str):
             if len(channelData) < 26:
                 channelData = channelData + "0" * (26 - len(channelData))
             self.data = bytes(int(x) for x in channelData)
-        elif isinstance(channelData, bytes):
-            self.data = channelData
         elif isinstance(channelData, dict):
             assert all(x in _vertex_channels for x in channelData.keys())
             data = bytearray(26)
@@ -50,39 +58,41 @@ class VertexFormat(object):
         self.nnormal = int(self.data[1])
         self.ntexture = int(self.data[4])
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash(self.data)
 
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, VertexFormat):
+            return NotImplemented
         return self.data == other.data
 
     @property
-    def position_indices(self):
+    def position_indices(self) -> list[int]:
         return [0, 1, 2]
 
     @property
-    def normal_indices(self):
+    def normal_indices(self) -> list[int]:
         start = self.data[0]
         return list(range(start, start + self.nnormal))
 
     @property
-    def texture_indices(self):
+    def texture_indices(self) -> list[int]:
         start = sum(self.data[:4])
         return list(range(start, start + self.ntexture))
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         assert all(x < 10 for x in self.data)
         return "VertexFormat('{}')".format("".join(str(x) for x in self.data))
 
     @classmethod
-    def read(cls, reader):
-        channels = reader.read_uint()
+    def read(cls, reader: StreamReader) -> "VertexFormat":
+        channels = reader.read_count("vertex format channel count")
         data = reader.read_uchars(channels)
 
         # Which channels have data?
         knownChannels = set(_vertex_channels.values())
         dataChannels = {
-            i: x for i, x in enumerate(data) if x != 0 and not i in knownChannels
+            i: x for i, x in enumerate(data) if x != 0 and i not in knownChannels
         }
         if dataChannels:
             print(
@@ -92,12 +102,12 @@ class VertexFormat(object):
             )
         return cls(data)
 
-    def write(self, writer):
+    def write(self, writer: Any) -> None:
         writer.write_uint(len(self.data))
         writer.write_uchars(self.data)
 
 
-def _read_material_texture(reader):
+def _read_material_texture(reader: StreamReader) -> Texture:
     index = reader.read_uint()
     reader.read_int()  # unknown
     name = reader.read_string()
@@ -106,29 +116,29 @@ def _read_material_texture(reader):
     return Texture(index, name, matrix)
 
 
-def _read_animateduniforms(stream):
-    length = stream.read_uint()
-    data = OrderedDict()
+def _read_animateduniforms(stream: StreamReader) -> "OrderedDict[str, Any]":
+    length = stream.read_count("animated uniforms count")
+    data: OrderedDict[str, Any] = OrderedDict()
     for _ in range(length):
         prop = stream.read_named_type()
         data[prop.name] = prop
     return data
 
 
-def _read_texture_coordinates_channels(stream):
-    count = stream.read_uint()
-    return stream.read_ints(count)
+def _read_texture_coordinates_channels(stream: StreamReader) -> tuple[int, ...]:
+    count = stream.read_count("texture coordinate channel count")
+    return tuple(stream.read_ints(count))
 
 
-def _read_alpha_function(stream):
+def _read_alpha_function(stream: StreamReader) -> int:
     # enable(uint8) + unknown(uint32) + threshold(float)
     enable = stream.read_uchar()
     stream.read_uint()
     stream.read_float()
-    return enable
+    return int(enable)
 
 
-def _read_blend_function(stream):
+def _read_blend_function(stream: StreamReader) -> tuple[int, int, int]:
     # enable(uint8) + src_factor(uint32) + dst_factor(uint32)
     enable = stream.read_uchar()
     src = stream.read_uint()
@@ -136,7 +146,7 @@ def _read_blend_function(stream):
     return (enable, src, dst)
 
 
-def _read_billboard(stream):
+def _read_billboard(stream: StreamReader) -> tuple[int, int]:
     # axis(uint8) + mode(uint8)
     axis = stream.read_uchar()
     mode = stream.read_uchar()
@@ -144,7 +154,7 @@ def _read_billboard(stream):
 
 
 # Lookup table for material reading types
-_material_entry_lookup = {
+_material_entry_lookup: dict[str, Callable[[StreamReader], Any]] = {
     "ALPHA_FUNCTION": _read_alpha_function,
     "BLEND_FUNCTION": _read_blend_function,
     "BILLBOARD": _read_billboard,
@@ -164,8 +174,11 @@ _material_entry_lookup = {
 
 
 class ShadowSettings(object):
+    cast: bool
+    cast_only: bool
+
     # Shadow flags: bit0=cast, bit2=cast_only; bit1 is read but discarded by the engine.
-    def __init__(self, value=None, **kwargs):
+    def __init__(self, value: int | None = None, **kwargs: bool) -> None:
         if value is not None:
             self.cast = bool(value & 1)
             self.cast_only = bool(value & 4)
@@ -174,10 +187,10 @@ class ShadowSettings(object):
             self.cast_only = kwargs.get("cast_only", False)
 
     @property
-    def value(self):
+    def value(self) -> int:
         return (1 if self.cast else 0) + (4 if self.cast_only else 0)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         args = []
         if self.cast:
             args.append("cast=True")
@@ -187,7 +200,24 @@ class ShadowSettings(object):
 
 
 class Material(object):
-    def __init__(self):
+    blending: int
+    culling: int
+    decal: int
+    depth_bias: int
+    texture_coordinates_channels: tuple[int, ...] | None
+    material_name: str
+    name: str
+    shadows: ShadowSettings
+    vertex_format: VertexFormat | None
+    uniforms: PropertiesSet
+    animated_uniforms: PropertiesSet
+    textures: list[Texture]
+    alpha_function: int | None
+    blend_function: tuple[int, int, int] | None
+    billboard: tuple[int, int] | None
+    props: "OrderedDict[str, Any]"
+
+    def __init__(self) -> None:
         self.blending = 0
         self.culling = 0
         self.decal = 0
@@ -205,10 +235,10 @@ class Material(object):
         self.billboard = None
 
     @classmethod
-    def read(cls, stream):
+    def read(cls, stream: StreamReader) -> "Material":
         self = cls()
-        props = OrderedDict()
-        for _ in range(stream.read_uint()):
+        props: OrderedDict[str, Any] = OrderedDict()
+        for _ in range(stream.read_count("material entry count")):
             name = stream.read_string()
             props[name] = _material_entry_lookup[name](stream)
         for k, i in props.items():
@@ -216,7 +246,7 @@ class Material(object):
         self.props = props
         return self
 
-    def write(self, writer):
+    def write(self, writer: Any) -> None:
         # Count entries dynamically to avoid mismatch when optional fields are absent.
         entry_count = 9  # BLENDING, DEPTH_BIAS, TEXTURE_COORDINATES_CHANNELS,
         # MATERIAL_NAME, NAME, SHADOWS, TEXTURES, UNIFORMS,
@@ -265,8 +295,8 @@ class Material(object):
         assert not self.animated_uniforms
         self.animated_uniforms.write(writer)
 
-    def audit(self):
-        c = Counter()
+    def audit(self) -> Counter[str]:
+        c: Counter[str] = Counter()
         if self.uniforms:
             c["model::PropertiesSet"] = 1
             c += self.uniforms.audit()

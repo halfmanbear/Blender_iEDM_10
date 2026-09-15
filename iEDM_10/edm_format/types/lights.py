@@ -248,7 +248,7 @@ class FakeSpotLightsNode(BaseNode):
         self.material_ish = stream.read_uint()
 
         # We have parent-like blocks of two uints + three floats
-        controlNodeCount = stream.read_uint()
+        controlNodeCount = stream.read_count("control node count")
 
         self.parentData = []
         self.parentData_float_offsets = []
@@ -263,7 +263,7 @@ class FakeSpotLightsNode(BaseNode):
         if controlNodeCount:
             stream.mark_type_read("model::FSLNControlNode", controlNodeCount - 1)
 
-        dataCount = stream.read_uint()
+        dataCount = stream.read_count("fake spot light data count")
         self.raw_data = [stream.read(65) for _ in range(dataCount)]
         stream.mark_type_read("model::FakeSpotLight", dataCount)
 
@@ -474,13 +474,13 @@ class FakeOmniLightsNode(BaseNode):
         self.material_ish = stream.read_uint()
         # uint32 controlLinkCount, then for each link: uint32 node_index + uint32 (discarded).
         # Hardcoding 5 uints only worked when controlLinkCount == 2 (1 + 2*2 = 5).
-        control_link_count = stream.read_uint()
+        control_link_count = stream.read_count("control link count")
         self.control_links = []
         for _ in range(control_link_count):
             node_idx = stream.read_uint()
             _discard = stream.read_uint()
             self.control_links.append(node_idx)
-        count = stream.read_uint()
+        count = stream.read_count("fake omni light count")
         # FakeOmniLight::load layout:
         #   Vec3d position, Vec2f uv0, Vec2f uv1, float size, uint32 face_arg.
         self.data = [_read_fake_omni_light(stream) for _ in range(count)]
@@ -529,7 +529,7 @@ class FakeALSNode(BaseNode):
         self = super(FakeALSNode, cls).read(stream)
         # batumi.edm 1138915 x 340
         self.als_header = stream.read_uints(3)
-        count = stream.read_uint()
+        count = stream.read_count("fake ALS light count")
         self.raw_data = [stream.read(80) for _ in range(count)]
         stream.mark_type_read("model::FakeALSLight", count)
 

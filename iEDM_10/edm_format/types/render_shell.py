@@ -1,6 +1,7 @@
 from collections import Counter
 import itertools
 
+from ..basereader import EDMFormatError, MAX_REASONABLE_COUNT
 from .core import (
     BaseNode,
     NodeCategory,
@@ -75,9 +76,16 @@ def _write_index_data(indexData, vertexDataLength, writer):
 
 
 def _read_vertex_data(stream, classification=None):
-    count = stream.read_uint()
-    stride = stream.read_uint()
-    vtxData = stream.read_floats(count * stride)
+    count = stream.read_count("vertex count")
+    stride = stream.read_count("vertex stride")
+    total = count * stride
+    if total > MAX_REASONABLE_COUNT:
+        raise EDMFormatError(
+            "Implausible vertex data size {} (count={}, stride={})".format(
+                total, count, stride
+            )
+        )
+    vtxData = stream.read_floats(total)
 
     # If given a classification, mark it off
     if classification:
@@ -97,7 +105,7 @@ def _write_vertex_data(data, writer):
 
 def _read_parent_data(stream):
     # Read the parent section
-    parentCount = stream.read_uint()
+    parentCount = stream.read_count("parent count")
     stream.mark_type_read("model::RNControlNode", parentCount - 1)
 
     if parentCount == 1:
@@ -625,7 +633,7 @@ class SegmentsNode(BaseNode):
         # opaque field. Treating it as "unknown" loses the authored transform
         # chain and rotates collision lines into the wrong basis on import.
         self.parent = stream.read_uint()
-        count = stream.read_uint()
+        count = stream.read_count("segments count")
         self.data = [stream.read_floats(6) for x in range(count)]
         stream.mark_type_read("model::SegmentsNode::Segments", count)
         return self

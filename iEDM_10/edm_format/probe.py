@@ -7,6 +7,8 @@ importer can fail early with a precise message instead of attempting to parse an
 EDM2 container as EDM v10 data.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 import os
 import struct
@@ -26,7 +28,7 @@ class UnsupportedModelFormatError(IOError):
     """Raised when a model container is recognized but not supported."""
 
 
-def identify_model_file(path):
+def identify_model_file(path: str | os.PathLike[str]) -> ModelFormatInfo:
     """Identify whether *path* looks like standard EDM or EDM2/ClassReader20.
 
     Returns ``ModelFormatInfo`` with ``family`` values:
@@ -68,7 +70,9 @@ def identify_model_file(path):
     )
 
 
-def require_supported_import_format(path):
+def require_supported_import_format(
+    path: str | os.PathLike[str],
+) -> ModelFormatInfo:
     """Validate that *path* is an importer-supported model container."""
 
     info = identify_model_file(path)

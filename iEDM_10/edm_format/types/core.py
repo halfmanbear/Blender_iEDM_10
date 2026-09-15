@@ -244,7 +244,7 @@ class TrackingReader(BaseReader):
 
 def _read_index(stream):
     """Reads a dictionary of type String : uint"""
-    length = stream.read_uint()
+    length = stream.read_count("index length")
     data = OrderedDict()
     for _ in range(length):
         key = stream.read_string()
@@ -262,7 +262,7 @@ def _write_index(writer, data):
 
 
 def _read_main_object_dictionary(stream):
-    count = stream.read_uint()
+    count = stream.read_count("main object dictionary count")
     objects = {}
     for _ in range(count):
         name = stream.read_string()
@@ -711,7 +711,7 @@ class RootNode(BaseNode):
         self.boundingBoxMin = stream.read_vec3d()
         self.boundingBoxMax = stream.read_vec3d()
         self.unknownB = [stream.read_vec3d() for _ in range(4)]
-        material_count = stream.read_uint()
+        material_count = stream.read_count("material count")
         self.materials = [Material.read(stream) for i in range(material_count)]
         stream.materials = self.materials
         self.unknownC = stream.read_uint()
@@ -1004,7 +1004,7 @@ class ArgRotationNode(ArgAnimationNode):
     def _read_AANRotationArg(cls, stream):
         stream.mark_type_read("model::ArgAnimationNode::Rotation")
         arg = stream.read_uint()
-        count = stream.read_uint()
+        count = stream.read_count("rotation key count")
         keys = [
             get_type_reader("model::Key<key::ROTATION>")(stream) for _ in range(count)
         ]
@@ -1025,7 +1025,7 @@ class ArgPositionNode(ArgAnimationNode):
     def _read_AANPositionArg(cls, stream):
         stream.mark_type_read("model::ArgAnimationNode::Position")
         arg = stream.read_uint()
-        count = stream.read_uint()
+        count = stream.read_count("position key count")
         keys = [
             get_type_reader("model::Key<key::POSITION>")(stream) for _ in range(count)
         ]
@@ -1043,12 +1043,12 @@ class ArgScaleNode(ArgAnimationNode):
     def _read_AANScaleArg(cls, stream):
         stream.mark_type_read("model::ArgAnimationNode::Scale")
         arg = stream.read_uint()
-        count = stream.read_uint()
+        count = stream.read_count("scale key count")
         # Set 1 (4-component): scale orientation quaternion Q.
         # Scale is applied as Q * diag(sx,sy,sz) * Q^-1.
         # When Q is identity this reduces to plain axis-aligned scale.
         keys = [ScaleKey.read(stream, 4) for _ in range(count)]
-        count2 = stream.read_uint()
+        count2 = stream.read_count("scale key2 count")
         # Set 2 (3-component): scale magnitudes (sx, sy, sz) along the Q axes.
         key2s = [ScaleKey.read(stream, 3) for _ in range(count2)]
         # Warn when oriented scale data is present. The importer can reconstruct it
@@ -1142,7 +1142,7 @@ class ArgVisibilityNode(Node, AnimatingNode):
     def _read_AANVisibilityArg(cls, stream):
         stream.mark_type_read("model::ArgVisibilityNode::Arg")
         arg = stream.read_uint()
-        count = stream.read_uint()
+        count = stream.read_count("visibility range count")
         data = [stream.read_doubles(2) for _ in range(count)]
         stream.mark_type_read("model::ArgVisibilityNode::Range", count)
         return (arg, data)
@@ -1169,7 +1169,7 @@ class LodNode(Node):
     @classmethod
     def read(cls, stream):
         self = super(LodNode, cls).read(stream)
-        count = stream.read_uint()
+        count = stream.read_count("lod level count")
         self.level = [
             tuple(math.sqrt(v) for v in stream.read_doubles(2)) for _ in range(count)
         ]

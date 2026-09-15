@@ -1,8 +1,17 @@
-from collections import OrderedDict, Counter
+from __future__ import annotations
+
+from collections import Counter, OrderedDict
+from typing import Any
+
 from .mathtypes import Vector
 
+# Actually a types.core.TrackingReader (BaseReader plus read_named_type() /
+# mark_type_read()); typed as Any here to avoid a circular import with
+# edm_format.types.core, which imports this module.
+StreamReader = Any
 
-def _property_type_name(value):
+
+def _property_type_name(value: Any) -> str:
     """Return the EDM type string for a property value."""
     if isinstance(value, bool):
         return "model::Property<unsigned int>"
@@ -17,11 +26,13 @@ def _property_type_name(value):
     raise IOError("Unknown property type {}/{}".format(value, type(value)))
 
 
-class PropertiesSet(OrderedDict):
+class PropertiesSet(OrderedDict[str, Any]):
     @classmethod
-    def read(cls, stream, count=True, preserve_animated=False):
+    def read(
+        cls, stream: StreamReader, count: bool = True, preserve_animated: bool = False
+    ) -> "PropertiesSet":
         data = cls()
-        length = stream.read_uint()
+        length = stream.read_count("properties set length")
         for _ in range(length):
             prop = stream.read_named_type()
             # Handle regular and animated properties sets the same
@@ -41,7 +52,7 @@ class PropertiesSet(OrderedDict):
         "model::Property<const char*>": lambda w, v: w.write_string(v),
     }
 
-    def write(self, writer):
+    def write(self, writer: Any) -> None:
         writer.write_uint(len(self))
         for key, value in self.items():
             type_name = _property_type_name(value)
@@ -52,8 +63,8 @@ class PropertiesSet(OrderedDict):
             else:
                 self._SCALAR_WRITERS[type_name](writer, value)
 
-    def audit(self):
-        c = Counter()
+    def audit(self) -> Counter[str]:
+        c: Counter[str] = Counter()
         for value in self.values():
             c[_property_type_name(value)] += 1
         return c
