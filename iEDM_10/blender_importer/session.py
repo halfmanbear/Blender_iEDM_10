@@ -602,6 +602,9 @@ def _run_import_postprocess(edm, graph, options):
     _run_skin_transform_postprocess()
     _finish_import_postprocess(edm, graph, options)
     _finalize_render_origins(graph)
+    from .bone_controls import build_bone_control_graph
+
+    build_bone_control_graph(graph)
 
 
 def read_file(filename, options=None):

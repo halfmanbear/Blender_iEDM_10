@@ -318,7 +318,6 @@ def _build_arganimation_action(
         action["_iedm_rotation_accum_args"] = int(len(rot_arg_order))
 
     static_loc, static_rot, _static_scale = basis_local.decompose()
-    pos_rot = static_rot.copy()
     if rotation_basis_local is not None:
         try:
             _rot_loc, static_rot, _rot_scale = rotation_basis_local.decompose()
@@ -327,7 +326,8 @@ def _build_arganimation_action(
     leftRot = static_rot
     rightRot = Quaternion((1, 0, 0, 0))
     leftPos = (
-        Matrix.Translation(static_loc) @ pos_rot.to_matrix().to_4x4()
+        # Position deltas precede the default rotation in the EDM transform.
+        Matrix.Translation(static_loc) @ Matrix(node.base.matrix).to_3x3().to_4x4()
         if posData
         else Matrix.Identity(4)
     )

@@ -160,11 +160,8 @@ def _localize_skin_mesh_to_bind_target(mesh_obj, bind_target_loc):
     if center is None:
         return False
     try:
-        # v10 SkinNode vertices are commonly stored in absolute skeleton space.
-        # Convert them to the same-name bind helper's local space. Already-local
-        # meshes stay near the origin and must not be shifted a second time.
-        if center.length <= 1.0 or bind_target_loc.length <= 1.0:
-            return False
+        # SkinNode geometry is in skeleton space, including meshes and bind
+        # anchors near the origin. Distance cannot identify a coordinate space.
         # A palette anchor can be far from its geometry; distance is not evidence
         # that vertices are already local (for example Su-27 Object10934817).
         for vert in mesh_obj.data.vertices:
@@ -822,22 +819,8 @@ def _finalize_bone_import_ctx(
     }
 
     arm_obj.data.pose_position = "REST"
-    _bone_anim_sources = _transfer_bone_actions_to_armature(
-        graph, arm_obj, node_to_bone_name
-    )
-    bone_anim_source_nodes = set()
-    bone_anim_source_transforms = set()
-    if _bone_anim_sources:
-        if isinstance(_bone_anim_sources, tuple) and len(_bone_anim_sources) == 2:
-            bone_anim_source_nodes = _bone_anim_sources[0] or set()
-            bone_anim_source_transforms = _bone_anim_sources[1] or set()
-        else:
-            bone_anim_source_nodes = _bone_anim_sources or set()
-
-    _import_ctx.bone_import_ctx["bone_anim_source_nodes"] = bone_anim_source_nodes
-    _import_ctx.bone_import_ctx["bone_anim_source_transforms"] = (
-        bone_anim_source_transforms
-    )
+    # Animated ancestors also drive ordinary meshes. Keep their object actions.
+    # The full source hierarchy drives bones after mesh bind-space finalization.
 
 
 # ---------------------------------------------------------------------------

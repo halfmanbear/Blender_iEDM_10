@@ -712,9 +712,18 @@ def _parent_node_object(node, ctx):
                 node.blender.parent = arm_obj
                 node.blender.parent_type = "BONE"
                 node.blender.parent_bone = bone_parent_name
-                node.blender.matrix_parent_inverse = Matrix.Identity(4)
+                # Bone parenting uses the tip and Blender normalizes edit-bone
+                # scale. Convert back to the EDM bone frame before authored locals.
+                source = bone_parent_node.transform
+                inv_bind = Matrix(getattr(source, "bone_matrix",
+                                          getattr(source, "inv_base_bone_matrix", Matrix.Identity(4))))
+                rest_world = arm_obj.matrix_world @ bone.matrix_local
+                node.blender.matrix_parent_inverse = (
+                    Matrix.Translation((0.0, -tail_len, 0.0))
+                    @ rest_world.inverted() @ _ROOT_BASIS_FIX @ inv_bind.inverted()
+                )
                 node.blender["_iedm_parented_to_bone"] = bone_parent_name
-                node.blender["_iedm_compensate_bone_tail_export"] = tail_len
+                node.blender["_iedm_bone_attachment_corrected"] = True
             except Exception as e:
                 print(f"Warning in blender_importer/nodes/core.py: {e}")
         elif sibling_skin_helper is not None:
@@ -1374,22 +1383,6 @@ def _hookup_node_animations(node, ctx, vis_actions, used_shared_parent):
                 node, node.blender, used_shared_parent=used_shared_parent
             )
 
-        try:
-            tail_len = float(node.blender.get("_iedm_compensate_bone_tail_export", 0.0))
-        except Exception:
-            tail_len = 0.0
-        if abs(tail_len) > 1e-8:
-            try:
-                # The official exporter inserts an implicit "End Of <bone>" transform
-                # for direct bone children.  Pre-apply the inverse so imported authored
-                # controls round-trip at their EDM positions instead of at the bone tail.
-                node.blender.matrix_basis = (
-                    Matrix.Translation((0.0, -tail_len, 0.0))
-                    @ node.blender.matrix_basis
-                )
-            except Exception as e:
-                print(f"Warning in blender_importer/nodes/core.py: {e}")
-
         if node.blender.type == "EMPTY":
             distFromScale = node.blender.scale - Vector((1, 1, 1))
             if distFromScale.length < 0.01:
@@ -1421,6 +1414,23 @@ def _hookup_node_animations(node, ctx, vis_actions, used_shared_parent):
                 node.blender.animation_data.action = None
             else:
                 node.blender.animation_data.action = vis_actions[0]
+
+    try:
+        tail_len = float(node.blender.get("_iedm_compensate_bone_tail_export", 0.0))
+    except Exception:
+        tail_len = 0.0
+    if abs(tail_len) > 1e-8:
+        try:
+            # The official exporter inserts an implicit "End Of <bone>" transform
+            # for direct bone children.  Pre-apply the inverse so imported authored
+            # controls round-trip at their EDM positions instead of at the bone tail.
+            node.blender.matrix_basis = (
+                Matrix.Translation((0.0, -tail_len, 0.0))
+                @ node.blender.matrix_basis
+            )
+        except Exception as e:
+            print(f"Warning in blender_importer/nodes/core.py: {e}")
+
 
 
 def _dump_node_diagnostics(node):
