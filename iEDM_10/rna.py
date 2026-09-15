@@ -272,21 +272,27 @@ def _is_fallback_edmprops_bound():
         return False
 
 
+# (type, attribute) pairs this addon added in register(); unregister() removes only these,
+# so properties another addon (e.g. io_scene_edm) registered first survive.
+_owned_props = []
+
+
+def _add_prop(owner, attr, prop):
+    if not hasattr(owner, attr):
+        setattr(owner, attr, prop)
+        _owned_props.append((owner, attr))
+
+
 def register():
     global _owns_fallback_edmprops
-    if not hasattr(bpy.types.Action, "argument"):
-        bpy.types.Action.argument = bpy.props.IntProperty(name="Argument", default=-1, min=-1)
-    if not hasattr(bpy.types.Scene, "active_edm_argument"):
-        bpy.types.Scene.active_edm_argument = bpy.props.IntProperty(name="Active Argument", default=-1, min=-1)
-    if not hasattr(bpy.types.Scene, "edm_version"):
-        bpy.types.Scene.edm_version = bpy.props.IntProperty(
-            name="EDM Version",
-            default=10,
-            description="EDM file format version detected on import")
-    if not hasattr(bpy.types.Material, "edm_material"):
-        bpy.types.Material.edm_material = bpy.props.StringProperty(name="EDM Material Name")
-    if not hasattr(bpy.types.Material, "edm_blending"):
-        bpy.types.Material.edm_blending = bpy.props.StringProperty(name="EDM Blending Mode")
+    _add_prop(bpy.types.Action, "argument", bpy.props.IntProperty(name="Argument", default=-1, min=-1))
+    _add_prop(bpy.types.Scene, "active_edm_argument", bpy.props.IntProperty(name="Active Argument", default=-1, min=-1))
+    _add_prop(bpy.types.Scene, "edm_version", bpy.props.IntProperty(
+        name="EDM Version",
+        default=10,
+        description="EDM file format version detected on import"))
+    _add_prop(bpy.types.Material, "edm_material", bpy.props.StringProperty(name="EDM Material Name"))
+    _add_prop(bpy.types.Material, "edm_blending", bpy.props.StringProperty(name="EDM Blending Mode"))
 
     if not hasattr(bpy.types.Object, "EDMProps"):
         try:
@@ -299,16 +305,22 @@ def register():
     if not hasattr(bpy.types.Object, "edm"):
         bpy.utils.register_class(EDMObjectSettings)
         bpy.types.Object.edm = bpy.props.PointerProperty(type=EDMObjectSettings)
+        _owned_props.append((bpy.types.Object, "edm"))
 
 
 def unregister():
     global _owns_fallback_edmprops
-    if hasattr(bpy.types.Object, "edm"):
-        del bpy.types.Object.edm
-        try:
-            bpy.utils.unregister_class(EDMObjectSettings)
-        except RuntimeError:
-            pass
+    owned = list(reversed(_owned_props))
+    _owned_props.clear()
+    for owner, attr in owned:
+        if not hasattr(owner, attr):
+            continue
+        delattr(owner, attr)
+        if (owner, attr) == (bpy.types.Object, "edm"):
+            try:
+                bpy.utils.unregister_class(EDMObjectSettings)
+            except RuntimeError:
+                pass
 
     # Only remove fallback EDMProps if this addon still owns the binding.
     if _owns_fallback_edmprops and hasattr(bpy.types.Object, "EDMProps") and _is_fallback_edmprops_bound():
@@ -319,14 +331,3 @@ def unregister():
         except RuntimeError:
             pass
     _owns_fallback_edmprops = False
-
-    if hasattr(bpy.types.Material, "edm_blending"):
-        del bpy.types.Material.edm_blending
-    if hasattr(bpy.types.Material, "edm_material"):
-        del bpy.types.Material.edm_material
-    if hasattr(bpy.types.Scene, "edm_version"):
-        del bpy.types.Scene.edm_version
-    if hasattr(bpy.types.Scene, "active_edm_argument"):
-        del bpy.types.Scene.active_edm_argument
-    if hasattr(bpy.types.Action, "argument"):
-        del bpy.types.Action.argument
