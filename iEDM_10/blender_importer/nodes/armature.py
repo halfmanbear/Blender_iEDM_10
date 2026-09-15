@@ -150,7 +150,7 @@ def _copy_fcurve_to_action(src_curve, dst_action, dst_path, action_group):
       new_key.handle_left = key.handle_left
       new_key.handle_right = key.handle_right
     except Exception as e:
-      print(f"Warning in blender_importer\nodes\armature.py: {e}")
+      print(f"Warning in blender_importer/nodes/armature.py: {e}")
   dst_curve.update()
 
 
@@ -331,7 +331,11 @@ def _transfer_bone_actions_to_armature(graph, arm_obj, node_to_bone_name):
     action = action_map[action_name]
     track = ad.nla_tracks.new()
     track.name = action.name
-    strip = track.strips.new(action.name, 1, action)
+    # Start the strip at the action's first key so keys keep their scene frames.
+    start = float(action.frame_range[0])
+    strip = track.strips.new(action.name, int(start), action)
+    if abs(strip.frame_start - start) > 1e-6 and hasattr(strip, "frame_start_ui"):
+      strip.frame_start_ui = start
     strip.name = action.name
     strip.extrapolation = 'NOTHING'
 
@@ -643,7 +647,7 @@ def _build_edit_bones(arm_obj, arm_data, bone_nodes, apply_bone_root_fix):
     try:
       bpy.ops.object.mode_set(mode="OBJECT")
     except Exception as e:
-      print(f"Warning in blender_importer\nodes\armature.py: {e}")
+      print(f"Warning in blender_importer/nodes/armature.py: {e}")
     if prev_active is not None:
       view_layer.objects.active = prev_active
 

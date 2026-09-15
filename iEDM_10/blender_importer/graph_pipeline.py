@@ -319,7 +319,12 @@ def _push_action_to_nla(ob, action):
   try:
     track = ob.animation_data.nla_tracks.new()
     track.name = action.name
-    strip = track.strips.new(action.name, 0, action)
+    # A strip maps the action's first key onto its start frame; start there so
+    # argument keys keep their authored scene frames.
+    start = float(action.frame_range[0])
+    strip = track.strips.new(action.name, int(start), action)
+    if abs(strip.frame_start - start) > 1e-6 and hasattr(strip, "frame_start_ui"):
+      strip.frame_start_ui = start
     strip.extrapolation = 'HOLD'
     if "Visib" in action.name:
       strip.blend_type = 'COMBINED'
