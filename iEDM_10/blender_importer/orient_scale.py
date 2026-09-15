@@ -88,6 +88,8 @@ def _insert_parent_wrapper_object(
     parent = getattr(child, "parent", None)
     parent_type = child.parent_type
     parent_bone = child.parent_bone
+    # Bone attachments carry their EDM bone-frame correction in the parent inverse.
+    parent_inverse = child.matrix_parent_inverse.copy()
     helper = bpy.data.objects.new(name, None)
     helper.empty_display_size = 0.1
     for collection in _object_collection_targets(child):
@@ -98,7 +100,7 @@ def _insert_parent_wrapper_object(
     helper.parent = parent
     helper.parent_type = parent_type
     helper.parent_bone = parent_bone
-    helper.matrix_parent_inverse = Matrix.Identity(4)
+    helper.matrix_parent_inverse = parent_inverse
     helper.matrix_basis = (
         local_matrix.copy()
         if hasattr(local_matrix, "copy")
