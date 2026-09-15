@@ -1,12 +1,10 @@
 import bpy
 from bpy_extras.io_utils import ImportHelper
-from bpy.types import Operator, OperatorFileListElement
+from bpy.types import Operator
 from bpy.props import ( StringProperty,
                         BoolProperty,
                         IntProperty,
-                        CollectionProperty,
                         EnumProperty,
-                        FloatProperty,
                       )
 import os
 
@@ -21,15 +19,8 @@ class ImportEDM(Operator, ImportHelper):
   filename_ext = ".edm"
 
   filter_glob: StringProperty(
-          default="*.edm;*.edm2",
+          default="*.edm",
           options={'HIDDEN'},
-          )
-  files: CollectionProperty(
-          name="File Path",
-          type=OperatorFileListElement,
-          )
-  directory: StringProperty(
-          subtype='DIR_PATH',
           )
 
   shadeless: BoolProperty(name="Shadeless",
@@ -41,6 +32,12 @@ class ImportEDM(Operator, ImportHelper):
   import_user_box: BoolProperty(name="Import User Box",
       description="Create an Empty that visualises the EDM user box",
       default=False)
+  import_light_box: BoolProperty(name="Import Light Box",
+      description="Create an Empty that visualises the EDM light box",
+      default=False)
+  assign_collections: BoolProperty(name="Assign Collections",
+      description="Sort imported objects into collections (including per-LOD collections)",
+      default=True)
   debug_transforms: BoolProperty(
       name="Debug Transforms",
       description="Print EDM-local vs Blender local/world transform details during import",
@@ -75,8 +72,6 @@ class ImportEDM(Operator, ImportHelper):
         return {'CANCELLED'}
 
     # The importer only supports one file at a time.
-    # We will only process the one in self.filepath, which avoids issues with the `files` collection.
-    
     # Import the file
     logger.warning("Reading EDM file {}".format(path))
     
@@ -90,6 +85,8 @@ class ImportEDM(Operator, ImportHelper):
           "mesh_origin_mode": self.mesh_origin_mode,
           "import_bounding_box": self.import_bounding_box,
           "import_user_box": self.import_user_box,
+          "import_light_box": self.import_light_box,
+          "assign_collections": self.assign_collections,
         })
     except Exception as e:
         self.report({'ERROR'}, "Failed to import EDM: {}: {}".format(type(e).__name__, e))
@@ -100,7 +97,7 @@ class ImportEDM(Operator, ImportHelper):
     return {'FINISHED'}
 
 def menu_import(self, context):
-  self.layout.operator(ImportEDM.bl_idname, text="DCS World (.edm, .edm2)")
+  self.layout.operator(ImportEDM.bl_idname, text="DCS World (.edm)")
 
 def register():
   bpy.utils.register_class(ImportEDM)
