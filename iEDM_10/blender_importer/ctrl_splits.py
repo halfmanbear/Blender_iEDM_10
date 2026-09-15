@@ -3,8 +3,12 @@
 
 import bpy
 from ..edm_format.mathtypes import Matrix
+from ..edm_format.types import ArgAnimationNode
+from .graph_pipeline import _get_action_argument
 from .anim_actions import (
+    _action_chain_sort_value,
     _action_has_visibility_curve,
+    _build_arganimation_action,
     _build_nonarmature_action_plan,
     _clear_object_animation_tracks,
     _collect_merged_transform_actions_for_graph_node,
@@ -15,9 +19,40 @@ from .anim_actions import (
 )
 from .prelude import (
     _SUFFIX_RE,
+    _assign_action,
     _import_ctx,
     _strip_anim_prefix,
 )
+
+
+def _action_paths(action):
+    return {fc.data_path for fc in action.fcurves}
+
+
+def _relative_keys_from_source(action, node):
+    """Re-key an inner split carrier on an identity basis; the owner holds the static part."""
+    arg = _get_action_argument(action)
+    sources = [
+        t
+        for t in getattr(node, "_collapsed_transforms", None) or [node.transform]
+        if isinstance(t, ArgAnimationNode)
+        and any(a == arg and k for a, k in list(t.posData) + list(t.rotData))
+    ]
+    if not sources:
+        return
+    rebuilt = _build_arganimation_action(
+        sources[0], arg, Matrix.Identity(4), include_scale=False
+    )
+    for fc in action.fcurves:
+        if fc.data_path not in {"location", "rotation_quaternion"}:
+            continue
+        src = rebuilt.fcurves.find(fc.data_path, index=fc.array_index)
+        if src is None or len(src.keyframe_points) != len(fc.keyframe_points):
+            continue
+        for dst, point in zip(fc.keyframe_points, src.keyframe_points):
+            dst.co.y = dst.handle_left.y = dst.handle_right.y = point.co.y
+        fc.update()
+    bpy.data.actions.remove(rebuilt)
 
 
 def _split_multi_arg_rotation_controls(graph):
@@ -43,10 +78,27 @@ def _split_multi_arg_rotation_controls(graph):
         if len(planned_actions) <= 1:
             continue
 
+        # Keys carry the owner's static loc/rot; only the outermost carrier may keep it.
+        # EDM applies position, then rotations in authored order: T @ R0 @ R1 ...
+        planned_actions.sort(
+            key=lambda action: (
+                "location" not in _action_paths(action),
+                _action_chain_sort_value(action, -1),
+            )
+        )
+        static_loc, _static_rot, static_scale = ob.matrix_basis.decompose()
+        seen_paths = set()
+        for action in planned_actions:
+            paths = _action_paths(action)
+            if paths & seen_paths & {"location", "rotation_quaternion"}:
+                _relative_keys_from_source(action, node)
+            seen_paths |= paths
+        if "rotation_quaternion" in seen_paths - _action_paths(planned_actions[0]):
+            ob.matrix_basis = Matrix.LocRotScale(static_loc, None, static_scale)
+
         direct_children = [ch for ch in list(ob.children)]
         _clear_object_animation_tracks(ob)
-        ob.animation_data_create()
-        ob.animation_data.action = planned_actions[0]
+        _assign_action(ob, planned_actions[0])
         ob["_iedm_multi_arg_rotation_split"] = True
 
         parent_for_chain = ob
@@ -58,8 +110,9 @@ def _split_multi_arg_rotation_controls(graph):
             helper.parent = parent_for_chain
             helper.matrix_parent_inverse = Matrix.Identity(4)
             helper.matrix_basis = Matrix.Identity(4)
-            helper.animation_data_create()
-            helper.animation_data.action = action
+            if "rotation_quaternion" in _action_paths(action):
+                helper.rotation_mode = "QUATERNION"
+            _assign_action(helper, action)
             helper["_iedm_identity_passthrough"] = True
             helper["_iedm_narrow_identity_passthrough"] = True
             if _action_has_visibility_curve(action):

@@ -19,6 +19,7 @@ from .graph_pipeline import _is_neg90_x_basis_matrix
 from .graph_postprocess import _reparent_preserve_world
 from .prelude import (
     _ROOT_BASIS_FIX,
+    _assign_action,
     _import_ctx,
     _import_profile_flag,
     _log,
@@ -48,8 +49,7 @@ def _split_multi_arg_visibility_controls(graph):
 
         direct_children = [ch for ch in list(ob.children)]
         _clear_object_animation_tracks(ob)
-        ob.animation_data_create()
-        ob.animation_data.action = vis_actions[0]
+        _assign_action(ob, vis_actions[0])
 
         parent_for_chain = ob
         created_helpers = []
@@ -60,8 +60,7 @@ def _split_multi_arg_visibility_controls(graph):
             helper.parent = parent_for_chain
             helper.matrix_parent_inverse = Matrix.Identity(4)
             helper.matrix_basis = Matrix.Identity(4)
-            helper.animation_data_create()
-            helper.animation_data.action = action
+            _assign_action(helper, action)
             helper["_iedm_identity_passthrough"] = True
             helper["_iedm_narrow_identity_passthrough"] = True
             helper["_iedm_vis_passthrough"] = True

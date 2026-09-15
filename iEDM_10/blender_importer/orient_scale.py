@@ -25,6 +25,7 @@ from .graph_pipeline import _get_action_argument
 from .node_transform import _transform_uses_quaternion_rotation
 from .prelude import (
     _ROOT_BASIS_FIX,
+    _assign_action,
     _import_ctx,
     _is_child_of_file_root,
     _is_top_level_visibility_authored_pair,
@@ -418,8 +419,7 @@ def _rewrite_oriented_scale_controls(graph):
             prerotation_parent["_iedm_oriented_scale_helper"] = True
             prerotation_parent["_iedm_oriented_scale_top_prefix"] = True
         if top_action is not None:
-            top_wrapper.animation_data_create()
-            top_wrapper.animation_data.action = top_action
+            _assign_action(top_wrapper, top_action)
             top_wrapper.rotation_mode = (
                 "QUATERNION"
                 if _transform_uses_quaternion_rotation(source_tf, top_wrapper)
@@ -477,8 +477,7 @@ def _rewrite_oriented_scale_controls(graph):
                 if post_action is not None:
                     if scale_arg is not None and hasattr(post_action, "argument"):
                         post_action.argument = int(scale_arg)
-                    post_anim.animation_data_create()
-                    post_anim.animation_data.action = post_action
+                    _assign_action(post_anim, post_action)
                 child = post_anim
 
             anim_scale = _insert_parent_wrapper_object(
@@ -497,8 +496,7 @@ def _rewrite_oriented_scale_controls(graph):
                 anim_scale_action, keys3, frame_mapper=frame_mapper, base_scale=None
             )
             if len(anim_scale_action.fcurves):
-                anim_scale.animation_data_create()
-                anim_scale.animation_data.action = anim_scale_action
+                _assign_action(anim_scale, anim_scale_action)
             else:
                 try:
                     bpy.data.actions.remove(anim_scale_action)
@@ -524,14 +522,12 @@ def _rewrite_oriented_scale_controls(graph):
                 if pre_action is not None:
                     if scale_arg is not None and hasattr(pre_action, "argument"):
                         pre_action.argument = int(scale_arg)
-                    pre_anim.animation_data_create()
-                    pre_anim.animation_data.action = pre_action
+                    _assign_action(pre_anim, pre_action)
                 child = pre_anim
 
         _clear_object_animation_tracks(ob)
         if leaf_vis_action is not None:
-            ob.animation_data_create()
-            ob.animation_data.action = leaf_vis_action
+            _assign_action(ob, leaf_vis_action)
         ob.matrix_basis = render_local
         ob["_iedm_oriented_scale_leaf"] = True
         _promote_oriented_scale_top_name(node, top_wrapper, ob)

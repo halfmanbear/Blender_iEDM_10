@@ -338,6 +338,8 @@ def _push_action_to_nla(ob, action):
         # argument keys keep their authored scene frames.
         start = float(action.frame_range[0])
         strip = track.strips.new(action.name, int(start), action)
+        if getattr(strip, "action_slot", False) is None and action.slots:
+            strip.action_slot = action.slots[0]
         if abs(strip.frame_start - start) > 1e-6 and hasattr(strip, "frame_start_ui"):
             strip.frame_start_ui = start
         strip.extrapolation = "HOLD"

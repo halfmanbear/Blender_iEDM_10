@@ -58,6 +58,7 @@ from .prelude import (
     DEFAULT_PROFILE,
     FRAME_SCALE,
     _ROOT_BASIS_FIX,
+    _assign_action,
     _import_capability_detail,
     _import_capability_name,
     _import_ctx,
@@ -734,8 +735,7 @@ def _propagate_visibility_hide_to_render_nodes(graph):
             key.co = (frame, value)
             key.interpolation = "CONSTANT"
         curve.update()
-        helper.animation_data_create()
-        helper.animation_data.action = action
+        _assign_action(helper, action)
         controllers[signature] = helper
         return helper
 

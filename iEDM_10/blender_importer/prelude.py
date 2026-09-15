@@ -590,6 +590,15 @@ def _ob_local_is_identity(o, eps=1e-6):
         return False
 
 
+def _assign_action(owner, action):
+    """Assign an action and bind its slot; Blender 4.4+ can leave it unbound."""
+    ad = owner.animation_data or owner.animation_data_create()
+    ad.action = action
+    if action is not None and getattr(ad, "action_slot", False) is None and action.slots:
+        ad.action_slot = action.slots[0]
+    return ad
+
+
 # ---------------------------------------------------------------------------
 # Object / node classification helpers
 # ---------------------------------------------------------------------------
