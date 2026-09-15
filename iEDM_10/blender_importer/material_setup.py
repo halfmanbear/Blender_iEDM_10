@@ -180,7 +180,8 @@ def create_material(material):
   if specPower is not None and (material.material_name or '').lower() not in _metallic_materials:
     # This is a guess, might need tweaking. Assuming specPower is in a range of 0-1024 (common for older shaders)
     # Higher specPower means a smaller, more intense highlight, which means lower roughness.
-    roughness = (1.0 - (specPower / 1024.0))**0.5 # Using sqrt for a more perceptually linear mapping
+    # Clamp before sqrt: specPower above 1024 would otherwise produce a complex number.
+    roughness = max(0.0, 1.0 - (specPower / 1024.0))**0.5 # Using sqrt for a more perceptually linear mapping
     principled_bsdf.inputs['Roughness'].default_value = max(0.0, min(1.0, roughness))
   elif (material.material_name or '').lower() not in _metallic_materials:
     principled_bsdf.inputs['Roughness'].default_value = 0.5
@@ -252,11 +253,7 @@ def create_material(material):
       print(f"Warning in blender_importer/material_setup.py: {e}")
 
   # Set other material properties
-  try:
-    mat.edm_material = material.material_name
-  except TypeError:
-    print(f"Warning: Unknown material type '{material.material_name}', defaulting to 'def_material'")
-    mat.edm_material = "def_material"
+  mat.edm_material = material.material_name
   mat.edm_blending = str(material.blending)
   _preserve_material_payload(mat, material)
 

@@ -223,7 +223,7 @@ def _preserve_source_metadata(ob, node):
     if shell_family:
       ob["_iedm_shell_family"] = str(shell_family)
   except Exception as e:
-    print(f"Warning in blender_importer\\object_create.py: {e}")
+    print(f"Warning in blender_importer/object_create.py: {e}")
 
 
 def _apply_number_node_projection(ob, node):
@@ -300,7 +300,8 @@ def _is_supported_mesh_node(node):
 
 def _vertex_format_for_node(node):
   if isinstance(node, (RenderNode, NumberNode, SkinNode)):
-    return node.material.vertex_format
+    material = getattr(node, "material", None)
+    return getattr(material, "vertex_format", None)
   if isinstance(node, ShellNode):
     return node.vertex_format
   return None
@@ -344,6 +345,10 @@ def create_object(node):
   # Skinned meshes and morph payloads rely on original EDM vertex ordering.
   compact = not isinstance(node, SkinNode) and not is_morph_node
   vertex_format = _vertex_format_for_node(node)
+  if vertex_format is None:
+    # An invalid material index leaves no vertex layout to decode the mesh with.
+    _log.warn("Skipping '{}': no vertex format (missing material)".format(getattr(node, "name", "")))
+    return None
   mesh_transform = _mesh_transform_for_node(node)
   mesh = _create_render_mesh(node, vertex_format, compact, mesh_transform)
 
