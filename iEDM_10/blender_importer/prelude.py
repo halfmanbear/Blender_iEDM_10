@@ -614,22 +614,23 @@ def is_skeleton_node(node):
   if node.render and type(node.render).__name__ == "LightNode":
     return True
 
-  # Ancestors of Bone nodes should be preserved
+  # Ancestors of Bone nodes should be preserved. _mark_skeleton_nodes caches the
+  # subtree flags in one pass; fall back to walking the subtree otherwise.
   def _has_bone(n):
+    cached = getattr(n, "_subtree_has_bone", None)
+    if cached is not None:
+      return cached
     if n.transform and "Bone" in type(n.transform).__name__:
       return True
-    for c in n.children:
-      if _has_bone(c):
-        return True
-    return False
+    return any(_has_bone(c) for c in n.children)
 
   def _has_render(n):
+    cached = getattr(n, "_subtree_has_render", None)
+    if cached is not None:
+      return cached
     if n.render is not None:
       return True
-    for c in n.children:
-      if _has_render(c):
-        return True
-    return False
+    return any(_has_render(c) for c in n.children)
 
   # Check ancestors up to graph root
   res = False
@@ -688,7 +689,7 @@ def _set_edmprop(obj, prop_name, value):
     except (OverflowError, ValueError):
       pass
     except Exception as e:
-      print(f"Warning in blender_importer\\prelude.py: {e}")
+      print(f"Warning in blender_importer/prelude.py: {e}")
 
 
 def _ensure_official_material_bridge():

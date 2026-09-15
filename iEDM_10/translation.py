@@ -172,8 +172,9 @@ class TranslationGraph(object):
 
     def attach_node(self, node, parent):
         """Adds a new child to a parent node"""
-        assert parent in self.nodes, "Parent must exist in node graph"
-        assert node not in self.nodes, "Attempting to reattach child already in graph"
+        # O(1) structural checks: list membership scans made graph building quadratic.
+        assert parent is self.root or parent.parent is not None, "Parent must exist in node graph"
+        assert node.parent is None and node is not self.root, "Attempting to reattach child already in graph"
         assert not node.children, "New child must not have children"
 
         node.graph = self
@@ -182,7 +183,6 @@ class TranslationGraph(object):
         node.parent = parent
 
     def remove_node(self, node):
-        assert node in self.nodes, "Node not in graph"
         assert node.parent, "Invalid node: No parent. Cannot remove root node."
 
         parent = node.parent
@@ -202,8 +202,8 @@ class TranslationGraph(object):
 
     def insert_new_parent(self, node):
         """Inserts a new node between the passed argument node and its parent"""
-        assert node in self.nodes, "Node not in graph"
         assert node is not self.root, "Cannot insert above root"
+        assert node.parent is not None, "Node not in graph"
 
         # Create the new node attached to the old parent
         parent = node.parent
