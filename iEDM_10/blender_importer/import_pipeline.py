@@ -66,11 +66,8 @@ from .animation import (
   _quat_is_identity,
 )
 from .graph_postprocess import (
-  _apply_plain_root_visibility_mesh_basis_fix,
-  _apply_plain_root_visibility_object_basis_fix,
   _apply_root_visibility_pair_wrapper_basis_fix,
   _apply_static_root_visibility_wrapper_basis_fix,
-  _fix_owner_encoded_render_offsets,
   _reparent_preserve_world,
   _zero_render_child_mesh_locals_under_transform,
 )

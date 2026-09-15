@@ -170,116 +170,19 @@ def _compute_world_matrices(graph):
 
 def _mark_skeleton_nodes(graph):
   """Tag each node as a skeleton node (needs its own Blender EMPTY)."""
+  # Cache subtree bone/render flags bottom-up so is_skeleton_node stays linear.
+  order = []
+  stack = [graph.root]
+  while stack:
+    n = stack.pop()
+    order.append(n)
+    stack.extend(n.children)
+  for n in reversed(order):
+    n._subtree_has_bone = bool(n.transform and "Bone" in type(n.transform).__name__) or any(
+      c._subtree_has_bone for c in n.children)
+    n._subtree_has_render = (n.render is not None) or any(c._subtree_has_render for c in n.children)
   for n in graph.nodes:
     n._is_skeleton = is_skeleton_node(n) or (n.render is not None)
-
-
-def _eliminate_artifact_wrappers(graph):
-  """Remove identity/dummy TransformNodes injected by the exporter."""
-  nodes_to_remove = []
-  for n in graph.nodes:
-    if n == graph.root:
-      continue
-    if n.render is not None:
-      continue
-    name = _transform_display_name(n.transform)
-    if name in {"root", ""} and n.parent == graph.root and n._local_bl.is_identity:
-      nodes_to_remove.append(n)
-      continue
-    if name in {"Connector Transform", "Fake Light Transform"} and n.parent:
-      nodes_to_remove.append(n)
-      continue
-
-  for n in nodes_to_remove:
-    p = n.parent
-    if p is None:
-      continue
-    insert_at = p.children.index(n) if n in p.children else len(p.children)
-    if n in p.children:
-      p.children.pop(insert_at)
-    for child in list(n.children):
-      child.parent = p
-      p.children.insert(insert_at, child)
-      insert_at += 1
-      child._local_bl = n._local_bl @ child._local_bl
-    if n in graph.nodes:
-      graph.nodes.remove(n)
-
-
-def _make_collapse_chains_visitor(graph):
-  """Return a walk_tree visitor that collapses dummy single-child transform chains."""
-  def _collapse_chains(node):
-    if not node.children or node.render:
-      return
-    if not hasattr(node, "_collapsed_transforms"):
-      node._collapsed_transforms = [node.transform] if node.transform else []
-
-    if len(node.children) == 1:
-      child = node.children[0]
-      if child.transform and not child.render:
-        name_self = _transform_display_name(node.transform)
-        name_child = _transform_display_name(child.transform)
-
-        # Preserve authored same-name Visibility -> Animation pairs as explicit
-        # two-object chains to match the official exporter's scene shape.
-        is_authored_pair = (name_self and name_self != "_" and name_self == name_child)
-        if is_authored_pair and _import_profile_flag("preserve_authored_argvis_control_pairs"):
-          return
-
-        if getattr(node, "_is_skeleton", False) or getattr(child, "_is_skeleton", False):
-          return
-
-        is_dummy_child = name_child in {"Connector Transform", "Fake Light Transform", ""}
-        if is_dummy_child:
-          node._local_bl = node._local_bl @ child._local_bl
-          child_tfs = getattr(child, "_collapsed_transforms", [child.transform] if child.transform else [])
-          node._collapsed_transforms.extend(child_tfs)
-          for grandchild in list(child.children):
-            grandchild.parent = node
-            node.children.append(grandchild)
-          node.children.remove(child)
-          if child in graph.nodes:
-            graph.nodes.remove(child)
-          _collapse_chains(node)
-
-  return _collapse_chains
-
-
-def _make_collapse_mesh_visitor(graph):
-  """Return a walk_tree visitor that merges a single mesh-render child up into its parent."""
-  def _collapse_to_mesh(node):
-    if node.transform is None or node.render is not None:
-      return
-    if len(node.children) != 1:
-      return
-    child = node.children[0]
-    if not child.render:
-      return
-    tf = node.transform
-
-    if isinstance(tf, ArgAnimationNode):
-      return
-    if isinstance(tf, ArgVisibilityNode) and _import_profile_flag("collapse_single_argvis_mesh_wrapper"):
-      pass
-    elif isinstance(tf, ArgVisibilityNode):
-      return
-
-    render_cls_name = type(child.render).__name__
-    is_mesh_like_render = render_cls_name in {"RenderNode", "ShellNode", "NumberNode"}
-    is_anim_tf_for_generic_guard = isinstance(tf, AnimatingNode) and not isinstance(tf, ArgVisibilityNode)
-    render_shared = getattr(child.render, "shared_parent", None) is not None
-    bone_related = _is_bone_transform(tf)
-
-    if is_mesh_like_render and not is_anim_tf_for_generic_guard and not render_shared and not bone_related:
-      node.render = child.render
-      node.children = child.children
-      for c in node.children:
-        c.parent = node
-      if child in graph.nodes:
-        graph.nodes.remove(child)
-      _collapse_to_mesh(node)
-
-  return _collapse_to_mesh
 
 
 def _sort_graph_children(graph):
@@ -322,17 +225,6 @@ def build_graph(edmFile):
   _compute_world_matrices(graph)
 
   _mark_skeleton_nodes(graph)
-
-  if _import_profile_flag("eliminate_exporter_artifact_wrappers"):
-    _eliminate_artifact_wrappers(graph)
-    _compute_world_matrices(graph)
-
-  if _import_profile_flag("collapse_dummy_transform_chains"):
-    graph.walk_tree(_make_collapse_chains_visitor(graph))
-    _compute_world_matrices(graph)
-
-  if _import_profile_flag("collapse_single_mesh_render_to_parent"):
-    graph.walk_tree(_make_collapse_mesh_visitor(graph))
 
   _sort_graph_children(graph)
 

@@ -36,15 +36,6 @@ def create_visibility_actions(visNode):
   return actions
 
 
-def _prefers_euler_rotation_curves(node):
-  try:
-    if isinstance(node, ArgRotationNode):
-      return False
-  except Exception as e:
-    _log.debug("_prefers_euler_rotation_curves isinstance check: {}".format(e), level=2)
-  return False
-
-
 def _plain_root_unit_interval_rot_sets(node):
   if type(node).__name__ != "ArgRotationNode":
     return None
@@ -67,21 +58,6 @@ def _plain_root_unit_interval_rot_sets(node):
   if min(frames) < 0.0 - 1e-6:
     return None
   return rot_sets
-
-
-def _plain_root_unit_interval_frame_mapper(node):
-  """Map [0..1] -> [FRAME_SCALE/2..FRAME_SCALE] for plain root ArgRotation controls.
-
-  Official exports author these controls on scene frames 100..200. Keeping them
-  on that interval preserves the expected rest pose through frame 100 instead of
-  starting the motion early at frame 0.
-  """
-  if not _import_profile_flag("plain_root_unit_interval_frame_remap"):
-    return None
-  rot_sets = _plain_root_unit_interval_rot_sets(node)
-  if not rot_sets:
-    return None
-  return _anim_frame_to_scene_frame
 
 
 def _frame_value_components(value):
@@ -291,7 +267,7 @@ def _build_arganimation_action(node, arg, basis_local, frame_mapper=None, includ
       rightRot,
       quat_to_blender=key_quat_to_blender,
       frame_mapper=frame_mapper,
-      use_euler=_prefers_euler_rotation_curves(node),
+      use_euler=False,
     )
   for sca_pair in scaleData:
     keys3 = sca_pair[1] if isinstance(sca_pair, tuple) and len(sca_pair) > 1 else []

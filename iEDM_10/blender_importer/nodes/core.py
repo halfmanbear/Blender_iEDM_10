@@ -874,24 +874,6 @@ def _apply_render_positioning(node):
       apply_node_transform(shared_parent, node.blender, used_shared_parent=True)
       _used_shared_parent_fallback = True
 
-    if shared_parent is not None and has_parent_obj and not getattr(node.render, "split_owner_encoded", False):
-      src = shared_parent_obj
-      dst = node.parent.blender
-      if src is not None:
-        try:
-          node.blender.matrix_local = dst.matrix_world.inverted() @ src.matrix_world
-        except Exception as e:
-          print(f"Warning in blender_importer/nodes/core.py: {e}")
-      else:
-        try:
-          if (
-            not parent_is_real_transform
-            and getattr(shared_parent, "category", None) is NodeCategory.transform
-          ):
-            apply_node_transform(shared_parent, node.blender, used_shared_parent=True)
-            _used_shared_parent_fallback = True
-        except Exception as e:
-          print(f"Warning in blender_importer/nodes/core.py: {e}")
     local_bl = getattr(node, "_local_bl", None)
     if local_bl is not None and not _used_shared_parent_fallback:
       try:
@@ -938,15 +920,6 @@ def _apply_render_positioning(node):
         applied_local_bl = True
       except Exception as e:
         print(f"Warning in blender_importer/nodes/core.py: {e}")
-
-    if _import_ctx.edm_version >= 10 and _import_profile_flag("argvis_parent_mesh_alignment_fix"):
-      if (
-        node.parent and isinstance(node.parent.transform, ArgVisibilityNode) and node.parent.blender
-        and not _used_shared_parent_fallback
-      ):
-        parent_loc = node.parent.blender.matrix_basis.decompose()[0]
-        if not applied_local_bl:
-          _offset_mesh_world(node.blender, parent_loc)
 
     if (
       _import_ctx.mesh_origin_mode == "APPROX"
@@ -1168,26 +1141,9 @@ def process_node(node):
 
   node._is_primary = False
 
-  # Collapse ArgVisibilityNode wrappers onto the child object when possible.
-  # Preserve separate objects when the wrapped child carries transform animation.
+  # ArgVisibilityNode wrappers always keep their own object: the official
+  # exporter reconstructs the visibility node from that object's action.
   if node.render is None and isinstance(node.transform, ArgVisibilityNode):
-    _collapsed_has_anim = any(
-      isinstance(tf, AnimatingNode)
-      for tf in getattr(node, "_collapsed_transforms", [])
-    )
-    if not _collapsed_has_anim and not _visibility_wrapper_needs_own_object(node):
-      tf = getattr(node, "transform", None)
-      child_count = len(getattr(node, "children", []) or [])
-      _debug_log_event(
-        "[iEDM][VISDBG] collapse-to-parent idx={} name={!r} children={} parent_obj={!r}".format(
-          getattr(tf, "_graph_idx", None),
-          getattr(tf, "name", "") if tf is not None else "",
-          child_count,
-          getattr(getattr(node.parent, "blender", None), "name", None),
-        )
-      )
-      node.blender = node.parent.blender
-      return
     tf = getattr(node, "transform", None)
     child_count = len(getattr(node, "children", []) or [])
     _debug_log_event(

@@ -2,62 +2,6 @@
 # All names resolved via the shared namespace injected by reader.py.
 
 
-def _split_multi_arg_nonarmature_controls(graph):
-  ctx = _import_ctx.bone_import_ctx or {}
-  scene_collection = bpy.context.collection
-
-  for node in getattr(graph, 'nodes', []) or []:
-    ob = getattr(node, 'blender', None)
-    if ob is None or getattr(ob, 'type', '') == 'ARMATURE':
-      continue
-
-    vis_source = _visibility_source_for_graph_node(node)
-    vis_actions = get_actions_for_node(vis_source) if vis_source else []
-    transform_actions = _sorted_transform_actions_for_execution(
-      _collect_merged_transform_actions_for_graph_node(node, ctx)
-    )
-    if getattr(ob, 'type', '') == 'MESH' and not transform_actions:
-      continue
-    planned_actions = _build_nonarmature_action_plan(transform_actions, vis_actions)
-    if len(planned_actions) <= 1:
-      continue
-
-    direct_children = [ch for ch in list(ob.children)]
-    _clear_object_animation_tracks(ob)
-    ob.animation_data_create()
-    ob.animation_data.action = planned_actions[0]
-
-    parent_for_chain = ob
-    created_helpers = []
-    for action in planned_actions[1:]:
-      helper = bpy.data.objects.new(ob.name, None)
-      helper.empty_display_size = 0.1
-      scene_collection.objects.link(helper)
-      helper.parent = parent_for_chain
-      helper.matrix_parent_inverse = Matrix.Identity(4)
-      helper.matrix_basis = Matrix.Identity(4)
-      helper.animation_data_create()
-      helper.animation_data.action = action
-      helper['_iedm_identity_passthrough'] = True
-      helper['_iedm_narrow_identity_passthrough'] = True
-      if _action_has_visibility_curve(action):
-        helper['_iedm_vis_passthrough'] = True
-      created_helpers.append(helper)
-      parent_for_chain = helper
-
-    if created_helpers:
-      target_parent = created_helpers[-1]
-      for child in direct_children:
-        if child in created_helpers:
-          continue
-        if child.parent == ob:
-          # The new controls are identity wrappers at rest. Preserve the
-          # authored child local transform; their world matrices are not yet
-          # evaluated here, so world-preserving reparenting duplicates the
-          # original parent's transform in the child.
-          child.parent = target_parent
-
-
 def _split_multi_arg_rotation_controls(graph):
   ctx = _import_ctx.bone_import_ctx or {}
   scene_collection = bpy.context.collection

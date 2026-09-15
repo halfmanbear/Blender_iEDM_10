@@ -28,16 +28,6 @@ def _transform_mesh_data(obj, matrix):
   obj.data.update()
 
 
-def _offset_mesh_world(obj, delta_world):
-  """Translate mesh vertices by a world-space vector, preserving object transforms."""
-  if delta_world.length < 1e-9:
-    return
-  if obj.type != "MESH" or not obj.data:
-    return
-  local_delta = obj.matrix_world.inverted().to_3x3() @ delta_world
-  _transform_mesh_data(obj, Matrix.Translation(local_delta))
-
-
 def _is_identity_matrix_approx(mat, eps=1e-6):
   try:
     ident = Matrix.Identity(4)

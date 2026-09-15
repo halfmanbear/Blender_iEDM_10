@@ -63,8 +63,8 @@
 | `processing.py` | Legacy aggregation wrapper for node processing helpers; re-exports core, mesh, visibility, armature, and diagnostics symbols |
 | `core.py` | Core node processing: `process_node` entry point; creates Blender objects (`_create_node_object`), parents them (`_parent_node_object`), stamps properties (`_stamp_node_properties`), applies positions and hooks up animations |
 | `armature.py` | Armature/skeleton import: creates armature object, builds edit bones from EDM Bone/ArgAnimatedBone nodes, transfers bone actions, binds skin meshes to armature with vertex groups |
-| `mesh.py` | Mesh utility functions: `_recenter_mesh_object_to_geometry`, `_transform_mesh_data`, `_offset_mesh_world`, identity matrix checks |
-| `visibility.py` | Visibility wrapper logic: determines if ArgVisibilityNode needs its own object (`_visibility_wrapper_needs_own_object`), handles helper compaction for fake lights |
+| `mesh.py` | Mesh utility functions: `_recenter_mesh_object_to_geometry`, `_transform_mesh_data`, identity matrix checks |
+| `visibility.py` | Visibility wrapper logic: helper compaction for fake lights under visibility wrappers (`_compact_visibility_identity_intermediate`) |
 | `diagnostics.py` | Import diagnostics: `_print_import_diagnostics` prints summary of EDM node types vs Blender objects created, including shell layouts and render split details |
 
 ## Quick Reference by Function

@@ -50,7 +50,6 @@ def check_split(original):
     return run
 
 session._split_multi_arg_rotation_controls = check_split(session._split_multi_arg_rotation_controls)
-session._split_multi_arg_nonarmature_controls = check_split(session._split_multi_arg_nonarmature_controls)
 
 # Inserting an identity wrapper must preserve a real bone-parent relationship.
 bpy.ops.wm.read_factory_settings(use_empty=True)

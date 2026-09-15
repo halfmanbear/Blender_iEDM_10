@@ -22,7 +22,6 @@ from .bbox_utils import (
 )
 from .ctrl_splits import (
   _rename_control_wrapper_mesh_pairs,
-  _split_multi_arg_nonarmature_controls,
   _split_multi_arg_rotation_controls,
 )
 from .graph_build import build_graph
@@ -35,11 +34,8 @@ from .graph_pipeline import (
   _reset_transform_debug,
 )
 from .graph_postprocess import (
-  _apply_plain_root_visibility_mesh_basis_fix,
-  _apply_plain_root_visibility_object_basis_fix,
   _apply_root_visibility_pair_wrapper_basis_fix,
   _apply_static_root_visibility_wrapper_basis_fix,
-  _fix_owner_encoded_render_offsets,
   _zero_render_child_mesh_locals_under_transform,
 )
 from .import_capabilities import derive_import_capabilities, inspect_import_graph
@@ -190,9 +186,8 @@ def _configure_mesh_origin_mode(options, features):
     _import_ctx.mesh_origin_mode = "RAW"
     _log.info("Auto-selected mesh origin mode RAW for v10 split control-node asset (plain root, no bones).")
   elif (
-    _import_profile_flag("auto_raw_mesh_origin_plain_root_non_skeletal")
-    and
-    can_auto_override_mesh_origin
+    False  # plain-root non-skeletal RAW auto-selection has no capability that enables it
+    and can_auto_override_mesh_origin
     and _import_ctx.mesh_origin_mode != "RAW"
     and plain_root_v10
     and not has_bones
@@ -423,8 +418,6 @@ def _debug_dump_stage_objects(stage_name):
 
 
 def _run_render_offset_postprocess(graph):
-  if _import_profile_flag("owner_encoded_render_offset_fix"):
-    _fix_owner_encoded_render_offsets(graph)
   _zero_render_child_mesh_locals_under_transform(graph)
   _debug_dump_stage_objects("after_process_node")
 
@@ -432,10 +425,6 @@ def _run_render_offset_postprocess(graph):
 def _run_visibility_basis_postprocess(graph):
   _apply_plain_root_visibility_basis_fix(graph)
   _debug_dump_stage_objects("after_plain_root_visibility_basis_fix")
-  _apply_plain_root_visibility_object_basis_fix()
-  _debug_dump_stage_objects("after_plain_root_visibility_object_basis_fix")
-  _apply_plain_root_visibility_mesh_basis_fix()
-  _debug_dump_stage_objects("after_plain_root_visibility_mesh_basis_fix")
   _apply_static_root_visibility_wrapper_basis_fix(graph)
   _debug_dump_stage_objects("after_static_root_visibility_wrapper_basis_fix")
   _apply_root_visibility_pair_wrapper_basis_fix(graph)
@@ -450,17 +439,10 @@ def _run_control_rewrite_postprocess(graph, options):
   graph.walk_tree(_process_lod_post_children)
   _debug_dump_stage_objects("after_lod_post_children")
 
-  rewrite_multi_arg_helpers = bool(
-    options.get("rewrite_multi_arg_helpers", _import_profile_flag("default_rewrite_multi_arg_helpers"))
-  )
-  if rewrite_multi_arg_helpers:
-    _split_multi_arg_nonarmature_controls(graph)
-    _split_multi_arg_visibility_controls(graph)
-  else:
-    _split_multi_arg_rotation_controls(graph)
-    # The official exporter only reads active visibility actions on objects.
-    # Visibility splits are required even without transform helper rewrites.
-    _split_multi_arg_visibility_controls(graph)
+  _split_multi_arg_rotation_controls(graph)
+  # The official exporter only reads active visibility actions on objects.
+  # Visibility splits are required even without transform helper rewrites.
+  _split_multi_arg_visibility_controls(graph)
   _debug_dump_stage_objects("after_multi_arg_rewrite")
 
   _apply_visibility_pair_wrapper_object_basis_fix()
@@ -486,7 +468,7 @@ def _run_orientation_postprocess():
 def _finish_import_postprocess(edm, graph, options):
   _print_import_diagnostics(edm, graph)
 
-  if options.get("assign_collections", _import_profile_flag("default_assign_collections")):
+  if options.get("assign_collections", True):
     _assign_collections(graph)
 
   if _import_ctx.transform_debug.get("enabled"):

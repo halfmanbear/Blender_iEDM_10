@@ -281,7 +281,7 @@ def _rewrite_oriented_scale_controls(graph):
       top_wrapper_local = split_rotation_basis_local
       rotation_basis_local = split_rotation_basis_local
 
-    frame_mapper = _plain_root_unit_interval_frame_mapper(source_tf)
+    frame_mapper = None  # default EDM argument -> scene frame mapping
 
     top_action = None
     if active_action is not None and action_arg is not None:
