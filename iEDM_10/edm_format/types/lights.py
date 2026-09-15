@@ -1,8 +1,16 @@
 import struct
 
-from .core import *  # noqa: F401,F403
-from .core import _scan_to_next_v10_type_token, _V10_CATEGORY_KEYS
-from .render_shell import _read_index_data, _read_vertex_data  # noqa: F401
+from .core import (
+    BaseNode,
+    Node,
+    NodeCategory,
+    _next_v10_token_looks_like_type,
+    _scan_to_next_v10_type_token,
+    _V10_CATEGORY_KEYS,
+    logger,
+    reads_type,
+)
+from ..propertiesset import PropertiesSet
 
 
 def _material_name_matches_kind(material, kind):

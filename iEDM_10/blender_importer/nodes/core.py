@@ -1,5 +1,79 @@
 # Fragment: core node processing — creates Blender objects from the EDM graph.
-# All names resolved via the shared namespace injected by reader.py.
+
+
+import bpy
+import json
+import math
+from ...edm_format.mathtypes import (
+    Matrix,
+    Quaternion,
+    Vector,
+    vector_to_blender,
+)
+from ...edm_format.types import (
+    AnimatingNode,
+    ArgAnimatedBone,
+    ArgAnimationNode,
+    ArgPositionNode,
+    ArgRotationNode,
+    ArgScaleNode,
+    ArgVisibilityNode,
+    BillboardNode,
+    Bone,
+    Connector,
+    FakeALSNode,
+    FakeOmniLightsNode,
+    FakeSpotLightsNode,
+    LightNode,
+    LodNode,
+    NumberNode,
+    RenderNode,
+    SegmentsNode,
+    ShellNode,
+    SkinNode,
+    TransformNode,
+)
+from ..anim_actions import get_actions_for_node
+from ..graph_pipeline import (
+    _SEMANTIC_NAME_MAP,
+    _debug_dump_node_transform,
+    _get_action_argument,
+    _is_neg90_x_basis_matrix,
+    _merge_actions_by_argument,
+    _push_action_to_nla,
+)
+from ..lights import (
+    create_billboard,
+    create_fake_als_lights,
+    create_fake_omni_lights,
+    create_fake_spot_lights,
+    create_lamp,
+)
+from ..node_transform import apply_node_transform
+from .armature import (
+    _bind_skin_object,
+    _merge_visibility_action_into_transform_action,
+)
+from .visibility import _compact_visibility_identity_intermediate
+from ..object_create import (
+    create_connector,
+    create_object,
+    create_segments,
+)
+from ..prelude import (
+    _ROOT_BASIS_FIX,
+    _SUFFIX_RE,
+    _debug_log_event,
+    _import_ctx,
+    _import_profile_flag,
+    _is_connector_object,
+    _is_generic_render_name,
+    _node_visibility_chain_args,
+    _ob_local_is_identity,
+    _set_official_special_type,
+    _strip_anim_prefix,
+    _transform_display_name,
+)
 
 
 def _is_narrow_safe_identity_helper_name(name):

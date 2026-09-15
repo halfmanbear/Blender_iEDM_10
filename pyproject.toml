@@ -11,17 +11,14 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-# reader.py intentionally builds a shared namespace across blender_importer
-# modules; names resolved through that injection (and prelude.py's star
-# imports feeding it) are invisible to pyflakes until that architecture is
-# replaced (see plan phase 3).
-"iEDM_10/reader.py" = ["F401"]
+# Compatibility re-export coordinators: intentionally aggregate a
+# subpackage's public names via `import *` for external/legacy callers.
+# Each real consumer imports explicitly from the module that defines what
+# it needs (see docs/ARCHITECTURE.md); these two are re-export-only.
+"iEDM_10/reader.py" = ["F401", "F403"]
+"iEDM_10/blender_importer/import_pipeline.py" = ["F401"]
+"iEDM_10/edm_format/types/__init__.py" = ["F401", "F403"]
 "iEDM_10/blender_importer/prelude.py" = ["F403", "F405"]
-"iEDM_10/blender_importer/*.py" = ["F821", "F405"]
-"iEDM_10/blender_importer/nodes/*.py" = ["F821", "F405"]
-# Same star-import-from-core pattern as prelude.py, already inline-noqa'd
-# for F401/F403; F405 needs the same treatment.
-"iEDM_10/edm_format/types/*.py" = ["F405"]
 
 [tool.ruff.lint.mccabe]
 # Cyclomatic complexity, not nesting depth. 15 flags genuinely tangled
@@ -33,10 +30,8 @@ indent-style = "space"
 
 [tool.mypy]
 python_version = "3.11"
-# Not strict repo-wide: bpy has no complete type stubs, and reader.py's
-# shared-namespace injection defeats static name resolution until phase 3
-# of the cleanup plan replaces it. edm_format/ is pure Python and holds to
-# a stricter profile below.
+# Not strict repo-wide: bpy has no complete type stubs (fake-bpy-module is
+# partial). edm_format/ is pure Python and holds to a stricter profile below.
 warn_return_any = true
 warn_unused_ignores = true
 ignore_missing_imports = true

@@ -1,5 +1,35 @@
 # Fragment: oriented scale decomposition helpers and the rewrite pass.
-# All names resolved via the shared namespace injected by reader.py.
+
+
+import bpy
+from ..edm_format.mathtypes import (
+    Matrix,
+    MatrixScale,
+    Quaternion,
+    Vector,
+)
+from ..edm_format.types import ArgAnimationNode
+from .anim_actions import (
+    _build_arganimation_action,
+    _clear_object_animation_tracks,
+    _clone_action_filtered,
+    _compose_oriented_scale_matrix,
+    _create_scale_orientation_rotation_action,
+    _has_nonidentity_scale_orientation_keys,
+)
+from .animation import (
+    _quat_is_identity,
+    add_scale_fcurves,
+)
+from .graph_pipeline import _get_action_argument
+from .node_transform import _transform_uses_quaternion_rotation
+from .prelude import (
+    _ROOT_BASIS_FIX,
+    _import_ctx,
+    _is_child_of_file_root,
+    _is_top_level_visibility_authored_pair,
+    _log,
+)
 
 
 def _render_local_matrix_for_graph_node(node):

@@ -1,3 +1,7 @@
+import bpy
+from .prelude import _ensure_official_material_bridge
+
+
 def _map_edm_material_to_official_kind(edm_material_name):
     mat = (edm_material_name or "").lower()
     if mat in {"glass_material", "glass_instrumental_material"}:

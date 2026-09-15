@@ -1,3 +1,6 @@
+from .materials_bridge import _attach_official_material_bridge
+
+
 import fnmatch
 import glob
 import json

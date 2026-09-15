@@ -1,5 +1,23 @@
 # Fragment: multi-arg control splitting and control/mesh-pair renaming.
-# All names resolved via the shared namespace injected by reader.py.
+
+
+import bpy
+from ..edm_format.mathtypes import Matrix
+from .anim_actions import (
+    _action_has_visibility_curve,
+    _build_nonarmature_action_plan,
+    _clear_object_animation_tracks,
+    _collect_merged_transform_actions_for_graph_node,
+    _needs_multi_arg_rotation_helper_split,
+    _sorted_transform_actions_for_execution,
+    _visibility_source_for_graph_node,
+    get_actions_for_node,
+)
+from .prelude import (
+    _SUFFIX_RE,
+    _import_ctx,
+    _strip_anim_prefix,
+)
 
 
 def _split_multi_arg_rotation_controls(graph):

@@ -1,3 +1,9 @@
+from ...edm_format.mathtypes import (
+    Matrix,
+    Vector,
+)
+
+
 def _recenter_mesh_object_to_geometry(obj):
     """Move mesh object origin to local bounds center, preserving world mesh."""
     if obj.type != "MESH" or not obj.data or not obj.data.vertices:

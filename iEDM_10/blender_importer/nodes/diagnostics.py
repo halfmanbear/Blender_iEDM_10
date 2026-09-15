@@ -1,3 +1,8 @@
+import bpy
+from ..graph_build import iterate_all_objects
+from ..prelude import _import_ctx
+
+
 def _print_import_diagnostics(edm, graph):
     """Print summary of EDM node types found vs Blender objects created."""
     from collections import Counter

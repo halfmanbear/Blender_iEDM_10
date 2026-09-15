@@ -1,5 +1,12 @@
 # Fragment: late-stage skin parent binding via bind-rest world position.
-# All names resolved via the shared namespace injected by reader.py.
+
+
+import bpy
+from ..edm_format.mathtypes import (
+    Matrix,
+    Vector,
+)
+from .prelude import _import_ctx
 
 
 def _resolve_skin_parent_overrides_by_bind_rest():

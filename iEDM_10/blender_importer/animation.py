@@ -1,3 +1,16 @@
+import math
+from ..edm_format.mathtypes import (
+    Matrix,
+    Quaternion,
+)
+from .graph_pipeline import (
+    _anim_quaternion_to_blender,
+    _anim_scale_components,
+    _anim_vector_to_blender,
+)
+from .prelude import _anim_frame_to_scene_frame
+
+
 from mathutils import Euler
 
 

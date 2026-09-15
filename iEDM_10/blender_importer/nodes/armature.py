@@ -1,3 +1,28 @@
+import bpy
+from ...edm_format.mathtypes import (
+    Matrix,
+    Quaternion,
+    Vector,
+)
+from ...edm_format.types import (
+    AnimatingNode,
+    ArgAnimatedBone,
+    ArgVisibilityNode,
+    Bone,
+)
+from ..anim_actions import get_actions_for_node
+from ..prelude import (
+    _ROOT_BASIS_FIX,
+    _import_ctx,
+    _import_profile_flag,
+    _is_bone_transform,
+    _log,
+    _log_bone_debug_event,
+    _matrix_trs_summary,
+    _transform_display_name,
+)
+
+
 import math
 import struct
 

@@ -5,7 +5,7 @@
 | File | Purpose |
 |------|---------|
 | `__init__.py` | Blender addon registration; defines `bl_info` and registers import operator + RNA properties |
-| `reader.py` | Compatibility aggregation module; imports all sub-modules and exports their names into a shared namespace so legacy single-file code behavior is preserved |
+| `reader.py` | Compatibility entry point; re-exports the `blender_importer` package's public surface (each sub-module now imports explicitly what it needs, no cross-module namespace injection) |
 | `io_operators.py` | Defines the `ImportEDM` Blender operator (File > Import > DCS World), including debug options and import settings UI |
 | `utils.py` | Utility functions: `chdir` context manager for directory switching, `get_root_object` to find top-level parents, `print_edm_graph` for debugging the EDM node tree |
 | `rna.py` | Extends Blender data model with EDM-specific properties (`EDMProps`, `EDMObjectSettings`); handles registration of custom properties for objects, materials, and actions |
@@ -34,7 +34,7 @@
 |------|---------|
 | `__init__.py` | Package marker; indicates this folder contains the importer logic |
 | `prelude.py` | Core shared state and helpers: `ImportContext` (thread-local import state), `_ROOT_BASIS_FIX` matrix, logging (`_log`), debug helpers, visibility chain analysis, node classification (`is_skeleton_node`, `_is_child_of_file_root`) |
-| `import_pipeline.py` | Pipeline coordinator; imports and re-exports functions from all fragment modules to satisfy `reader.py`'s shared namespace |
+| `import_pipeline.py` | Pipeline coordinator; imports and re-exports functions from all fragment modules for callers that only import `import_pipeline` |
 | `graph_build.py` | Phase 1: Builds `TranslationGraph` from EDM file data; attaches render nodes, collapses transform/render chains, eliminates artifact wrappers, sorts children |
 | `graph_pipeline.py` | Phase 2: Graph debug utilities, animation helpers (`_anim_vector_to_blender`, `_anim_quaternion_to_blender`), action helpers, collection assignment (Vehicle/Collision/Texture_Animation) |
 | `graph_postprocess.py` | Phase 3: Post-processing passes - fixes owner-encoded render offsets, zeros render child mesh locals, applies basis fixes for visibility/root/static wrapper nodes |

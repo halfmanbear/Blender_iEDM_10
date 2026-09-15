@@ -1,3 +1,11 @@
+import bmesh
+import bpy
+from ..edm_format.mathtypes import (
+    Matrix,
+    Vector,
+)
+
+
 def _create_mesh(
     vertexData,
     indexData,

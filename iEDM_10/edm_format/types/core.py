@@ -298,6 +298,11 @@ class EDMFile(object):
             self.shellNodes = []
 
     def _read(self, reader):
+        # Deferred: render_shell/number import from core, so these can only
+        # be imported here, not at module load time.
+        from .number import NumberNode
+        from .render_shell import RenderNode
+
         reader.read_constant(b"EDM")
         self.version = reader.read_ushort()
         if self.version != 10:

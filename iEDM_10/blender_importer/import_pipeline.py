@@ -1,7 +1,9 @@
 # Pipeline coordinator — all implementation lives in the fragments below.
-# All names resolved via the shared namespace injected by reader.py.
+# This module re-exports their public names for callers that only import
+# import_pipeline (each fragment also imports directly from the others it
+# needs; see docs/ARCHITECTURE.md).
 #
-# Fragment files (loaded via reader.py _MODULES):
+# Fragment files:
 #   anim_actions.py    — visibility + ArgAnimation action builders
 #   orient_scale.py    — oriented scale decomposition and rewrite pass
 #   vis_rewrites.py    — visibility graph basis-fix passes
@@ -9,8 +11,6 @@
 #   orient_fixes.py    — mesh/empty world orientation post-passes
 #   ctrl_splits.py     — multi-arg control splitting + mesh-pair renaming
 #   node_transform.py  — apply_node_transform
-#
-# Bottom imports trigger sub-module loading before reader.py builds _SHARED.
 
 from .material_setup import (
     _find_texture_file,

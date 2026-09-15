@@ -1,5 +1,31 @@
 # Fragment: EDM graph construction from raw EDM file data.
-# All names resolved via the shared namespace injected by reader.py.
+
+
+import itertools
+from ..edm_format.mathtypes import (
+    Matrix,
+    Vector,
+)
+from ..edm_format.types import (
+    ArgAnimationNode,
+    ArgVisibilityNode,
+    Bone,
+    Connector,
+    FakeALSNode,
+    FakeOmniLightsNode,
+    FakeSpotLightsNode,
+    TransformNode,
+)
+from ..translation import (
+    TranslationGraph,
+    TranslationNode,
+)
+from .prelude import (
+    _ROOT_BASIS_FIX,
+    _import_ctx,
+    _import_profile_flag,
+    is_skeleton_node,
+)
 
 
 def iterate_renderNodes(edmFile):

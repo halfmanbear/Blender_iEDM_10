@@ -1,3 +1,12 @@
+from ...edm_format.mathtypes import Matrix
+from ...edm_format.types import (
+    AnimatingNode,
+    ArgVisibilityNode,
+    TransformNode,
+)
+from .mesh import _is_identity_matrix_approx
+
+
 def _compact_visibility_identity_intermediate(node):
     """Hoist fake-light helper transforms toward the semantic node under a v_* wrapper.
 

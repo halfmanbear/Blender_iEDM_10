@@ -1,5 +1,16 @@
-from .core import *  # noqa: F401,F403
-from .core import _scan_to_next_v10_type_token, _V10_CATEGORY_KEYS
+from collections import Counter
+import itertools
+
+from .core import (
+    BaseNode,
+    NodeCategory,
+    _read_with_layout_fallback,
+    _scan_to_next_v10_type_token,
+    _V10_CATEGORY_KEYS,
+    logger,
+    reads_type,
+)
+from ..material_types import VertexFormat
 
 
 def _tag_shell_family_node(node, source_type):

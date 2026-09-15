@@ -2,6 +2,12 @@
 # Functions here drive the top-level import sequence; the pipeline detail
 # (graph construction, node processing, animations) lives in import_pipeline.py.
 
+from .prelude import (
+    _visibility_scene_keys,
+    _visibility_scene_ranges,
+)
+
+
 import os
 from dataclasses import dataclass, field
 from typing import Mapping

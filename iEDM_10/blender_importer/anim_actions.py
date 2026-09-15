@@ -1,5 +1,45 @@
 # Fragment: animation action builders for visibility and ArgAnimation nodes.
-# All names resolved via the shared namespace injected by reader.py.
+
+
+import bpy
+from ..edm_format.mathtypes import (
+    Matrix,
+    MatrixScale,
+    Quaternion,
+    Vector,
+)
+from ..edm_format.types import (
+    AnimatingNode,
+    ArgAnimationNode,
+    ArgVisibilityNode,
+    TransformNode,
+)
+from .animation import (
+    _arg_anim_vector_to_blender,
+    _finalize_authored_transform_action,
+    _quat_is_identity,
+    add_position_fcurves,
+    add_rotation_fcurves,
+    add_scale_fcurves,
+)
+from .graph_pipeline import (
+    _anim_quaternion_to_blender,
+    _get_action_argument,
+    _merge_actions_by_argument,
+)
+from .prelude import (
+    _ROOT_BASIS_FIX,
+    _anim_frame_to_scene_frame,
+    _import_ctx,
+    _is_authored_argvis_control_pair,
+    _is_child_of_file_root,
+    _is_top_level_visibility_authored_pair,
+    _log,
+    _log_bone_debug_event,
+    _matrix_trs_summary,
+    _strip_anim_prefix,
+    _visibility_scene_keys,
+)
 
 
 def create_visibility_actions(visNode):
@@ -333,6 +373,10 @@ def _build_arganimation_action(
 
 def create_arganimation_actions(node):
     "Creates a set of actions to represent an ArgAnimationNode"
+    # Deferred: orient_scale imports from this module, so this can only be
+    # imported here, not at module load time.
+    from .orient_scale import _reconstruct_edm_local_matrix
+
     actions = []
     _node_name = getattr(node, "name", "") or type(node).__name__
 

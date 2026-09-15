@@ -1,5 +1,8 @@
 # Fragment: visibility graph basis-fix passes.
 
+from .anim_actions import _visibility_source_for_graph_node
+
+
 import math
 
 import bpy
