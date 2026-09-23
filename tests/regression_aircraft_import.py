@@ -11,6 +11,7 @@ from mathutils import Matrix, Vector
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 import iEDM_10
+from iEDM_10.utils import action_fcurves
 from iEDM_10 import reader
 from iEDM_10.blender_importer import session, orient_scale, vis_rewrites
 from iEDM_10.blender_importer.nodes import armature
@@ -96,7 +97,7 @@ for prefix_matrix in (None, Matrix.Identity(4)):
     session._import_ctx.bonetransform_prefix_matrix = prefix_matrix
     ranges = [(0.0025, 0.0075), (-0.755, -0.25), (0.3, 0.6), (0.5, 1.01)]
     action = anim_actions.create_visibility_actions(SimpleNamespace(name='ThresholdTest', visData=[(153, ranges)]))[0]
-    curve = action.fcurves.find('VISIBLE')
+    curve = action_fcurves(action).find('VISIBLE')
     probe = bpy.data.objects.new('ThresholdProbe', bpy.data.meshes.new('ThresholdProbe'))
     bpy.context.collection.objects.link(probe)
     node = SimpleNamespace(blender=probe, render=object(), parent=None,
@@ -235,7 +236,7 @@ for filename in sys.argv[sys.argv.index('--')+1:]:
         selected_arg = 153 if 153 in arguments else min(arguments)
         for preview in previews:
             action = preview.animation_data.action
-            for curve in action.fcurves:
+            for curve in action_fcurves(action):
                 curve.mute = int(action.name.split('_')[0]) != selected_arg
         bpy.context.scene.frame_set(150)
         bpy.context.view_layer.update()
@@ -244,7 +245,7 @@ for filename in sys.argv[sys.argv.index('--')+1:]:
                               for start, end in ranges) for arg, ranges in controls)
             assert obj.hide_viewport == (not visible), (path.name, obj.name, 'muted damage argument advanced')
         for preview in previews:
-            for curve in preview.animation_data.action.fcurves:
+            for curve in action_fcurves(preview.animation_data.action):
                 curve.mute = False
         bpy.context.scene.frame_set(100)
         bpy.context.view_layer.update()

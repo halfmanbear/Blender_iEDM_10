@@ -1,3 +1,5 @@
+from ..utils import action_fcurves
+
 # Fragment: animation action builders for visibility and ArgAnimation nodes.
 
 
@@ -54,8 +56,8 @@ def create_visibility_actions(visNode):
         actions.append(action)
         if hasattr(action, "argument"):
             action.argument = arg
-        curve_visible = action.fcurves.new(data_path="VISIBLE")
-        curve_hide_vp = action.fcurves.new(data_path="hide_viewport")
+        curve_visible = action_fcurves(action).new(data_path="VISIBLE")
+        curve_hide_vp = action_fcurves(action).new(data_path="hide_viewport")
 
         def _add_constant_key(curve, frame, value):
             curve.keyframe_points.add(1)
@@ -234,12 +236,12 @@ def _clone_action_filtered(
     if arg is not None and hasattr(cloned, "argument"):
         cloned.argument = int(arg)
     copied = 0
-    for src_curve in action.fcurves:
+    for src_curve in action_fcurves(action):
         if include_paths and src_curve.data_path not in include_paths:
             continue
         if src_curve.data_path in exclude_paths:
             continue
-        dst_curve = cloned.fcurves.new(
+        dst_curve = action_fcurves(cloned).new(
             data_path=src_curve.data_path, index=src_curve.array_index
         )
         _copy_fcurve_points_local(src_curve, dst_curve)
@@ -261,7 +263,7 @@ def _create_scale_orientation_rotation_action(
     action = bpy.data.actions.new(name)
     curves = []
     for idx in range(4):
-        curves.append(action.fcurves.new(data_path="rotation_quaternion", index=idx))
+        curves.append(action_fcurves(action).new(data_path="rotation_quaternion", index=idx))
     frame_mapper = frame_mapper or _anim_frame_to_scene_frame
     previous_quat = None
     for framedata in keys4:
@@ -548,7 +550,7 @@ def _action_has_visibility_curve(action):
     if action is None:
         return False
     try:
-        return action.fcurves.find("VISIBLE") is not None
+        return action_fcurves(action).find("VISIBLE") is not None
     except Exception:
         return False
 

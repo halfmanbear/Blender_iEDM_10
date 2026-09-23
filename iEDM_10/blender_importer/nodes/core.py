@@ -1,3 +1,5 @@
+from ..prelude import _assign_action
+
 # Fragment: core node processing — creates Blender objects from the EDM graph.
 
 
@@ -1352,7 +1354,7 @@ def _hookup_node_animations(node, ctx, vis_actions, used_shared_parent):
 
                 node.blender.animation_data_create()
                 if len(actions) == 1:
-                    node.blender.animation_data.action = actions[0]
+                    _assign_action(node.blender, actions[0])
                 else:
                     nla_pushed = 0
                     for action in actions:
@@ -1361,7 +1363,7 @@ def _hookup_node_animations(node, ctx, vis_actions, used_shared_parent):
                     if nla_pushed > 0:
                         node.blender.animation_data.action = None
                     else:
-                        node.blender.animation_data.action = actions[0]
+                        _assign_action(node.blender, actions[0])
 
         # Apply rest transform: for authored-pair collapse use the AnimatingNode's
         # zero_transform_local_matrix rather than the ArgVisibilityNode (identity).
@@ -1390,7 +1392,7 @@ def _hookup_node_animations(node, ctx, vis_actions, used_shared_parent):
         elif vis_actions:
             node.blender.animation_data_create()
             if len(vis_actions) == 1:
-                node.blender.animation_data.action = vis_actions[0]
+                _assign_action(node.blender, vis_actions[0])
             else:
                 nla_pushed = 0
                 for action in vis_actions:
@@ -1399,12 +1401,12 @@ def _hookup_node_animations(node, ctx, vis_actions, used_shared_parent):
                 if nla_pushed > 0:
                     node.blender.animation_data.action = None
                 else:
-                    node.blender.animation_data.action = vis_actions[0]
+                    _assign_action(node.blender, vis_actions[0])
 
     elif vis_actions:
         node.blender.animation_data_create()
         if len(vis_actions) == 1:
-            node.blender.animation_data.action = vis_actions[0]
+            _assign_action(node.blender, vis_actions[0])
         else:
             nla_pushed = 0
             for action in vis_actions:
@@ -1413,7 +1415,7 @@ def _hookup_node_animations(node, ctx, vis_actions, used_shared_parent):
             if nla_pushed > 0:
                 node.blender.animation_data.action = None
             else:
-                node.blender.animation_data.action = vis_actions[0]
+                _assign_action(node.blender, vis_actions[0])
 
     try:
         tail_len = float(node.blender.get("_iedm_compensate_bone_tail_export", 0.0))

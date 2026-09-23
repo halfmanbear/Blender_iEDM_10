@@ -1,3 +1,5 @@
+from ..utils import action_fcurves
+
 # Fragment: apply_node_transform — assigns the local matrix to a Blender object.
 
 import math
@@ -32,9 +34,9 @@ def _transform_uses_quaternion_rotation(tfnode, obj=None):
     try:
         action = getattr(getattr(obj, "animation_data", None), "action", None)
         if action is not None:
-            if any(fc.data_path == "rotation_euler" for fc in action.fcurves):
+            if any(fc.data_path == "rotation_euler" for fc in action_fcurves(action)):
                 return False
-            if any(fc.data_path == "rotation_quaternion" for fc in action.fcurves):
+            if any(fc.data_path == "rotation_quaternion" for fc in action_fcurves(action)):
                 return True
     except Exception:
         pass

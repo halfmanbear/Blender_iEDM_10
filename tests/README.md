@@ -1,6 +1,6 @@
 # tests
 
-Headless Blender checks for the importer. Run everything from the repository root with Blender 4.5 LTS.
+Headless Blender checks for the importer. Run everything from the repository root with Blender 4.5 LTS or 5.2 LTS.
 
 ## Test assets
 
@@ -103,3 +103,14 @@ Skinned meshes and render nodes split into several Blender objects are not
 checked; the skin paths are covered by the aircraft regression above. The
 reference model is the importer's own reading of the EDM transform order, not
 DCS ModelViewer output.
+
+## Blender version compatibility
+
+Run `regression_animation_api.py` with each Blender executable using the same
+background/factory-startup flags above. It checks evaluated object/NLA/light
+animation, material curve interpolation, bone groups, and registration.
+
+`regression_blender_integration.py -- tests/assets/Deck.edm` additionally enables
+the installed official exporter and checks bound animation slots and nonempty
+material groups. Run each asset in a fresh Blender process. This checks import
+and shader construction, not visual render parity or an EDM export round trip.

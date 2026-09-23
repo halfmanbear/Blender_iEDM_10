@@ -2,7 +2,7 @@ bl_info = {
     "name": "EDM File Importer 10.0",
     "description": "Importing of .EDM model files",
     "author": "Nicholas Devenish - (Rework by HalfManBear)",
-    "version": (0, 4, 0),
+    "version": (0, 4, 1),
     "blender": (4, 5, 0),
     "location": "File > Import > .EDM Files",
     "category": "Import",

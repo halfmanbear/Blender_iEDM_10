@@ -1,3 +1,5 @@
+from ..utils import action_fcurves
+
 import json
 import math
 import os
@@ -95,12 +97,12 @@ def _edm_light_brightness_to_blender_energy(brightness_value, light_type):
 
 def _new_fcurve(action, data_path, array_index=None):
     idx = 0 if array_index is None else int(array_index)
-    existing = action.fcurves.find(data_path, index=idx)
+    existing = action_fcurves(action).find(data_path, index=idx)
     if existing is not None:
         return existing
     if array_index is None:
-        return action.fcurves.new(data_path=data_path)
-    return action.fcurves.new(data_path=data_path, index=int(array_index))
+        return action_fcurves(action).new(data_path=data_path)
+    return action_fcurves(action).new(data_path=data_path, index=int(array_index))
 
 
 def _add_light_keyframes(action, data_path, keys, value_fn, array_index=None):
@@ -133,6 +135,8 @@ def _push_object_action_to_nla(obj, action):
         # Start the strip at the action's first key so keys keep their scene frames.
         start = float(action.frame_range[0])
         strip = track.strips.new(action.name, int(start), action)
+        if getattr(strip, "action_slot", False) is None and action.slots:
+            strip.action_slot = action.slots[0]
         if abs(strip.frame_start - start) > 1e-6 and hasattr(strip, "frame_start_ui"):
             strip.frame_start_ui = start
         strip.extrapolation = "HOLD"
@@ -262,6 +266,7 @@ def _import_light_properties(node, obj, light_data, light_type):
     )
     if has_anim:
         action = bpy.data.actions.new("Light_{}".format(obj.name))
+        action_fcurves(action, id_type="LIGHT")
         if hasattr(action, "argument"):
             first_arg = next(
                 (
@@ -1107,7 +1112,7 @@ def _apply_fake_light_animation_payload(obj, edm_material):
             value = _safe_float(getattr(framedata, "value", 0.0), 0.0) / base_luminance
             obj.EDMProps.ANIMATED_BRIGHTNESS = value
             obj.keyframe_insert(data_path="EDMProps.ANIMATED_BRIGHTNESS", frame=frame)
-        curve = action.fcurves.find("EDMProps.ANIMATED_BRIGHTNESS")
+        curve = action_fcurves(action).find("EDMProps.ANIMATED_BRIGHTNESS")
         if curve is not None:
             for key in curve.keyframe_points:
                 key.interpolation = "LINEAR"
@@ -1239,7 +1244,7 @@ def _apply_animated_fake_omni_brightness(ob, node, light_count, verts_per_light=
         except Exception:
             pass
 
-    curve = action.fcurves.find("EDMProps.ANIMATED_BRIGHTNESS")
+    curve = action_fcurves(action).find("EDMProps.ANIMATED_BRIGHTNESS")
     if curve is not None:
         for kp in curve.keyframe_points:
             kp.interpolation = "LINEAR"

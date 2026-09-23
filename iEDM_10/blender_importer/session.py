@@ -1,3 +1,5 @@
+from ..utils import action_fcurves
+
 # Session orchestration fragment.
 # Functions here drive the top-level import sequence; the pipeline detail
 # (graph construction, node processing, animations) lives in import_pipeline.py.
@@ -442,7 +444,7 @@ def _debug_dump_stage_objects(stage_name):
             world_loc, world_rot, world_scale = ob.matrix_world.decompose()
             action = getattr(getattr(ob, "animation_data", None), "action", None)
             curves = (
-                [fc.data_path for fc in getattr(action, "fcurves", [])]
+                [fc.data_path for fc in action_fcurves(action)]
                 if action
                 else []
             )
@@ -728,7 +730,7 @@ def _propagate_visibility_hide_to_render_nodes(graph):
         action = bpy.data.actions.new("{}_IEDM_VisibilityPreview".format(arg))
         if hasattr(action, "argument"):
             action.argument = arg
-        curve = action.fcurves.new(data_path='["_iedm_visible"]')
+        curve = action_fcurves(action).new(data_path='["_iedm_visible"]')
         for frame, value in _visibility_scene_keys(ranges):
             curve.keyframe_points.add(1)
             key = curve.keyframe_points[-1]
@@ -828,7 +830,7 @@ def _finalize_render_origins(graph):
             if any(
                 fc.data_path in transform_paths
                 for action in actions
-                for fc in action.fcurves
+                for fc in action_fcurves(action)
             ):
                 continue
             if any(fc.data_path in transform_paths for fc in ad.drivers):

@@ -1,3 +1,5 @@
+from ..utils import action_fcurves
+
 # Fragment: multi-arg control splitting and control/mesh-pair renaming.
 
 
@@ -27,7 +29,7 @@ from .prelude import (
 
 
 def _action_paths(action):
-    return {fc.data_path for fc in action.fcurves}
+    return {fc.data_path for fc in action_fcurves(action)}
 
 
 def _relative_keys_from_source(action, node):
@@ -44,10 +46,10 @@ def _relative_keys_from_source(action, node):
     rebuilt = _build_arganimation_action(
         sources[0], arg, Matrix.Identity(4), include_scale=False
     )
-    for fc in action.fcurves:
+    for fc in action_fcurves(action):
         if fc.data_path not in {"location", "rotation_quaternion"}:
             continue
-        src = rebuilt.fcurves.find(fc.data_path, index=fc.array_index)
+        src = action_fcurves(rebuilt).find(fc.data_path, index=fc.array_index)
         if src is None or len(src.keyframe_points) != len(fc.keyframe_points):
             continue
         for dst, point in zip(fc.keyframe_points, src.keyframe_points):

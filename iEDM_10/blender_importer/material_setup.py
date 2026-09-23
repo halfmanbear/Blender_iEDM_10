@@ -1,3 +1,5 @@
+from ..utils import action_fcurves
+
 from .materials_bridge import _attach_official_material_bridge
 
 
@@ -425,7 +427,7 @@ def _mat_ensure_node_tree_action(mat):
 
 
 def _mat_set_linear_on_path(action, anim_path):
-    for fc in action.fcurves:
+    for fc in action_fcurves(action, id_type="NODETREE"):
         if anim_path in fc.data_path:
             for kp in fc.keyframe_points:
                 kp.interpolation = "LINEAR"

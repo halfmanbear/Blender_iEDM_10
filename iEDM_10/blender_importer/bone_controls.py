@@ -1,3 +1,5 @@
+from ..utils import action_fcurves
+
 """Evaluate EDM bone transforms without flattening their animated ancestors.
 
 The helper graph uses ordinary Blender actions and constraints, so saved scenes
@@ -63,7 +65,7 @@ def _keys_action(obj, arg, path, keys, convert=lambda value: value):
             samples[index] = (frame, quat)
             previous = quat
     for index in range(len(samples[0][1])):
-        curve = action.fcurves.new(path, index=index)
+        curve = action_fcurves(action).new(path, index=index)
         curve.extrapolation = "CONSTANT"
         curve.keyframe_points.add(len(samples))
         for point, (frame, value) in zip(curve.keyframe_points, samples):

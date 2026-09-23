@@ -1,3 +1,5 @@
+import copy
+
 import bpy
 from .prelude import _ensure_official_material_bridge
 
@@ -345,6 +347,25 @@ def _resolve_official_material_tree(bridge, official_material_name):
     desc = descs.get(official_material_name)
     if desc is not None:
         try:
+            if bpy.app.version >= (5, 0, 0):
+                # Older exporter descriptors contain removed RGB nodes. Use
+                # plain RNA identifiers: the exporter's Enum replacements can
+                # fail nodes.new() in Blender 5.2/Python 3.13. Copy descriptors
+                # so the exporter's cached definitions are not modified.
+                desc = copy.copy(desc)
+                desc.nodes = [copy.copy(node) for node in desc.nodes]
+                replacements = {
+                    "ShaderNodeSeparateRGB": "ShaderNodeSeparateColor",
+                    "ShaderNodeCombineRGB": "ShaderNodeCombineColor",
+                }
+                for node in desc.nodes:
+                    replacement = replacements.get(node.bl_idname)
+                    if replacement:
+                        node.bl_idname = replacement
+                        node.mode = "RGB"
+                        node.attrs = list(node.attrs)
+                        if "mode" not in node.attrs:
+                            node.attrs.append("mode")
             return desc.create()
         except Exception as e:
             print(f"Warning in blender_importer/materials_bridge.py: {e}")

@@ -1,3 +1,5 @@
+from ..utils import action_fcurves
+
 # Fragment: graph debug utilities, action helpers, and collection assignment.
 # Graph construction lives in graph_build.py; bbox utilities in bbox_utils.py.
 
@@ -310,12 +312,12 @@ def _merge_actions_by_argument(actions):
             merged.argument = int(arg)
 
         for src in src_actions:
-            for src_curve in src.fcurves:
-                dst_curve = merged.fcurves.find(
+            for src_curve in action_fcurves(src):
+                dst_curve = action_fcurves(merged).find(
                     src_curve.data_path, index=src_curve.array_index
                 )
                 if dst_curve is None:
-                    dst_curve = merged.fcurves.new(
+                    dst_curve = action_fcurves(merged).new(
                         data_path=src_curve.data_path, index=src_curve.array_index
                     )
                 _copy_fcurve_points(src_curve, dst_curve)

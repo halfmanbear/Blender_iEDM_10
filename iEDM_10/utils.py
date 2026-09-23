@@ -1,6 +1,31 @@
 import contextlib, os
 
 
+def action_fcurves(action, id_type="OBJECT"):
+    """Return curves for an importer action (one slot per action).
+
+    Keep the legacy API on 4.5 for exporter compatibility. Blender 5 uses
+    a slot and channelbag instead. Light actions must initialize with LIGHT;
+    node tree actions created by keyframe_insert already have the correct slot.
+    """
+    if hasattr(action, "fcurves"):
+        return action.fcurves
+    from bpy_extras.anim_utils import action_ensure_channelbag_for_slot
+
+    if len(action.slots) > 1:
+        raise ValueError("Expected a single-slot importer action: " + action.name)
+    slot = action.slots[0] if action.slots else action.slots.new(id_type, action.name)
+    return action_ensure_channelbag_for_slot(action, slot).fcurves
+
+
+def new_grouped_fcurve(action, data_path, index, action_group):
+    """Create a bone curve with its group using either animation API."""
+    curves = action_fcurves(action)
+    if hasattr(action, "fcurves"):
+        return curves.new(data_path, index=index, action_group=action_group)
+    return curves.new(data_path, index=index, group_name=action_group)
+
+
 @contextlib.contextmanager
 def chdir(to):
     original = os.getcwd()

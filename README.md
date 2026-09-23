@@ -3,7 +3,7 @@
 Unofficial, experimental Blender addon that enables modders to migrate their own EDM assets into Blender to align with the new official Eagle Dynamics exporter workflow.
 
 > [!IMPORTANT]
-> **Blender 4.5 LTS required** (tested on 4.5.6). EDM v10 format only.
+> **Blender 4.5 LTS or 5.2 LTS** (tested on 4.5.6 and 5.2.2). EDM v10 format only.
 
 ---
 
@@ -37,7 +37,7 @@ To build the zip yourself from a clone: `python scripts/build_addon.py` (output 
 
 ## Compatibility
 
-- **Blender:** 4.5 LTS (tested on 4.5.6)
+- **Blender:** 4.5 LTS and 5.2 LTS (tested on 4.5.6 and 5.2.2)
 - **EDM format:** v10 (primary target)
 
 ---

@@ -1,3 +1,5 @@
+from ..utils import action_fcurves
+
 # Fragment: oriented scale decomposition helpers and the rewrite pass.
 
 
@@ -497,7 +499,7 @@ def _rewrite_oriented_scale_controls(graph):
             add_scale_fcurves(
                 anim_scale_action, keys3, frame_mapper=frame_mapper, base_scale=None
             )
-            if len(anim_scale_action.fcurves):
+            if len(action_fcurves(anim_scale_action)):
                 _assign_action(anim_scale, anim_scale_action)
             else:
                 try:

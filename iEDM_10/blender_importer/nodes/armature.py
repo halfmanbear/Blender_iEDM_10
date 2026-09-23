@@ -1,3 +1,5 @@
+from ...utils import action_fcurves, new_grouped_fcurve
+
 import bpy
 from ...edm_format.mathtypes import (
     Matrix,
@@ -174,8 +176,8 @@ def _localize_skin_mesh_to_bind_target(mesh_obj, bind_target_loc):
 
 
 def _copy_fcurve_to_action(src_curve, dst_action, dst_path, action_group):
-    dst_curve = dst_action.fcurves.new(
-        data_path=dst_path,
+    dst_curve = new_grouped_fcurve(
+        dst_action, data_path=dst_path,
         index=src_curve.array_index,
         action_group=action_group,
     )
@@ -198,7 +200,7 @@ def _copy_fcurve_to_action(src_curve, dst_action, dst_path, action_group):
 def _action_has_fcurve(action, data_path, index=None):
     if action is None:
         return False
-    for fcu in action.fcurves:
+    for fcu in action_fcurves(action):
         if fcu.data_path != data_path:
             continue
         if index is None or fcu.array_index == index:
@@ -217,18 +219,18 @@ def _copy_bone_rotation_curves(src_action, dst_action, bone_name, rest_quat_inv)
     """
     src_curves = {
         fcu.array_index: fcu
-        for fcu in src_action.fcurves
+        for fcu in action_fcurves(src_action)
         if fcu.data_path == "rotation_quaternion"
     }
     if not src_curves:
         return
     dst_path = 'pose.bones["{}"].rotation_quaternion'.format(bone_name)
-    if any(dst_action.fcurves.find(dst_path, index=i) is not None for i in range(4)):
+    if any(action_fcurves(dst_action).find(dst_path, index=i) is not None for i in range(4)):
         return
 
     dst_curves = []
     for i in range(4):
-        dc = dst_action.fcurves.new(data_path=dst_path, index=i, action_group=bone_name)
+        dc = new_grouped_fcurve(dst_action, data_path=dst_path, index=i, action_group=bone_name)
         if i in src_curves:
             dc.extrapolation = src_curves[i].extrapolation
         dst_curves.append(dc)
@@ -287,7 +289,7 @@ def _merge_visibility_action_into_transform_action(
     if _action_has_fcurve(transform_action, "VISIBLE"):
         return transform_action
 
-    vis_curves = [fcu for fcu in vis_action.fcurves if fcu.data_path == "VISIBLE"]
+    vis_curves = [fcu for fcu in action_fcurves(vis_action) if fcu.data_path == "VISIBLE"]
     if not vis_curves:
         return transform_action
 
@@ -298,13 +300,13 @@ def _merge_visibility_action_into_transform_action(
         getattr(vis_action, "name", "") or ""
     ).strip() or transform_action.name
     merged = bpy.data.actions.new(merged_name)
-    for src_curve in transform_action.fcurves:
+    for src_curve in action_fcurves(transform_action):
         group_name = (
             src_curve.group.name if getattr(src_curve, "group", None) else "Transform"
         )
         _copy_fcurve_to_action(src_curve, merged, src_curve.data_path, group_name)
     for src_curve in vis_curves:
-        if merged.fcurves.find("VISIBLE", index=src_curve.array_index) is not None:
+        if action_fcurves(merged).find("VISIBLE", index=src_curve.array_index) is not None:
             continue
         group_name = (
             src_curve.group.name if getattr(src_curve, "group", None) else "Visibility"
@@ -362,7 +364,7 @@ def _transfer_bone_actions_to_armature(graph, arm_obj, node_to_bone_name):
                                 "bone_name": bone_name,
                                 "action_name": src_action.name,
                                 "fcurves": [
-                                    fcu.data_path for fcu in src_action.fcurves
+                                    fcu.data_path for fcu in action_fcurves(src_action)
                                 ],
                             },
                             getattr(tfnode, "name", "") or type(tfnode).__name__,
@@ -380,7 +382,7 @@ def _transfer_bone_actions_to_armature(graph, arm_obj, node_to_bone_name):
                         _copy_bone_rotation_curves(
                             src_action, dst_action, bone_name, rest_quat_inv
                         )
-                        for src_curve in src_action.fcurves:
+                        for src_curve in action_fcurves(src_action):
                             if src_curve.data_path == "rotation_quaternion":
                                 continue
                             dst_path = 'pose.bones["{}"].{}'.format(
@@ -388,7 +390,7 @@ def _transfer_bone_actions_to_armature(graph, arm_obj, node_to_bone_name):
                             )
                             # Skip if this FCurve already exists (prevents crash on re-import)
                             if (
-                                dst_action.fcurves.find(
+                                action_fcurves(dst_action).find(
                                     dst_path, index=src_curve.array_index
                                 )
                                 is not None
@@ -435,6 +437,8 @@ def _transfer_bone_actions_to_armature(graph, arm_obj, node_to_bone_name):
         # Start the strip at the action's first key so keys keep their scene frames.
         start = float(action.frame_range[0])
         strip = track.strips.new(action.name, int(start), action)
+        if getattr(strip, "action_slot", False) is None and action.slots:
+            strip.action_slot = action.slots[0]
         if abs(strip.frame_start - start) > 1e-6 and hasattr(strip, "frame_start_ui"):
             strip.frame_start_ui = start
         strip.name = action.name

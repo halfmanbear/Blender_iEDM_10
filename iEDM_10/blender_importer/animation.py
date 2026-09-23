@@ -1,3 +1,5 @@
+from ..utils import action_fcurves
+
 import math
 from ..edm_format.mathtypes import (
     Matrix,
@@ -52,7 +54,7 @@ def _normalize_euler_xyz(euler, eps=1e-6):
 def _normalize_euler_action_curves(action, eps=1e-6):
     if action is None:
         return
-    curves = [action.fcurves.find("rotation_euler", index=i) for i in range(3)]
+    curves = [action_fcurves(action).find("rotation_euler", index=i) for i in range(3)]
     if any(fc is None for fc in curves):
         return
     point_count = min(len(fc.keyframe_points) for fc in curves)
@@ -83,7 +85,7 @@ def _finalize_authored_transform_action(action):
     if action is None:
         return
     _normalize_euler_action_curves(action)
-    for fc in action.fcurves:
+    for fc in action_fcurves(action):
         try:
             fc.extrapolation = "CONSTANT"
         except Exception:
@@ -96,9 +98,9 @@ def add_position_fcurves(
     "Adds position fcurve data to an animation action"
     curves = []
     for i in range(3):
-        curve = action.fcurves.find("location", index=i)
+        curve = action_fcurves(action).find("location", index=i)
         if curve is None:
-            curve = action.fcurves.new(data_path="location", index=i)
+            curve = action_fcurves(action).new(data_path="location", index=i)
         curves.append(curve)
 
     frame_mapper = frame_mapper or _anim_frame_to_scene_frame
@@ -142,9 +144,9 @@ def add_rotation_fcurves(
     data_path = "rotation_euler" if use_euler else "rotation_quaternion"
     curve_count = 3 if use_euler else 4
     for i in range(curve_count):
-        curve = action.fcurves.find(data_path, index=i)
+        curve = action_fcurves(action).find(data_path, index=i)
         if curve is None:
-            curve = action.fcurves.new(data_path=data_path, index=i)
+            curve = action_fcurves(action).new(data_path=data_path, index=i)
         curves.append(curve)
 
     previous_quat = None
@@ -190,9 +192,9 @@ def add_scale_fcurves(action, keys, frame_mapper=None, base_scale=None):
             base_components = (1.0, 1.0, 1.0)
     curves = []
     for i in range(3):
-        curve = action.fcurves.find("scale", index=i)
+        curve = action_fcurves(action).find("scale", index=i)
         if curve is None:
-            curve = action.fcurves.new(data_path="scale", index=i)
+            curve = action_fcurves(action).new(data_path="scale", index=i)
         curves.append(curve)
 
     for framedata in keys:

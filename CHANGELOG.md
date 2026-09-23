@@ -1,6 +1,15 @@
 # Change Log
 
-## Unreleased
+## 0.4.1 - 2026-09-23
+
+**Fixed**
+- Blender 5.2 LTS animation import using action slots and channelbags; retains Blender 4.5 support.
+- Explicit action slot binding for object animations and light/armature NLA strips.
+- Convert legacy RGB shader descriptors before official exporter material reconstruction on Blender 5.
+
+**Validation**
+- Animation API regression covers transforms, NLA, light energy, material curves and bone groups.
+- Exporter integration regression checks material groups and animation slot binding.
 
 **Fixed**
 - Euler rotation normalization (`_normalize_euler_xyz`, `_normalize_euler_action_curves`) silently did nothing because `Euler` was never imported
