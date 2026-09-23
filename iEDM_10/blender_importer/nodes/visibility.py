@@ -7,6 +7,68 @@ from ...edm_format.types import (
 from .mesh import _is_identity_matrix_approx
 
 
+def _has_object_animation(obj):
+    ad = getattr(obj, "animation_data", None)
+    if ad is None:
+        return False
+    if getattr(ad, "action", None) is not None:
+        return True
+    try:
+        return len(getattr(ad, "nla_tracks", [])) > 0
+    except Exception:
+        return False
+
+
+def _get_local(obj):
+    try:
+        return obj.matrix_basis.copy()
+    except Exception:
+        try:
+            return obj.matrix_local.copy()
+        except Exception:
+            return None
+
+
+def _set_local(obj, mat):
+    try:
+        obj.matrix_basis = mat
+        return True
+    except Exception:
+        try:
+            loc, rot, scale = mat.decompose()
+            obj.location = loc
+            obj.rotation_mode = "XYZ"
+            obj.rotation_euler = rot.to_euler("XYZ")
+            obj.scale = scale
+            return True
+        except Exception:
+            return False
+
+
+def _collapse_redundant_helper_empty(
+    helper_obj, semantic_obj, preferred_child, renderless_mode
+):
+    """Mark a static identity helper as a passthrough when it can be collapsed."""
+    if renderless_mode or helper_obj is None or semantic_obj is None:
+        return False
+    if getattr(helper_obj, "type", None) != "EMPTY" or getattr(
+        semantic_obj, "type", None
+    ) != "EMPTY":
+        return False
+    if _has_object_animation(helper_obj):
+        return False
+    helper_local = _get_local(helper_obj)
+    if helper_local is None or not _is_identity_matrix_approx(helper_local):
+        return False
+    children = list(getattr(helper_obj, "children", []) or [])
+    if len(children) != 1 or (
+        preferred_child is not None and children[0] is not preferred_child
+    ):
+        return False
+    helper_obj["_iedm_identity_passthrough"] = True
+    return False
+
+
 def _compact_visibility_identity_intermediate(node):
     """Hoist fake-light helper transforms toward the semantic node under a v_* wrapper.
 
@@ -71,80 +133,6 @@ def _compact_visibility_identity_intermediate(node):
         )
     )
 
-    def _has_object_animation(obj):
-        ad = getattr(obj, "animation_data", None)
-        if ad is None:
-            return False
-        if getattr(ad, "action", None) is not None:
-            return True
-        try:
-            return len(getattr(ad, "nla_tracks", [])) > 0
-        except Exception:
-            return False
-
-    def _get_local(obj):
-        try:
-            return obj.matrix_basis.copy()
-        except Exception:
-            try:
-                return obj.matrix_local.copy()
-            except Exception:
-                return None
-
-    def _set_local(obj, mat):
-        try:
-            obj.matrix_basis = mat
-            return True
-        except Exception:
-            try:
-                loc, rot, scale = mat.decompose()
-                obj.location = loc
-                obj.rotation_mode = "XYZ"
-                obj.rotation_euler = rot.to_euler("XYZ")
-                obj.scale = scale
-                return True
-            except Exception:
-                return False
-
-    def _collapse_redundant_helper_empty(
-        helper_obj, semantic_obj, preferred_child=None
-    ):
-        """Remove a static identity helper EMPTY after its transform was hoisted."""
-        # Only collapse in the render-node path. If we delete the current node's
-        # object during renderless-helper processing, later debug/output paths still
-        # in process_node can touch a dead reference.
-        if _renderless_helper_mode:
-            return False
-        if helper_obj is None or semantic_obj is None:
-            return False
-        if (
-            getattr(helper_obj, "type", None) != "EMPTY"
-            or getattr(semantic_obj, "type", None) != "EMPTY"
-        ):
-            return False
-        if _has_object_animation(helper_obj):
-            return False
-        helper_name = str(getattr(helper_obj, "name", "") or "")
-        helper_local = _get_local(helper_obj)
-        if helper_local is None or not _is_identity_matrix_approx(helper_local):
-            return False
-        children = list(getattr(helper_obj, "children", []) or [])
-        if len(children) != 1:
-            _trace(
-                "skip collapse helper '{}' child_count={}".format(
-                    helper_name, len(children)
-                )
-            )
-            return False
-        child = children[0]
-        if preferred_child is not None and child is not preferred_child:
-            return False
-        # This helper is still owned by a translation-graph node and its source
-        # transform. Retain it as an identity passthrough: deleting it here leaves
-        # dangling RNA references for later graph passes (notably on C130J lights).
-        helper_obj["_iedm_identity_passthrough"] = True
-        return False
-
     # Case 1: v_* -> identity helper -> fake-light (legacy helper compaction)
     helper_parent_graph = getattr(helper_graph, "parent", None)
     if isinstance(getattr(helper_parent_graph, "transform", None), ArgVisibilityNode):
@@ -173,7 +161,7 @@ def _compact_visibility_identity_intermediate(node):
                 _trace("case1 moved helper_local to semantic")
                 _set_local(helper_obj, Matrix.Identity(4))
                 _collapse_redundant_helper_empty(
-                    helper_obj, semantic_obj, preferred_child=fake_obj
+                    helper_obj, semantic_obj, fake_obj, _renderless_helper_mode
                 )
                 return
         if not _has_object_animation(helper_obj) and _is_identity_matrix_approx(
@@ -251,5 +239,5 @@ def _compact_visibility_identity_intermediate(node):
         _trace("case2 moved helper_local to semantic")
         _set_local(helper_obj, Matrix.Identity(4))
         _collapse_redundant_helper_empty(
-            helper_obj, semantic_obj, preferred_child=fake_obj
+            helper_obj, semantic_obj, fake_obj, _renderless_helper_mode
         )

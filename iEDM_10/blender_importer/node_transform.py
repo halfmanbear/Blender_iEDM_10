@@ -48,6 +48,201 @@ def _transform_uses_quaternion_rotation(tfnode, obj=None):
     return False
 
 
+def _debug_set_trace(tfnode, obj, source_label, local_mat):
+    if not _import_ctx.transform_debug.get("enabled"):
+        return
+    node_name = getattr(tfnode, "name", "") or type(tfnode).__name__
+    filter_terms = _debug_filter_terms()
+    if filter_terms:
+        if not any(
+            term in node_name.lower() or term in obj.name.lower()
+            for term in filter_terms
+        ):
+            return
+    loc, rot, scale = local_mat.decompose()
+    print(
+        "[iEDM][TFSET] {} src={} obj={} loc={} rot_deg={} scale={}".format(
+            node_name,
+            source_label,
+            obj.name,
+            _debug_fmt_vec3(loc),
+            _debug_fmt_rot_deg(rot),
+            _debug_fmt_vec3(scale),
+        )
+    )
+
+
+def _debug_dump_parent_chain(tnode, tfnode, obj, local_mat):
+    if not _import_ctx.transform_debug.get("enabled"):
+        return
+    filter_terms = _debug_filter_terms()
+    if not filter_terms:
+        return
+    node_name = getattr(tfnode, "name", "") or type(tfnode).__name__
+    if not any(
+        term in node_name.lower() or term in obj.name.lower()
+        for term in filter_terms
+    ):
+        return
+    dumped = _import_ctx.transform_debug.setdefault("chain_dumped", set())
+    dump_key = "{}::{}".format(node_name, obj.name)
+    if dump_key in dumped:
+        return
+    dumped.add(dump_key)
+
+    print(
+        "[iEDM][CHAIN] begin node={} obj={} graph_parent={} blender_parent={}".format(
+            node_name,
+            obj.name,
+            getattr(
+                getattr(getattr(tnode, "parent", None), "transform", None),
+                "name",
+                "<ROOT>",
+            )
+            if tnode is not None
+            else "<ROOT>",
+            getattr(getattr(obj, "parent", None), "name", None),
+        )
+    )
+    if tnode is not None:
+        cur = tnode
+        graph_parts = []
+        while cur is not None:
+            tf_cur = getattr(cur, "transform", None)
+            rn_cur = getattr(cur, "render", None)
+            if tf_cur is not None:
+                label = "{}<{}>".format(
+                    getattr(tf_cur, "name", "") or type(tf_cur).__name__,
+                    type(tf_cur).__name__,
+                )
+            elif rn_cur is not None:
+                label = "{}<{}>".format(
+                    getattr(rn_cur, "name", "") or type(rn_cur).__name__,
+                    type(rn_cur).__name__,
+                )
+            else:
+                label = "<ROOT>"
+            graph_parts.append(label)
+            cur = getattr(cur, "parent", None)
+        print(
+            "[iEDM][CHAIN] graph_path={}".format(" / ".join(reversed(graph_parts)))
+        )
+    try:
+        loc, rot, scale = local_mat.decompose()
+        print(
+            "[iEDM][CHAIN] assigned_local loc={} rot_deg={} scale={}".format(
+                _debug_fmt_vec3(loc),
+                _debug_fmt_rot_deg(rot),
+                _debug_fmt_vec3(scale),
+            )
+        )
+    except Exception:
+        pass
+
+    current = obj
+    level = 0
+    while current is not None:
+        try:
+            basis_loc, basis_rot, basis_scale = current.matrix_basis.decompose()
+            world_loc, world_rot, world_scale = current.matrix_world.decompose()
+            print(
+                "[iEDM][CHAIN] level={} obj={} type={} parent={} basis_loc={} basis_rot_deg={} basis_scale={} world_loc={} world_rot_deg={} world_scale={}".format(
+                    level,
+                    current.name,
+                    getattr(current, "type", ""),
+                    getattr(getattr(current, "parent", None), "name", None),
+                    _debug_fmt_vec3(basis_loc),
+                    _debug_fmt_rot_deg(basis_rot),
+                    _debug_fmt_vec3(basis_scale),
+                    _debug_fmt_vec3(world_loc),
+                    _debug_fmt_rot_deg(world_rot),
+                    _debug_fmt_vec3(world_scale),
+                )
+            )
+        except Exception as e:
+            print(
+                "[iEDM][CHAIN] level={} obj={} error={}".format(
+                    level, getattr(current, "name", "<unknown>"), e
+                )
+            )
+        current = getattr(current, "parent", None)
+        level += 1
+    print("[iEDM][CHAIN] end node={} obj={}".format(node_name, obj.name))
+
+
+def _set_local_matrix(obj, local_mat, wants_quaternion_rotation):
+    try:
+        obj.matrix_basis = local_mat
+        return
+    except Exception as e:
+        _log.warn(
+            "matrix_basis assign for '{}': {}".format(
+                getattr(obj, "name", "<unknown>"), e
+            ),
+            exc=e,
+        )
+    loc, rot, scale = local_mat.decompose()
+    obj.location = loc
+    if wants_quaternion_rotation:
+        obj.rotation_mode = "QUATERNION"
+        obj.rotation_quaternion = rot
+    else:
+        obj.rotation_mode = "XYZ"
+        obj.rotation_euler = _normalize_euler_xyz(rot.to_euler("XYZ"))
+    obj.scale = scale
+
+
+def _compose_with_parent_if_enabled(obj, local_mat):
+    if (
+        _import_ctx.legacy_v10_parent_compose
+        and obj.parent is not None
+        and _import_ctx.edm_version >= 10
+    ):
+        try:
+            return obj.parent.matrix_basis @ local_mat
+        except Exception:
+            return local_mat
+    return local_mat
+
+
+def _is_plain_root_connector_wrapper(graph_node, blender_obj):
+    if not _import_profile_flag("plain_root_connector_basis_fix"):
+        return False
+    if _import_ctx.edm_version < 10:
+        return False
+    if getattr(_import_ctx, "use_scene_root_basis_object", True):
+        return False
+    if blender_obj is None or getattr(blender_obj, "parent", None) is not None:
+        return False
+    if getattr(blender_obj, "type", "") != "EMPTY":
+        return False
+    try:
+        children = list(getattr(graph_node, "children", []) or [])
+    except Exception:
+        return False
+    return any(
+        isinstance(getattr(ch, "render", None), Connector)
+        or _is_connector_object(getattr(ch, "blender", None))
+        for ch in children
+    )
+
+
+def _is_plain_root_connector_child(graph_node, blender_obj):
+    if not _import_profile_flag("plain_root_connector_child_basis_fix"):
+        return False
+    if _import_ctx.edm_version < 10:
+        return False
+    if getattr(_import_ctx, "use_scene_root_basis_object", True):
+        return False
+    if graph_node is None or blender_obj is None:
+        return False
+    if getattr(blender_obj, "parent", None) is None:
+        return False
+    if not _is_connector_object(blender_obj):
+        return False
+    return _is_child_of_file_root(graph_node)
+
+
 def apply_node_transform(node, obj, used_shared_parent=False):
     """Assigns the transform to a given node. node can be a TranslationNode or raw EDM node."""
     tnode = node if hasattr(node, "transform") else None
@@ -64,194 +259,11 @@ def apply_node_transform(node, obj, used_shared_parent=False):
     )
     obj.rotation_mode = "QUATERNION" if wants_quaternion_rotation else "XYZ"
 
-    def _debug_set_trace(source_label, local_mat):
-        if not _import_ctx.transform_debug.get("enabled"):
-            return
-        node_name = getattr(tfnode, "name", "") or type(tfnode).__name__
-        filter_terms = _debug_filter_terms()
-        if filter_terms:
-            if not any(
-                term in node_name.lower() or term in obj.name.lower()
-                for term in filter_terms
-            ):
-                return
-        loc, rot, scale = local_mat.decompose()
-        print(
-            "[iEDM][TFSET] {} src={} obj={} loc={} rot_deg={} scale={}".format(
-                node_name,
-                source_label,
-                obj.name,
-                _debug_fmt_vec3(loc),
-                _debug_fmt_rot_deg(rot),
-                _debug_fmt_vec3(scale),
-            )
-        )
 
-    def _debug_dump_parent_chain(local_mat):
-        if not _import_ctx.transform_debug.get("enabled"):
-            return
-        filter_terms = _debug_filter_terms()
-        if not filter_terms:
-            return
-        node_name = getattr(tfnode, "name", "") or type(tfnode).__name__
-        if not any(
-            term in node_name.lower() or term in obj.name.lower()
-            for term in filter_terms
-        ):
-            return
-        dumped = _import_ctx.transform_debug.setdefault("chain_dumped", set())
-        dump_key = "{}::{}".format(node_name, obj.name)
-        if dump_key in dumped:
-            return
-        dumped.add(dump_key)
 
-        print(
-            "[iEDM][CHAIN] begin node={} obj={} graph_parent={} blender_parent={}".format(
-                node_name,
-                obj.name,
-                getattr(
-                    getattr(getattr(tnode, "parent", None), "transform", None),
-                    "name",
-                    "<ROOT>",
-                )
-                if tnode is not None
-                else "<ROOT>",
-                getattr(getattr(obj, "parent", None), "name", None),
-            )
-        )
-        if tnode is not None:
-            cur = tnode
-            graph_parts = []
-            while cur is not None:
-                tf_cur = getattr(cur, "transform", None)
-                rn_cur = getattr(cur, "render", None)
-                if tf_cur is not None:
-                    label = "{}<{}>".format(
-                        getattr(tf_cur, "name", "") or type(tf_cur).__name__,
-                        type(tf_cur).__name__,
-                    )
-                elif rn_cur is not None:
-                    label = "{}<{}>".format(
-                        getattr(rn_cur, "name", "") or type(rn_cur).__name__,
-                        type(rn_cur).__name__,
-                    )
-                else:
-                    label = "<ROOT>"
-                graph_parts.append(label)
-                cur = getattr(cur, "parent", None)
-            print(
-                "[iEDM][CHAIN] graph_path={}".format(" / ".join(reversed(graph_parts)))
-            )
-        try:
-            loc, rot, scale = local_mat.decompose()
-            print(
-                "[iEDM][CHAIN] assigned_local loc={} rot_deg={} scale={}".format(
-                    _debug_fmt_vec3(loc),
-                    _debug_fmt_rot_deg(rot),
-                    _debug_fmt_vec3(scale),
-                )
-            )
-        except Exception:
-            pass
 
-        current = obj
-        level = 0
-        while current is not None:
-            try:
-                basis_loc, basis_rot, basis_scale = current.matrix_basis.decompose()
-                world_loc, world_rot, world_scale = current.matrix_world.decompose()
-                print(
-                    "[iEDM][CHAIN] level={} obj={} type={} parent={} basis_loc={} basis_rot_deg={} basis_scale={} world_loc={} world_rot_deg={} world_scale={}".format(
-                        level,
-                        current.name,
-                        getattr(current, "type", ""),
-                        getattr(getattr(current, "parent", None), "name", None),
-                        _debug_fmt_vec3(basis_loc),
-                        _debug_fmt_rot_deg(basis_rot),
-                        _debug_fmt_vec3(basis_scale),
-                        _debug_fmt_vec3(world_loc),
-                        _debug_fmt_rot_deg(world_rot),
-                        _debug_fmt_vec3(world_scale),
-                    )
-                )
-            except Exception as e:
-                print(
-                    "[iEDM][CHAIN] level={} obj={} error={}".format(
-                        level, getattr(current, "name", "<unknown>"), e
-                    )
-                )
-            current = getattr(current, "parent", None)
-            level += 1
-        print("[iEDM][CHAIN] end node={} obj={}".format(node_name, obj.name))
 
-    def _set_local_matrix(local_mat):
-        try:
-            obj.matrix_basis = local_mat
-            return
-        except Exception as e:
-            _log.warn(
-                "matrix_basis assign for '{}': {}".format(
-                    getattr(obj, "name", "<unknown>"), e
-                ),
-                exc=e,
-            )
-        loc, rot, scale = local_mat.decompose()
-        obj.location = loc
-        if wants_quaternion_rotation:
-            obj.rotation_mode = "QUATERNION"
-            obj.rotation_quaternion = rot
-        else:
-            obj.rotation_mode = "XYZ"
-            obj.rotation_euler = _normalize_euler_xyz(rot.to_euler("XYZ"))
-        obj.scale = scale
 
-    def _compose_with_parent_if_enabled(local_mat):
-        if (
-            _import_ctx.legacy_v10_parent_compose
-            and obj.parent is not None
-            and _import_ctx.edm_version >= 10
-        ):
-            try:
-                return obj.parent.matrix_basis @ local_mat
-            except Exception:
-                return local_mat
-        return local_mat
-
-    def _is_plain_root_connector_wrapper(graph_node, blender_obj):
-        if not _import_profile_flag("plain_root_connector_basis_fix"):
-            return False
-        if _import_ctx.edm_version < 10:
-            return False
-        if getattr(_import_ctx, "use_scene_root_basis_object", True):
-            return False
-        if blender_obj is None or getattr(blender_obj, "parent", None) is not None:
-            return False
-        if getattr(blender_obj, "type", "") != "EMPTY":
-            return False
-        try:
-            children = list(getattr(graph_node, "children", []) or [])
-        except Exception:
-            return False
-        return any(
-            isinstance(getattr(ch, "render", None), Connector)
-            or _is_connector_object(getattr(ch, "blender", None))
-            for ch in children
-        )
-
-    def _is_plain_root_connector_child(graph_node, blender_obj):
-        if not _import_profile_flag("plain_root_connector_child_basis_fix"):
-            return False
-        if _import_ctx.edm_version < 10:
-            return False
-        if getattr(_import_ctx, "use_scene_root_basis_object", True):
-            return False
-        if graph_node is None or blender_obj is None:
-            return False
-        if getattr(blender_obj, "parent", None) is None:
-            return False
-        if not _is_connector_object(blender_obj):
-            return False
-        return _is_child_of_file_root(graph_node)
 
     # 1. Base Transform from Node.transform
     final_local = (
@@ -330,18 +342,20 @@ def apply_node_transform(node, obj, used_shared_parent=False):
                 raw_local_mat.to_3x3().to_4x4()
             ):
                 local_mat = local_mat @ Matrix.Rotation(math.radians(-90.0), 4, "X")
-        final_local = _compose_with_parent_if_enabled(local_mat)
+        final_local = _compose_with_parent_if_enabled(obj, local_mat)
     elif isinstance(tfnode, AnimatingNode):
         if hasattr(tfnode, "zero_transform_local_matrix"):
             final_local = _compose_with_parent_if_enabled(
-                tfnode.zero_transform_local_matrix
+                obj, tfnode.zero_transform_local_matrix
             )
         elif hasattr(tfnode, "zero_transform_matrix"):
-            final_local = _compose_with_parent_if_enabled(tfnode.zero_transform_matrix)
+            final_local = _compose_with_parent_if_enabled(
+                obj, tfnode.zero_transform_matrix
+            )
         elif hasattr(tfnode, "zero_transform"):
             loc, rot, scale = tfnode.zero_transform
             final_local = _compose_with_parent_if_enabled(
-                Matrix.LocRotScale(loc, rot, scale)
+                obj, Matrix.LocRotScale(loc, rot, scale)
             )
 
         wrapper_offset = getattr(tfnode, "wrapper_rest_translation_matrix", None)
@@ -377,6 +391,6 @@ def apply_node_transform(node, obj, used_shared_parent=False):
         if not m_rn.is_identity:
             final_local = final_local @ m_rn
 
-    _set_local_matrix(final_local)
-    _debug_set_trace(type(tfnode).__name__, final_local)
-    _debug_dump_parent_chain(final_local)
+    _set_local_matrix(obj, final_local, wants_quaternion_rotation)
+    _debug_set_trace(tfnode, obj, type(tfnode).__name__, final_local)
+    _debug_dump_parent_chain(tnode, tfnode, obj, final_local)

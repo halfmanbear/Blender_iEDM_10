@@ -17,14 +17,13 @@ from .anim_actions import (
     _clone_action_filtered,
     _compose_oriented_scale_matrix,
     _create_scale_orientation_rotation_action,
-    _has_nonidentity_scale_orientation_keys,
 )
 from .animation import (
     _quat_is_identity,
     add_scale_fcurves,
 )
-from .graph_pipeline import _get_action_argument
 from .node_transform import _transform_uses_quaternion_rotation
+from .orient_scale_candidates import _oriented_scale_rewrite_inputs
 from .prelude import (
     _ROOT_BASIS_FIX,
     _assign_action,
@@ -272,84 +271,36 @@ def _needs_prerotation_affine_split(
     return pre_err <= eps and rot_err <= eps
 
 
+def _finish_oriented_scale_rewrite(
+    node, source_tf, ob, top_wrapper, render_local, leaf_vis_action
+):
+    _clear_object_animation_tracks(ob)
+    if leaf_vis_action is not None:
+        _assign_action(ob, leaf_vis_action)
+    ob.matrix_basis = render_local
+    ob["_iedm_oriented_scale_leaf"] = True
+    _promote_oriented_scale_top_name(node, top_wrapper, ob)
+    source_tf._iedm_oriented_scale_wrapped = True
+    source_tf._iedm_oriented_scale_wrapped = True
+
+
 def _rewrite_oriented_scale_controls(graph):
     bone_ctx = _import_ctx.bone_import_ctx or {}
     bone_anim_source_nodes = bone_ctx.get("bone_anim_source_nodes", set())
     bone_anim_source_transforms = bone_ctx.get("bone_anim_source_transforms", set())
-
     for node in getattr(graph, "nodes", []) or []:
-        ob = getattr(node, "blender", None)
-        if ob is None or getattr(ob, "type", "") == "ARMATURE":
-            continue
-
-        source_tf = _scale_orientation_source_for_graph_node(node)
-        if source_tf is None:
-            continue
-        if node in bone_anim_source_nodes or source_tf in bone_anim_source_transforms:
-            continue
-        if getattr(source_tf, "_iedm_oriented_scale_wrapped", False):
-            continue
-
-        bmat_inv = getattr(source_tf, "bmat_inv", None)
-        if bmat_inv is not None:
-            continue
-
-        ad = getattr(ob, "animation_data", None)
-        active_action = getattr(ad, "action", None) if ad is not None else None
-        if ad is not None and len(list(getattr(ad, "nla_tracks", []) or [])) > 0:
-            continue
-
-        nonempty_scale_sets = []
-        for entry in list(getattr(source_tf, "scaleData", None) or []):
-            if not isinstance(entry, (list, tuple)) or len(entry) != 2:
-                continue
-            arg, pair = entry
-            if not isinstance(pair, (list, tuple)) or len(pair) != 2:
-                continue
-            keys4 = list(pair[0] or [])
-            keys3 = list(pair[1] or [])
-            if keys4 or keys3:
-                nonempty_scale_sets.append((arg, keys4, keys3))
-
-        if len(nonempty_scale_sets) > 1:
-            continue
-
-        scale_arg = None
-        keys4 = []
-        keys3 = []
-        if nonempty_scale_sets:
-            scale_arg, keys4, keys3 = nonempty_scale_sets[0]
-        action_arg = _get_action_argument(active_action)
-        if (
-            active_action is not None
-            and scale_arg is not None
-            and action_arg is not None
-            and int(scale_arg) != int(action_arg)
-        ):
-            continue
-
-        has_anim_scale = bool(keys3)
-        has_anim_orient = _has_nonidentity_scale_orientation_keys(keys4)
-        q2_raw = getattr(getattr(source_tf, "base", None), "quat_2", None)
-        q2_raw = (
-            q2_raw
-            if hasattr(q2_raw, "to_matrix")
-            else Quaternion(q2_raw or (1.0, 0.0, 0.0, 0.0))
+        inputs = _oriented_scale_rewrite_inputs(
+            node,
+            bone_anim_source_nodes,
+            bone_anim_source_transforms,
+            _scale_orientation_source_for_graph_node,
         )
-        base_scale_vec = Vector(
-            getattr(getattr(source_tf, "base", None), "scale", (1.0, 1.0, 1.0))[:3]
-        )
-        has_base_scale = any(
-            abs(float(base_scale_vec[i]) - 1.0) > 1e-6 for i in range(3)
-        )
-        has_base_orient = (not _quat_is_identity(q2_raw)) and has_base_scale
-
-        needs_oriented_scale_rewrite = (
-            has_anim_scale and has_anim_orient
-        ) or has_base_orient
-        if not needs_oriented_scale_rewrite:
+        if inputs is None:
             continue
-
+        (
+            ob, source_tf, active_action, action_arg, scale_arg, keys4, keys3,
+            has_anim_scale, has_anim_orient, q2_raw, base_scale_vec, has_base_scale,
+        ) = inputs
         zero_transform = getattr(source_tf, "zero_transform_local_matrix", None)
         if zero_transform is None:
             continue
@@ -529,10 +480,6 @@ def _rewrite_oriented_scale_controls(graph):
                     _assign_action(pre_anim, pre_action)
                 child = pre_anim
 
-        _clear_object_animation_tracks(ob)
-        if leaf_vis_action is not None:
-            _assign_action(ob, leaf_vis_action)
-        ob.matrix_basis = render_local
-        ob["_iedm_oriented_scale_leaf"] = True
-        _promote_oriented_scale_top_name(node, top_wrapper, ob)
-        source_tf._iedm_oriented_scale_wrapped = True
+        _finish_oriented_scale_rewrite(
+            node, source_tf, ob, top_wrapper, render_local, leaf_vis_action
+        )

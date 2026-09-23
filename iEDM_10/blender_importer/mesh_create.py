@@ -6,6 +6,63 @@ from ..edm_format.mathtypes import (
 )
 
 
+def _transform_mesh_vertices(source_vertices, vertex_format, transform):
+    if transform is None:
+        return source_vertices
+    transform_mat = (
+        Matrix(transform) if not hasattr(transform, "to_4x4") else transform
+    )
+    pos_idx = vertex_format.position_indices
+    norm_idx = vertex_format.normal_indices
+    normal_mat = transform_mat.to_3x3().inverted_safe().transposed()
+    transformed = []
+    for source in source_vertices:
+        vertex = list(source)
+        position = Vector(vertex[i] for i in pos_idx)
+        transformed_position = transform_mat @ position.to_4d()
+        vertex[0], vertex[1], vertex[2] = (
+            transformed_position[0],
+            transformed_position[1],
+            transformed_position[2],
+        )
+        if norm_idx and len(norm_idx) >= 3:
+            normal = Vector(vertex[i] for i in norm_idx[:3])
+            transformed_normal = normal_mat @ normal
+            if transformed_normal.length_squared > 1e-12:
+                transformed_normal.normalize()
+            for index, component in enumerate(norm_idx[:3]):
+                vertex[component] = transformed_normal[index]
+        transformed.append(vertex)
+    return transformed
+
+
+def _select_mesh_indices(vertex_data, index_data, compact):
+    if compact:
+        used_indices = sorted(set(index_data))
+        source_vertices = [vertex_data[i] for i in used_indices]
+        index_lookup = {
+            old_idx: new_idx for new_idx, old_idx in enumerate(used_indices)
+        }
+        return source_vertices, [index_lookup[i] for i in index_data]
+    return vertex_data, index_data
+
+
+def _mesh_primitive_mode(indices):
+    if len(indices) % 3 == 0:
+        return "triangles", indices
+    if len(indices) == 1:
+        return "points", indices
+    if len(indices) % 2 == 0:
+        return "lines", indices
+    usable = len(indices) - (len(indices) % 3)
+    print(
+        "Warning: Non-triangle index count {} encountered; truncating to {} indices".format(
+            len(indices), usable
+        )
+    )
+    return "triangles", indices[:usable]
+
+
 def _create_mesh(
     vertexData,
     indexData,
@@ -20,59 +77,12 @@ def _create_mesh(
       transform: Optional 4x4 matrix to transform vertex positions (for Y-up to Z-up conversion)
     """
 
-    if compact:
-        used_indices = sorted(set(indexData))
-        source_vertices = [vertexData[i] for i in used_indices]
-        index_lookup = {
-            old_idx: new_idx for new_idx, old_idx in enumerate(used_indices)
-        }
-        new_indices = [index_lookup[i] for i in indexData]
-    else:
-        used_indices = list(range(len(vertexData)))
-        source_vertices = vertexData
-        new_indices = indexData
+    source_vertices, new_indices = _select_mesh_indices(
+        vertexData, indexData, compact
+    )
 
-    if transform is not None:
-        transform_mat = (
-            Matrix(transform) if not hasattr(transform, "to_4x4") else transform
-        )
-        pos_idx = vertexFormat.position_indices
-        norm_idx = vertexFormat.normal_indices
-        # Normals transform by the inverse-transpose of the linear part.
-        # _ROOT_BASIS_FIX is orthonormal so this equals the matrix itself, but
-        # the general form is correct for any future caller.
-        normal_mat = transform_mat.to_3x3().inverted_safe().transposed()
-        new_vertices = []
-        for vtx in source_vertices:
-            vtx = list(vtx)
-            pos = Vector(vtx[i] for i in pos_idx)
-            tp = transform_mat @ pos.to_4d()
-            vtx[0], vtx[1], vtx[2] = tp[0], tp[1], tp[2]
-            if norm_idx and len(norm_idx) >= 3:
-                norm = Vector(vtx[i] for i in norm_idx[:3])
-                tn = normal_mat @ norm
-                if tn.length_squared > 1e-12:
-                    tn.normalize()
-                for i, ni in enumerate(norm_idx[:3]):
-                    vtx[ni] = tn[i]
-            new_vertices.append(vtx)
-    else:
-        new_vertices = source_vertices
-
-    primitive_mode = "triangles"
-    if len(new_indices) % 3 != 0:
-        if len(new_indices) == 1:
-            primitive_mode = "points"
-        elif len(new_indices) % 2 == 0:
-            primitive_mode = "lines"
-        else:
-            usable = len(new_indices) - (len(new_indices) % 3)
-            print(
-                "Warning: Non-triangle index count {} encountered; truncating to {} indices".format(
-                    len(new_indices), usable
-                )
-            )
-            new_indices = new_indices[:usable]
+    new_vertices = _transform_mesh_vertices(source_vertices, vertexFormat, transform)
+    primitive_mode, new_indices = _mesh_primitive_mode(new_indices)
 
     bm = bmesh.new()
     import_custom_normals = True

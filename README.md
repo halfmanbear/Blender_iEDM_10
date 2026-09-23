@@ -105,6 +105,7 @@ Access via **File → Import → DCS World (.edm, .edm2)**
 |------|---------|
 | `iEDM_10/` | Add-on package (the only thing shipped in release zips) |
 | `docs/ARCHITECTURE.md` | Module map of the importer |
+| `docs/PYTHON_STANDARD.md` | Python reliability and readability rules; run `python scripts/check_code_standard.py` to check them |
 | `scripts/build_addon.py` | Builds `dist/iEDM_10-<version>.zip` from git-tracked add-on files |
 | `tests/` | Headless Blender regression scripts; assets go in the git-ignored `tests/assets/` |
 | `local/` | Git-ignored personal scratch (diagnostics, scans, notes) |

@@ -10,6 +10,8 @@ import os
 import re
 
 import bpy
+from .material_creation import _create_material_node_tree
+from .material_creation import _create_material_textures as _build_material_textures
 
 
 # Mapping from EDM animated-uniform names to EDMProps field names.
@@ -117,44 +119,23 @@ def _wire_uv_transform(nodes, links, tex_def, tex_image):
 
 
 def create_material(material):
-    """Create a blender node-based PBR material from an EDM one"""
-    # Create a new material
-    mat = bpy.data.materials.new(name=material.name)
-    mat.use_nodes = True
-    nodes = mat.node_tree.nodes
-    links = mat.node_tree.links
+    """Create a blender node-based PBR material from an EDM one."""
+    mat, nodes, links, principled_bsdf = _create_material_node_tree(material)
+    texture_nodes = _build_material_textures(
+        material,
+        nodes,
+        links,
+        _find_texture_file,
+        _ensure_placeholder_texture_image,
+        _wire_uv_transform,
+    )
+    _connect_principled_textures(nodes, links, principled_bsdf, texture_nodes)
+    _set_principled_uniforms(material, links, principled_bsdf, texture_nodes)
+    _finish_material(material, mat, nodes, principled_bsdf, texture_nodes)
+    return mat
 
-    # Clear existing nodes
-    for node in nodes:
-        nodes.remove(node)
 
-    # Create Principled BSDF and Output nodes
-    principled_bsdf = nodes.new("ShaderNodeBsdfPrincipled")
-    principled_bsdf.location = (0, 0)
-    material_output = nodes.new("ShaderNodeOutputMaterial")
-    material_output.location = (400, 0)
-    links.new(principled_bsdf.outputs["BSDF"], material_output.inputs["Surface"])
-
-    # --- Handle Textures ---
-    texture_nodes = {}
-    for tex_def in material.textures:
-        filename = _find_texture_file(tex_def.name)
-
-        # Always create a texture node for preserved EDM slots. The official
-        # exporter reads texture names from connected image nodes; if the source
-        # file is unavailable locally, keep a generated placeholder image so the
-        # texture binding name still round-trips.
-        tex_image = nodes.new("ShaderNodeTexImage")
-        if filename:
-            tex_image.image = bpy.data.images.load(filename, check_existing=True)
-        else:
-            tex_image.image = _ensure_placeholder_texture_image(tex_def.name)
-        tex_image.label = str(getattr(tex_def, "name", "") or "")
-        tex_image.location = (-400, tex_def.index * -300)
-        texture_nodes[tex_def.index] = tex_image
-        _wire_uv_transform(nodes, links, tex_def, tex_image)
-
-    # Connect textures to Principled BSDF
+def _connect_principled_textures(nodes, links, principled_bsdf, texture_nodes):
     if 0 in texture_nodes:  # Diffuse
         tex_image = texture_nodes[0]
         tex_image.image.colorspace_settings.name = "sRGB"
@@ -175,8 +156,8 @@ def create_material(material):
             tex_image.outputs["Color"], principled_bsdf.inputs["Specular IOR Level"]
         )
 
-    # --- Handle Uniforms ---
-    # Metallic
+
+def _set_principled_uniforms(material, links, principled_bsdf, texture_nodes):
     _metallic_materials = {"chrome_material", "aluminium_material"}
     if (material.material_name or "").lower() in _metallic_materials:
         principled_bsdf.inputs["Metallic"].default_value = 1.0
@@ -252,7 +233,9 @@ def create_material(material):
         except Exception:
             pass
 
-    # --- Handle Blending ---
+
+def _finish_material(material, mat, nodes, principled_bsdf, texture_nodes):
+    links = mat.node_tree.links
     if material.blending in (1, 2):  # Alpha blending or Alpha test
         # Connect diffuse texture alpha to Principled BSDF Alpha input
         if 0 in texture_nodes:
@@ -301,7 +284,7 @@ def create_material(material):
     _create_material_socket_animations(mat, material)
     _create_material_uv_animations(mat, material, texture_nodes)
 
-    return mat
+    return
 
 
 # Animated-uniform name → EDM shader node group input socket name.

@@ -365,32 +365,17 @@ def _push_action_to_nla(ob, action):
 # ---------------------------------------------------------------------------
 
 
-def _assign_collections(graph):
-    """Create named import collections and assign Blender objects to them.
+def _get_or_create_child_col(parent, name):
+    col = bpy.data.collections.get(name)
+    if col is None:
+        col = bpy.data.collections.new(name)
+    if parent is not None and col.name not in parent.children.keys():
+        parent.children.link(col)
+    return col
 
-    Rules:
-    - ShellNode / SegmentsNode meshes and their ancestor empties -> "Collision"
-    - Animated/hierarchical render meshes -> "Vehicle"
-    - Identity-style root render helpers -> "Texture_Animation"
-    - Other nodes stay in Scene Collection
-    - Empties and connectors inherit the category of their nearby branch
-    """
-    scene = bpy.context.scene
 
-    def _get_or_create_child_col(parent, name):
-        col = bpy.data.collections.get(name)
-        if col is None:
-            col = bpy.data.collections.new(name)
-        if parent is not None and col.name not in parent.children.keys():
-            parent.children.link(col)
-        return col
-
-    col_vehicle = _get_or_create_child_col(scene.collection, "Vehicle")
-    col_collision = _get_or_create_child_col(col_vehicle, "Collision")
-    col_tex_anim = _get_or_create_child_col(scene.collection, "Texture_Animation")
-
+def _classify_graph_nodes(graph):
     obj_category = {}
-
     for n in graph.nodes:
         if not getattr(n, "_is_primary", False) or not n.blender:
             continue
@@ -422,7 +407,7 @@ def _assign_collections(graph):
                 render_name = str(getattr(n.render, "name", "") or "")
                 obj_category[n.blender] = (
                     "texture_anim"
-                    if (not render_name and render_local.is_identity)
+                    if not render_name and render_local.is_identity
                     else None
                 )
             else:
@@ -433,8 +418,10 @@ def _assign_collections(graph):
                 )
         else:
             obj_category[n.blender] = None
+    return obj_category
 
-    # Resolve empties based on children categories
+
+def _inherit_graph_collection_categories(graph, obj_category):
     changed = True
     while changed:
         changed = False
@@ -443,11 +430,7 @@ def _assign_collections(graph):
                 continue
             if obj_category.get(n.blender) is not None:
                 continue
-            child_cats = set()
-            for child_obj in n.blender.children:
-                cat = obj_category.get(child_obj)
-                if cat:
-                    child_cats.add(cat)
+            child_cats = {obj_category.get(child) for child in n.blender.children}
             if "collision" in child_cats and "vehicle" not in child_cats:
                 obj_category[n.blender] = "collision"
                 changed = True
@@ -455,7 +438,6 @@ def _assign_collections(graph):
                 obj_category[n.blender] = "vehicle"
                 changed = True
 
-    # Helper empties inserted after graph construction follow their categorized parent
     changed = True
     while changed:
         changed = False
@@ -465,13 +447,26 @@ def _assign_collections(graph):
             for child in list(obj.children):
                 if obj_category.get(child) is not None:
                     continue
-                if (
-                    child.get("_iedm_identity_passthrough")
-                    or child.get("_iedm_vis_passthrough")
-                    or getattr(child, "type", "") == "EMPTY"
-                ):
+                is_helper = child.get("_iedm_identity_passthrough") or child.get(
+                    "_iedm_vis_passthrough"
+                )
+                if is_helper or getattr(child, "type", "") == "EMPTY":
                     obj_category[child] = cat
                     changed = True
+    return obj_category
+
+
+def _assign_collections(graph):
+    """Create named import collections and assign Blender objects by category."""
+    scene = bpy.context.scene
+
+    col_vehicle = _get_or_create_child_col(scene.collection, "Vehicle")
+    col_collision = _get_or_create_child_col(col_vehicle, "Collision")
+    col_tex_anim = _get_or_create_child_col(scene.collection, "Texture_Animation")
+
+    obj_category = _inherit_graph_collection_categories(
+        graph, _classify_graph_nodes(graph)
+    )
 
     _col_map = {
         "collision": col_collision,

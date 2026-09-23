@@ -22,7 +22,9 @@
 | `propertiesset.py` | Reads, writes, and audits EDM `PropertiesSet` payloads; preserves scalar, string, vector, and animated property values |
 | `material_types.py` | EDM material parsing: `Material`, `VertexFormat`, `Texture`, `ShadowSettings` classes; reads material properties, textures, uniforms, and animated uniforms from binary |
 | `types/__init__.py` | Exports EDM node type classes (likely `RenderNode`, `ShellNode`, `ArgAnimationNode`, `Bone`, etc.) |
-| `types/core.py` | Defines all EDM node types (Node, TransformNode, RenderNode, ArgAnimationNode, ArgVisibilityNode, SkinNode, Bone, ConnectorNode, SegmentsNode, BoundingBoxNode, UserBoxNode, etc.) and binary parsing logic using @reads_type decorators from typereader |
+| `types/core.py` | Compatibility facade for the EDM v10 parser and node types |
+| `types/core_support.py`, `core_file.py` | Type-reader support, indexes, and EDM file read/write orchestration |
+| `types/core_nodes.py`, `core_animation.py` | Transform, root, and animation node definitions and their registered binary readers |
 | `types/lights.py` | EDM light node types: `FakeOmniLightsNode`, `FakeSpotLightsNode`, `FakeALSNode`; includes decode functions for packed light data |
 | `types/number.py` | EDM number display node type (`NumberNode`) for in-game numeric displays |
 | `types/render_shell.py` | EDM render/collision shell node types (`RenderNode`, `ShellNode`, `SegmentsNode`) |
@@ -44,7 +46,9 @@
 | `mesh_create.py` | Creates Blender mesh objects from EDM vertex/index data; handles compacting, UV layers, normals, triangle/line primitives, merge by distance |
 | `object_create.py` | Creates Blender objects for EDM nodes: `create_connector`, `create_segments`, `create_object`; handles materials, special types, shape keys for morph nodes |
 | `material_setup.py` | Creates Blender PBR materials from EDM data; maps textures (diffuse/normal/specular), uniforms, animated uniforms; integrates with official EDM exporter material system |
-| `lights.py` | Creates Blender light objects from EDM light nodes: `create_lamp`, `create_fake_omni_lights`, `create_fake_spot_lights`, `create_billboard`; handles brightness/color animation |
+| `lights.py` | Compatibility facade for light creation functions and helpers |
+| `light_values.py`, `light_real.py`, `light_entry.py`, `light_textured.py`, `light_billboard.py` | Light property values, real and textured lights, and billboard surrogates |
+| `light_materials.py`, `light_geometry.py`, `light_animation.py`, `light_fake.py` | Fake light materials, geometry, animation, and object creation |
 | `orient_scale.py` | Oriented scale decomposition and rewrite pass; detects ArgAnimationNodes with scale+orientation keys and splits them into multiple Blender objects for proper round-trip |
 | `vis_rewrites.py` | Visibility graph basis-fix passes: fixes multi-arg visibility controls, plain root visibility basis, skin visibility transforms, inverse-scaled visibility offsets |
 | `skin_rewrites.py` | Late-stage skin parent binding using bind-rest world positions; resolves skin mesh parent overrides for proper armature attachment |
@@ -61,7 +65,10 @@
 |------|---------|
 | `__init__.py` | Package marker for node processing modules |
 | `processing.py` | Legacy aggregation wrapper for node processing helpers; re-exports core, mesh, visibility, armature, and diagnostics symbols |
-| `core.py` | Core node processing: `process_node` entry point; creates Blender objects (`_create_node_object`), parents them (`_parent_node_object`), stamps properties (`_stamp_node_properties`), applies positions and hooks up animations |
+| `core.py` | Compatibility facade for node processing helpers |
+| `node_process.py`, `node_helpers.py` | `process_node` entry point, diagnostics, naming, and shared helper logic |
+| `node_create.py`, `node_parent.py`, `node_properties.py` | Blender object creation, parenting, and EDM metadata stamping |
+| `node_position.py`, `node_animation.py` | Render positioning and animation hookup |
 | `armature.py` | Armature/skeleton import: creates armature object, builds edit bones from EDM Bone/ArgAnimatedBone nodes, transfers bone actions, binds skin meshes to armature with vertex groups |
 | `mesh.py` | Mesh utility functions: `_recenter_mesh_object_to_geometry`, `_transform_mesh_data`, identity matrix checks |
 | `visibility.py` | Visibility wrapper logic: helper compaction for fake lights under visibility wrappers (`_compact_visibility_identity_intermediate`) |
@@ -76,7 +83,7 @@
    - `EDMFile(filename)` - Parse the binary EDM file through `edm_format`
    - `import_capabilities.py:derive_import_capabilities()` - Detect file features and select behavior flags
    - `graph_build.py:build_graph()` - Build the `TranslationGraph` from parsed transform/render nodes
-   - `nodes/core.py:process_node()` - Create Blender objects for each graph node
+   - `nodes/core.py:process_node()` (implemented in `nodes/node_process.py`) - Create Blender objects for each graph node
    - `graph_postprocess.py`, `vis_rewrites.py`, `orient_scale.py`, `ctrl_splits.py`, `orient_fixes.py`, `skin_rewrites.py` - Apply post-processing, visibility/control rewrites, orientation fixes, and skin parent resolution
 
 ### Key Concepts

@@ -163,6 +163,46 @@ def _find_group_input_socket(group_node, socket_name):
     return None
 
 
+def _route_explicit_uv_channels(nodes, links, texture_nodes, uv_channels):
+    """Preserve explicit EDM texture coordinate channel assignments."""
+    for tex_idx, tex_node in texture_nodes.items():
+        uv_channel = uv_channels.get(tex_idx)
+        if uv_channel is None or int(uv_channel) <= 0:
+            continue
+        uv_node = _ensure_uv_map_node_for_channel(nodes, uv_channel)
+        _link_uv_to_texture_vector(links, uv_node, tex_node)
+
+
+def _prepare_official_material_node(mat, edm_material):
+    bridge = _ensure_official_material_bridge()
+    if not bridge.get("available"):
+        return None
+    nodes = mat.node_tree.nodes
+    links = mat.node_tree.links
+    names = bridge.get("names", {})
+    official_kind = _map_edm_material_to_official_kind(edm_material.material_name)
+    official_name = _map_edm_material_to_official_name(
+        edm_material.material_name, bridge
+    )
+    group_node = next(
+        (
+            node
+            for node in nodes
+            if getattr(getattr(node, "node_tree", None), "name", None) == official_name
+        ),
+        None,
+    )
+    if group_node is None:
+        group_node = _create_official_group_node(
+            nodes, bridge, official_kind, official_name
+        )
+        if group_node is None:
+            return None
+        group_node.location = (320, -360)
+        group_node.width = 320
+    return bridge, nodes, links, names, official_name, group_node
+
+
 def _link_texture_to_group_input(
     links, texture_node, group_node, input_name, output_name="Color"
 ):
@@ -381,43 +421,15 @@ def _resolve_official_material_tree(bridge, official_material_name):
 
 
 def _attach_official_material_bridge(mat, edm_material, texture_nodes):
-    """
-    Add an official-EDM-compatible material group node so meshes imported by iEDM
-    can be exported by the official exporter addon.
-    """
-    bridge = _ensure_official_material_bridge()
-    if not bridge.get("available"):
+    """Attach an official-compatible material group for round-trip export."""
+    prepared = _prepare_official_material_node(mat, edm_material)
+    if prepared is None:
         return False
-
-    nodes = mat.node_tree.nodes
-    links = mat.node_tree.links
-    names = bridge.get("names", {})
-    official_kind = _map_edm_material_to_official_kind(edm_material.material_name)
-    official_name = _map_edm_material_to_official_name(
-        edm_material.material_name, bridge
-    )
-
-    # Reuse existing compatible node if one is already present.
-    group_node = None
-    for node in nodes:
-        node_tree = getattr(node, "node_tree", None)
-        if node_tree and node_tree.name == official_name:
-            group_node = node
-            break
-
-    if group_node is None:
-        group_node = _create_official_group_node(
-            nodes, bridge, official_kind, official_name
-        )
-        if group_node is None:
-            return False
-        group_node.location = (320, -360)
-        group_node.width = 320
+    bridge, nodes, links, names, official_name, group_node = prepared
 
     trans_mode = _official_transparency_enum(getattr(edm_material, "blending", 0))
     shadow_mode = _official_shadow_enum(getattr(edm_material, "shadows", None))
 
-    # Set custom node enums (preferred path for official exporter parser).
     _set_group_enum_property(group_node, "transparency", trans_mode)
     _set_group_enum_property(group_node, "deck_transparency", trans_mode)
     _set_group_enum_property(group_node, "glass_transparency", trans_mode)
@@ -441,7 +453,6 @@ def _attach_official_material_bridge(mat, edm_material, texture_nodes):
     _set_group_socket_default(group_node, "LightMap Value*", ao_value)
     _set_group_socket_default(group_node, "LightMap Value", ao_value)
 
-    # Map common EDM texture channels to official group inputs.
     tex0 = texture_nodes.get(0)  # diffuse/base
     tex1 = texture_nodes.get(1)  # normal
     tex2 = texture_nodes.get(2) or texture_nodes.get(13)  # spec/roughmet-ish
@@ -457,16 +468,7 @@ def _attach_official_material_bridge(mat, edm_material, texture_nodes):
     tex_flir = _find_texture_node_by_name_substring(texture_nodes, "flir")
     tex_uv_channels = _texture_uv_channel_map(edm_material)
 
-    # Route explicit EDM UV-channel assignments to texture vector inputs so the
-    # official exporter can recover texture_coord_channels deterministically.
-    for tex_idx, tex_node in texture_nodes.items():
-        uv_channel = tex_uv_channels.get(tex_idx, None)
-        if uv_channel is None:
-            continue
-        if int(uv_channel) <= 0:
-            continue
-        uv_node = _ensure_uv_map_node_for_channel(nodes, uv_channel)
-        _link_uv_to_texture_vector(links, uv_node, tex_node)
+    _route_explicit_uv_channels(nodes, links, texture_nodes, tex_uv_channels)
 
     if official_name == names["default"]:
         if 3 not in tex_uv_channels and tex3:
@@ -522,9 +524,6 @@ def _attach_official_material_bridge(mat, edm_material, texture_nodes):
                 links, tex14, group_node, "Glass Alpha*", "Alpha"
             )
         else:
-            # Prefer a neutral fallback when the dedicated glass-filter map is absent.
-            # Using tex0 here incorrectly aliases the dirt/albedo texture into the
-            # exporter-facing glass filter path.
             _set_group_socket_default(
                 group_node, "Glass Color (Color Filter)", (1.0, 1.0, 1.0, 1.0)
             )

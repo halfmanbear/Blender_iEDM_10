@@ -3,10 +3,8 @@ from ..graph_build import iterate_all_objects
 from ..prelude import _import_ctx
 
 
-def _print_import_diagnostics(edm, graph):
-    """Print summary of EDM node types found vs Blender objects created."""
+def _collect_diagnostic_counts(edm, graph):
     from collections import Counter
-
     edm_counts = Counter()
     created_counts = Counter()
     skipped_empty = 0
@@ -51,6 +49,32 @@ def _print_import_diagnostics(edm, graph):
 
     graph.walk_tree(_count_created)
 
+    return (
+        edm_counts,
+        created_counts,
+        skipped_empty,
+        split_layout_counts,
+        split_layout_examples,
+        source_type_counts,
+        shell_layout_counts,
+        split_child_total,
+    )
+
+
+def _print_import_diagnostics(edm, graph):
+    """Print summary of EDM node types found vs Blender objects created."""
+    from collections import Counter
+
+    (
+        edm_counts,
+        created_counts,
+        skipped_empty,
+        split_layout_counts,
+        split_layout_examples,
+        source_type_counts,
+        shell_layout_counts,
+        split_child_total,
+    ) = _collect_diagnostic_counts(edm, graph)
     print("\n--- Import Diagnostics ---")
     print("EDM render nodes by type:")
     for name, count in sorted(edm_counts.items()):

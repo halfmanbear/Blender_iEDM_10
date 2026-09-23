@@ -1006,11 +1006,7 @@ def _bind_skin_object(mesh_obj, skin_node):
         mesh_obj.parent = candidate
         mesh_obj.matrix_parent_inverse = Matrix.Identity(4)
         mesh_obj["_iedm_skin_parent_override"] = True
-    # Parity: Keep original hierarchy parent if one exists. Reparenting to the
-    # armature root (the legacy path) breaks local transform inheritance from
-    # ancestors like wings or pylons. Prefer the same-name wrapper override
-    # first; otherwise the transient armature parent can leak a stale local
-    # basis into the mesh before we reparent it back under the wrapper.
+    # Preserve hierarchy to keep inherited local transforms.
     elif mesh_obj.parent is None:
         mesh_obj.parent = arm_obj
     else:
@@ -1020,12 +1016,22 @@ def _bind_skin_object(mesh_obj, skin_node):
 
     _localize_skin_mesh_to_bind_target(mesh_obj, bind_target_loc)
 
+    if not mesh_obj.data.vertices:
+        return
+    _assign_skin_vertex_weights(
+        mesh_obj, skin_node, skin_bones, group_map, channel_slices
+    )
+    _bake_skin_mesh_object_transforms(mesh_obj)
+
+
+def _assign_skin_vertex_weights(
+    mesh_obj, skin_node, skin_bones, group_map, channel_slices
+):
     nverts = len(mesh_obj.data.vertices)
     if nverts == 0:
         return
 
-    # For SkinNode, the mesh data was built using the full original vertexData
-    # pool (no compaction) to maintain 1:1 parity with the EDM bone weights.
+    # Skin meshes retain the original vertex pool for 1:1 EDM weight indexing.
     slice21 = channel_slices.get(21)
     pos_slice = channel_slices.get(0)
     packed_bone_index_offset = None
@@ -1046,8 +1052,7 @@ def _bind_skin_object(mesh_obj, skin_node):
             if decoded and any(0 <= int(idx) < len(skin_bones) for idx in decoded):
                 bone_indices = decoded
 
-        # Multiple packed slots may reference the same bone. Accumulate them before
-        # assigning groups, then normalize the actual influences (never add fake ones).
+        # Merge repeated packed slots before normalizing actual influences.
         influences = {}
         for bi, weight in enumerate(weights[:4]):
             bone_index = (
@@ -1058,9 +1063,7 @@ def _bind_skin_object(mesh_obj, skin_node):
             name = skin_bones[bone_index]
             influences[name] = influences.get(name, 0.0) + weight
         total = sum(influences.values())
-        # The official exporter discards influences below 0.001, but its own
-        # normalization tolerance can leave the surviving weights summing below 1.
-        # Normalize exactly the influences that will survive that export filter.
+        # Match the exporter's 0.001 influence filter before normalizing.
         if total > 0.0:
             influences = {
                 name: weight
@@ -1073,9 +1076,6 @@ def _bind_skin_object(mesh_obj, skin_node):
                 group_map[name].add([vi], weight / total, "REPLACE")
         else:
             group_map[skin_bones[0]].add([vi], 1.0, "REPLACE")
-
-    _bake_skin_mesh_object_transforms(mesh_obj)
-
 
 def _bake_skin_mesh_object_transforms(mesh_obj):
     """Bake any non-identity matrix_basis into vertex positions so matrix_basis = Identity.
