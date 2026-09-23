@@ -1,16 +1,16 @@
 import struct
 
+from ..propertiesset import PropertiesSet
 from .core import (
+    _V10_CATEGORY_KEYS,
     BaseNode,
     Node,
     NodeCategory,
     _next_v10_token_looks_like_type,
     _scan_to_next_v10_type_token,
-    _V10_CATEGORY_KEYS,
     logger,
     reads_type,
 )
-from ..propertiesset import PropertiesSet
 
 
 def _material_name_matches_kind(material, kind):
@@ -323,7 +323,7 @@ class FakeSpotLightsNode(BaseNode):
                         if looks_aligned_after:
                             self.trailing_direction = trailing
                             self.trailing_direction_offset = tpos
-                            # Keep the next token unread; we only wanted a look-ahead probe.
+                            # Keep the next token unread; this was only a look-ahead probe.
                             stream.seek(tpos + 12)
                         else:
                             stream.seek(tpos)
@@ -360,7 +360,7 @@ class FakeSpotLightsNode(BaseNode):
                     self.control_node = nodes[raw]
                     self.control_node_index = raw
             except Exception:
-                pass
+                logger.debug("Ignoring optional operation failure", exc_info=True)
 
 
 def _read_animated_fake_lights_payload(stream, node, node_label):
@@ -445,7 +445,7 @@ class FakeSpotLights3Node(FakeSpotLightsNode):
                             self.data[i]["back_side"] = bool(flag)
                     return self
         except Exception:
-            pass
+            logger.debug("Ignoring optional operation failure", exc_info=True)
 
         # Restore and preserve any unknown trailing payload until the next model token.
         stream.seek(pos)
@@ -472,7 +472,7 @@ class FakeOmniLightsNode(BaseNode):
         # RenderNode/SkinNode before its control-link vector payload.
         self.unknown_start = stream.read_uint()
         self.material_ish = stream.read_uint()
-        # uint32 controlLinkCount, then for each link: uint32 node_index + uint32 (discarded).
+        # uint32 controlLinkCount, then node_index + discarded uint32 per link.
         # Hardcoding 5 uints only worked when controlLinkCount == 2 (1 + 2*2 = 5).
         control_link_count = stream.read_count("control link count")
         self.control_links = []

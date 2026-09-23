@@ -1,9 +1,6 @@
-from ..utils import action_fcurves
-
 # Fragment: oriented scale decomposition helpers and the rewrite pass.
-
-
 import bpy
+
 from ..edm_format.mathtypes import (
     Matrix,
     MatrixScale,
@@ -11,6 +8,7 @@ from ..edm_format.mathtypes import (
     Vector,
 )
 from ..edm_format.types import ArgAnimationNode
+from ..utils import action_fcurves
 from .anim_actions import (
     _build_arganimation_action,
     _clear_object_animation_tracks,
@@ -147,8 +145,8 @@ def _promote_oriented_scale_top_name(node, top_wrapper, leaf):
     try:
         top_wrapper["_iedm_oriented_scale_node_name"] = original_name
         leaf["_iedm_oriented_scale_leaf_of"] = original_name
-    except Exception:
-        pass
+    except Exception as exc:
+        _log.debug("Optional operation failed: {}".format(exc), level=2)
 
 
 def _reconstruct_edm_local_matrix(node):
@@ -298,8 +296,18 @@ def _rewrite_oriented_scale_controls(graph):
         if inputs is None:
             continue
         (
-            ob, source_tf, active_action, action_arg, scale_arg, keys4, keys3,
-            has_anim_scale, has_anim_orient, q2_raw, base_scale_vec, has_base_scale,
+            ob,
+            source_tf,
+            active_action,
+            action_arg,
+            scale_arg,
+            keys4,
+            keys3,
+            has_anim_scale,
+            has_anim_orient,
+            q2_raw,
+            base_scale_vec,
+            has_base_scale,
         ) = inputs
         zero_transform = getattr(source_tf, "zero_transform_local_matrix", None)
         if zero_transform is None:
@@ -455,8 +463,10 @@ def _rewrite_oriented_scale_controls(graph):
             else:
                 try:
                     bpy.data.actions.remove(anim_scale_action)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _log.debug(
+                        "Optional operation failed: {}".format(exc), level=2
+                    )
             child = anim_scale
 
             if has_anim_orient:

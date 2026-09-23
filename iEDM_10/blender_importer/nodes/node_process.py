@@ -13,6 +13,7 @@ from ..graph_pipeline import (
 from ..prelude import (
     _debug_log_event,
     _import_ctx,
+    _log,
 )
 from .armature import (
     _bind_skin_object,
@@ -44,8 +45,8 @@ def _dump_node_diagnostics(node):
                 continue
             try:
                 node.blender[prefix + attr] = idprop_val
-            except Exception:
-                pass
+            except Exception as exc:
+                _log.debug("Optional operation failed: {}".format(exc), level=2)
 
     if node.transform:
         _dump_diag(node.transform, "EDM_TF_")
@@ -161,9 +162,9 @@ def _process_lod_post_children(node):
             [float(start), float(end)]
             for start, end in getattr(node.transform, "level", [])
         ]
-    except Exception:
-        pass
-    for (start, end), child in zip(node.transform.level, node.children):
+    except Exception as exc:
+        _log.debug("Optional operation failed: {}".format(exc), level=2)
+    for (start, end), child in zip(node.transform.level, node.children, strict=False):
         child.blender.edm.lod_min_distance = start
         child.blender.edm.lod_max_distance = end
         child.blender.edm.nouse_lod_distance = end > 1e6

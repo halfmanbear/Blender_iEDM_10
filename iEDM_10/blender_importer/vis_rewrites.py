@@ -1,8 +1,5 @@
 # Fragment: visibility graph basis-fix passes.
 
-from .anim_actions import _visibility_source_for_graph_node
-
-
 import math
 
 import bpy
@@ -12,6 +9,7 @@ from ..edm_format.types import AnimatingNode, ArgVisibilityNode
 from .anim_actions import (
     _clear_object_animation_tracks,
     _collect_merged_transform_actions_for_graph_node,
+    _visibility_source_for_graph_node,
     get_actions_for_node,
 )
 from .animation import _is_pos90_x_basis_matrix
@@ -341,8 +339,10 @@ def _fix_inverse_scaled_visibility_rest_offset():
             try:
                 if abs(rot.angle) > math.radians(1.0):
                     continue
-            except Exception:
-                pass
+            except Exception as exc:
+                _log.debug(
+                    "Optional operation failed: {}".format(exc), level=2
+                )
             if any(
                 getattr(desc, "type", "") == "MESH"
                 for desc in getattr(child, "children_recursive", []) or []
@@ -431,12 +431,12 @@ def _fix_inverse_scaled_visibility_rest_offset():
     if changed:
         try:
             bpy.context.view_layer.update()
-        except Exception:
-            pass
+        except Exception as exc:
+            _log.debug("Optional operation failed: {}".format(exc), level=2)
 
 
 def _apply_argvis_chain_basis_fix():
-    """Strip erroneous ±90 X basis rotation from intermediate ArgVisibilityNode wrappers.
+    """Strip erroneous ±90 X basis rotation from intermediate visibility wrappers.
 
     Some scene-root-authored v10 graphs create visibility wrapper chains where
     intermediate nodes carry only the coordinate system conversion rotation. This
@@ -512,7 +512,7 @@ def _apply_argvis_chain_basis_fix():
                 except Exception as e:
                     _log.warn("_apply_argvis_chain_basis_fix pos90", exc=e)
 
-        # Case 2: Animated child under ArgVisibilityNode parent carrying a basis-only rotation.
+        # Case 2: animated child under a parent with a basis-only rotation.
         elif parent_type == "ArgVisibilityNode":
             if root_name != "_EDMFileRoot":
                 continue

@@ -1,32 +1,11 @@
 """Compatibility imports for the focused implementation modules."""
 
-from .node_helpers import (
-    _is_narrow_safe_identity_helper_name as _is_narrow_safe_identity_helper_name,
-)
-from .node_helpers import _idprop_sequence_value as _idprop_sequence_value
-from .node_helpers import _idprop_diag_value as _idprop_diag_value
-from .node_helpers import _control_wrapper_prefix as _control_wrapper_prefix
-from .node_helpers import (
-    _preferred_control_wrapper_name as _preferred_control_wrapper_name,
-)
-from .node_helpers import _skin_bbox_local_matrix as _skin_bbox_local_matrix
-from .node_helpers import (
-    _wrap_skin_object_with_skin_box as _wrap_skin_object_with_skin_box,
-)
-from .node_create import _create_node_object as _create_node_object
-from .node_parent import _parent_node_object as _parent_node_object
-from .node_properties import _stamp_node_properties as _stamp_node_properties
-from .node_position import _apply_render_positioning as _apply_render_positioning
-from .node_animation import _hookup_node_animations as _hookup_node_animations
-from .node_process import _dump_node_diagnostics as _dump_node_diagnostics
-from .node_process import process_node as process_node
-from .node_process import _process_lod_post_children as _process_lod_post_children
-from .node_process import _apply_shadeless as _apply_shadeless
+import json as json
+import math as math
 
 # Public names formerly imported by this module remain available.
 import bpy as bpy
-import json as json
-import math as math
+
 from ...edm_format.mathtypes import Matrix as Matrix
 from ...edm_format.mathtypes import Quaternion as Quaternion
 from ...edm_format.mathtypes import Vector as Vector
@@ -62,3 +41,25 @@ from ..node_transform import apply_node_transform as apply_node_transform
 from ..object_create import create_connector as create_connector
 from ..object_create import create_object as create_object
 from ..object_create import create_segments as create_segments
+from .node_animation import _hookup_node_animations as _hookup_node_animations
+from .node_create import _create_node_object as _create_node_object
+from .node_helpers import _control_wrapper_prefix as _control_wrapper_prefix
+from .node_helpers import _idprop_diag_value as _idprop_diag_value
+from .node_helpers import _idprop_sequence_value as _idprop_sequence_value
+from .node_helpers import (
+    _is_narrow_safe_identity_helper_name as _is_narrow_safe_identity_helper_name,
+)
+from .node_helpers import (
+    _preferred_control_wrapper_name as _preferred_control_wrapper_name,
+)
+from .node_helpers import _skin_bbox_local_matrix as _skin_bbox_local_matrix
+from .node_helpers import (
+    _wrap_skin_object_with_skin_box as _wrap_skin_object_with_skin_box,
+)
+from .node_parent import _parent_node_object as _parent_node_object
+from .node_position import _apply_render_positioning as _apply_render_positioning
+from .node_process import _apply_shadeless as _apply_shadeless
+from .node_process import _dump_node_diagnostics as _dump_node_diagnostics
+from .node_process import _process_lod_post_children as _process_lod_post_children
+from .node_process import process_node as process_node
+from .node_properties import _stamp_node_properties as _stamp_node_properties

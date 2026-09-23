@@ -1,19 +1,18 @@
-import bpy
-from bpy_extras.io_utils import ImportHelper
-from bpy.types import Operator
-from bpy.props import (
-    StringProperty,
-    BoolProperty,
-    IntProperty,
-    EnumProperty,
-)
-import os
-
 import logging
 
-logger = logging.getLogger(__name__)
+import bpy
+from bpy.props import (
+    BoolProperty,
+    EnumProperty,
+    IntProperty,
+    StringProperty,
+)
+from bpy.types import Operator
+from bpy_extras.io_utils import ImportHelper
 
 from .reader import read_file
+
+logger = logging.getLogger(__name__)
 
 
 class ImportEDM(Operator, ImportHelper):
@@ -33,7 +32,9 @@ class ImportEDM(Operator, ImportHelper):
     )
     import_bounding_box: BoolProperty(
         name="Import Bounding Box",
-        description="Preserve the EDM bounding box (required to export models with bones)",
+        description=(
+            "Preserve the EDM bounding box (required to export models with bones)"
+        ),
         default=True,
     )
     import_user_box: BoolProperty(
@@ -48,17 +49,17 @@ class ImportEDM(Operator, ImportHelper):
     )
     assign_collections: BoolProperty(
         name="Assign Collections",
-        description="Sort imported objects into collections (including per-LOD collections)",
+        description="Sort imported objects into collections, including per-LOD.",
         default=True,
     )
     debug_transforms: BoolProperty(
         name="Debug Transforms",
-        description="Print EDM-local vs Blender local/world transform details during import",
+        description="Print EDM-local and Blender local/world transforms during import",
         default=False,
     )
     debug_transform_filter: StringProperty(
         name="Debug Filter",
-        description="Only print transform debug entries containing this text (name/path)",
+        description="Only print transform entries containing this name or path",
         default="",
     )
     debug_transform_limit: IntProperty(
@@ -70,22 +71,22 @@ class ImportEDM(Operator, ImportHelper):
     )
     debug_render_splits: BoolProperty(
         name="Debug Render Splits",
-        description="Print detailed v10 RenderNode split/layout diagnostics during import",
+        description="Print detailed v10 RenderNode split and layout diagnostics",
         default=False,
     )
     mesh_origin_mode: EnumProperty(
         name="Mesh Origins",
-        description="How to place origins for render-only meshes that have no explicit EDM transform node",
+        description="Set origins for render-only meshes without an EDM transform node",
         items=[
             (
                 "APPROX",
                 "Approximate",
-                "Recover a practical origin from mesh bounds (matches current importer behavior)",
+                "Recover a practical origin from mesh bounds (current behavior)",
             ),
             (
                 "RAW",
                 "Raw EDM",
-                "Keep raw EDM-local mesh coordinates and do not recenter render-only mesh origins",
+                "Keep raw EDM-local coordinates; do not recenter render-only meshes",
             ),
         ],
         default="APPROX",

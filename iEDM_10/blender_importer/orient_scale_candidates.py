@@ -49,9 +49,10 @@ def _oriented_scale_rewrite_inputs(
         return None
     animation_data = getattr(obj, "animation_data", None)
     active_action = getattr(animation_data, "action", None)
-    if animation_data is not None and len(
-        list(getattr(animation_data, "nla_tracks", []) or [])
-    ) > 0:
+    if (
+        animation_data is not None
+        and len(list(getattr(animation_data, "nla_tracks", []) or [])) > 0
+    ):
         return None
 
     scale_data = _single_scale_key_set(source_tf)

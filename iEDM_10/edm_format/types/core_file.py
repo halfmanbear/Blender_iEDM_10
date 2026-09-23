@@ -3,7 +3,6 @@ import logging
 from collections import Counter
 
 from ..probe import require_supported_import_format
-
 from .core_nodes import RootNode
 from .core_support import (
     TrackingReader,
@@ -84,7 +83,9 @@ class EDMFile(object):
             print("Warning: EDM file has no transform nodes.")
 
         # Read the node parenting data
-        for node, parent in zip(self.nodes, reader.read_ints(len(self.nodes))):
+        for node, parent in zip(
+            self.nodes, reader.read_ints(len(self.nodes)), strict=False
+        ):
             if parent == -1:
                 node.parent = None
                 continue
@@ -164,7 +165,7 @@ class EDMFile(object):
             if tail_bytes:
                 logger.warning(
                     "Tail parse: %d unexpected bytes at offset %d "
-                    "(not present in standard DCS EDM files — non-standard exporter output?)",
+                    "(not present in standard DCS EDM files; non-standard exporter?)",
                     len(tail_bytes),
                     tail_start,
                 )
@@ -195,7 +196,9 @@ class EDMFile(object):
                         node.set_parent(self.nodes[node.parent])
                     else:
                         print(
-                            f"Warning: Node {node} has invalid parent index {node.parent}"
+                            "Warning: Node {} has invalid parent index {}".format(
+                                node, node.parent
+                            )
                         )
                 else:
                     # Already resolved or unexpected type
@@ -212,7 +215,9 @@ class EDMFile(object):
                         node.material = self.root.materials[node.material]
                     else:
                         print(
-                            f"Warning: Invalid material index {node.material} for node {node}"
+                            "Warning: Invalid material index {} for node {}".format(
+                                node.material, node
+                            )
                         )
                         node.material = None
             if hasattr(node, "bones"):
@@ -260,8 +265,10 @@ class EDMFile(object):
             _index[rn.forTypeName] += 1
             try:
                 _index += rn.audit()
-            except Exception:
-                raise RuntimeError("Trouble reading audit from {}".format(type(rn)))
+            except Exception as exc:
+                raise RuntimeError(
+                    "Trouble reading audit from {}".format(type(rn))
+                ) from exc
 
         return _index
 
@@ -341,7 +348,9 @@ class EDMFile(object):
             writer.write_uint(len(string_data))
             writer.write(string_data)
             print(
-                f"String table: {len(writer.string_table)} unique strings, {len(string_data)} bytes"
+                "String table: {} unique strings, {} bytes".format(
+                    len(writer.string_table), len(string_data)
+                )
             )
 
         # Now write the actual data

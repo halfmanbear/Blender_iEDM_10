@@ -1,16 +1,13 @@
-from ..utils import action_fcurves
-
 # Fragment: graph debug utilities, action helpers, and collection assignment.
 # Graph construction lives in graph_build.py; bbox utilities in bbox_utils.py.
-
 import math
 
 import bpy
 from mathutils import Matrix, Quaternion, Vector
 
 from ..edm_format.types import AnimatingNode, ArgVisibilityNode, TransformNode
+from ..utils import action_fcurves
 from .prelude import _import_ctx, _is_connector_transform, _log, _transform_display_name
-
 
 # ---------------------------------------------------------------------------
 # Transform debug utilities
@@ -247,7 +244,7 @@ def _get_action_argument(action):
         return None
     try:
         if hasattr(action, "argument"):
-            arg = int(getattr(action, "argument"))
+            arg = int(action.argument)
             if arg >= 0:
                 return arg
     except Exception as e:
@@ -402,8 +399,8 @@ def _classify_graph_nodes(graph):
                         render_local = render_local @ Matrix.Translation(
                             Vector(n.render.pos[:3])
                         )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _log.debug("Optional operation failed: {}".format(exc), level=2)
                 render_name = str(getattr(n.render, "name", "") or "")
                 obj_category[n.blender] = (
                     "texture_anim"
@@ -524,7 +521,9 @@ def _assign_collections(graph):
         if not getattr(n, "_lod_post_children", False):
             continue
         levels = getattr(getattr(n, "transform", None), "level", [])
-        for i, ((start, end), child) in enumerate(zip(levels, n.children)):
+        for i, ((_start, end), child) in enumerate(
+            zip(levels, n.children, strict=False)
+        ):
             if not getattr(child, "blender", None):
                 continue
             col_name = "LOD_{}_{}".format(i, int(end))
@@ -534,10 +533,10 @@ def _assign_collections(graph):
                 if obj.name in col_vehicle.objects:
                     try:
                         col_vehicle.objects.unlink(obj)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        _log.debug("Optional operation failed: {}".format(exc), level=2)
                 if obj.name not in col_lod.objects:
                     try:
                         col_lod.objects.link(obj)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        _log.debug("Optional operation failed: {}".format(exc), level=2)

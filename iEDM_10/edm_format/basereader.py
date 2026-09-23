@@ -10,12 +10,11 @@ uint-prefixed list of some item, defined by the function passed in
 
 from __future__ import annotations
 
+import logging
 import struct
 from typing import BinaryIO, Callable, Literal, TypeVar
 
 from .mathtypes import Matrix, Quaternion, Vector, sequence_to_matrix
-
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +47,9 @@ class BaseReader(object):
     def __enter__(self) -> "BaseReader":
         return self
 
-    def __exit__(self, exc_type: object, exc_val: object, exc_tb: object) -> Literal[False]:
+    def __exit__(
+        self, exc_type: object, exc_val: object, exc_tb: object
+    ) -> Literal[False]:
         self.close()
         return False
 
@@ -73,9 +74,7 @@ class BaseReader(object):
         filedata = self.stream.read(len(data))
         if not data == filedata:
             raise EDMFormatError(
-                "Expected constant not encountered; {!r} != {!r}".format(
-                    filedata, data
-                )
+                "Expected constant not encountered; {!r} != {!r}".format(filedata, data)
             )
 
     def read(self, length: int) -> bytes:
@@ -156,18 +155,14 @@ class BaseReader(object):
             strings = self.strings or []
             if index >= len(strings):
                 raise EDMFormatError(
-                    "Got index higher than lookup count; {} at {}".format(
-                        index, prepos
-                    )
+                    "Got index higher than lookup count; {} at {}".format(index, prepos)
                 )
             return strings[index]
         else:
             length = self.read_uint()
             if length >= 200:
                 raise EDMFormatError(
-                    "Overly long string length found; {} at {}".format(
-                        length, prepos
-                    )
+                    "Overly long string length found; {} at {}".format(length, prepos)
                 )
             data = self.stream.read(length)
             try:

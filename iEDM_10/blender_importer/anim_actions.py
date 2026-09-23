@@ -1,9 +1,6 @@
-from ..utils import action_fcurves
-
 # Fragment: animation action builders for visibility and ArgAnimation nodes.
-
-
 import bpy
+
 from ..edm_format.mathtypes import (
     Matrix,
     MatrixScale,
@@ -16,6 +13,7 @@ from ..edm_format.types import (
     ArgVisibilityNode,
     TransformNode,
 )
+from ..utils import action_fcurves
 from .animation import (
     _arg_anim_vector_to_blender,
     _finalize_authored_transform_action,
@@ -65,7 +63,9 @@ def create_visibility_actions(visNode):
             key.co = (frame, float(value))
             key.interpolation = "CONSTANT"
 
-        def _add_vis_keys(frame, visible):
+        def _add_vis_keys(
+            frame, visible, curve_visible=curve_visible, curve_hide_vp=curve_hide_vp
+        ):
             vis_val = 1.0 if visible else 0.0
             hide_val = 0.0 if visible else 1.0
             _add_constant_key(curve_visible, frame, vis_val)
@@ -125,10 +125,10 @@ def _frame_values_close(a, b, eps=1e-5):
         return False
     if not av:
         return False
-    if all(abs(x - y) <= eps for x, y in zip(av, bv)):
+    if all(abs(x - y) <= eps for x, y in zip(av, bv, strict=False)):
         return True
     if len(av) == 4:
-        return all(abs(x + y) <= eps for x, y in zip(av, bv))
+        return all(abs(x + y) <= eps for x, y in zip(av, bv, strict=False))
     return False
 
 
@@ -200,7 +200,10 @@ def _has_nonidentity_scale_orientation_keys(keys4):
     for key in list(keys4 or []):
         try:
             quat = _scale_orientation_quaternion(key.value)
-        except Exception:
+        except Exception as exc:
+            _log.debug(
+                "Skipping invalid scale-orientation key: {}".format(exc), level=2
+            )
             continue
         if not _quat_is_identity(quat):
             return True
@@ -212,7 +215,8 @@ def _copy_fcurve_points_local(src_curve, dst_curve):
         try:
             frame = float(kp.co[0])
             value = float(kp.co[1])
-        except Exception:
+        except Exception as exc:
+            _log.debug("Skipping invalid animation keyframe: {}".format(exc), level=2)
             continue
         new_kp = dst_curve.keyframe_points.insert(frame, value, options={"FAST"})
         try:
@@ -220,8 +224,10 @@ def _copy_fcurve_points_local(src_curve, dst_curve):
             new_kp.handle_left_type = kp.handle_left_type
             new_kp.handle_right_type = kp.handle_right_type
             new_kp.easing = kp.easing
-        except Exception:
-            pass
+        except Exception as exc:
+            _log.debug(
+                "Could not copy animation keyframe metadata: {}".format(exc), level=2
+            )
 
 
 def _clone_action_filtered(
@@ -249,8 +255,8 @@ def _clone_action_filtered(
     if copied == 0:
         try:
             bpy.data.actions.remove(cloned)
-        except Exception:
-            pass
+        except Exception as exc:
+            _log.debug("Could not remove empty cloned action: {}".format(exc), level=2)
         return None
     return cloned
 
@@ -263,7 +269,9 @@ def _create_scale_orientation_rotation_action(
     action = bpy.data.actions.new(name)
     curves = []
     for idx in range(4):
-        curves.append(action_fcurves(action).new(data_path="rotation_quaternion", index=idx))
+        curves.append(
+            action_fcurves(action).new(data_path="rotation_quaternion", index=idx)
+        )
     frame_mapper = frame_mapper or _anim_frame_to_scene_frame
     previous_quat = None
     for framedata in keys4:
@@ -274,15 +282,15 @@ def _create_scale_orientation_rotation_action(
             quat = -quat
         previous_quat = quat.copy()
         frame = frame_mapper(framedata.frame)
-        for curve, component in zip(curves, quat):
+        for curve, component in zip(curves, quat, strict=False):
             curve.keyframe_points.add(1)
             curve.keyframe_points[-1].co = (frame, float(component))
             curve.keyframe_points[-1].interpolation = "LINEAR"
     for curve in curves:
         try:
             curve.update()
-        except Exception:
-            pass
+        except Exception as exc:
+            _log.debug("Could not update animation curve: {}".format(exc), level=2)
     return action
 
 
@@ -323,8 +331,8 @@ def _build_arganimation_action(
     if rotation_basis_local is not None:
         try:
             _rot_loc, static_rot, _rot_scale = rotation_basis_local.decompose()
-        except Exception:
-            pass
+        except Exception as exc:
+            _log.debug("Could not decompose rotation basis: {}".format(exc), level=2)
     leftRot = static_rot
     rightRot = Quaternion((1, 0, 0, 0))
     if rotation_basis_local is None and basis_local.to_3x3().determinant() < 0:
@@ -337,7 +345,14 @@ def _build_arganimation_action(
             authored = static_rot @ flip_quat.inverted()
             rebuilt = authored.to_matrix() @ Matrix.Diagonal(base_scale)
             target = basis_local.to_3x3()
-            if max(abs(rebuilt[r][c] - target[r][c]) for r in range(3) for c in range(3)) < 1e-4:
+            if (
+                max(
+                    abs(rebuilt[r][c] - target[r][c])
+                    for r in range(3)
+                    for c in range(3)
+                )
+                < 1e-4
+            ):
                 leftRot = authored
                 rightRot = flip_quat
     leftPos = (
@@ -350,7 +365,9 @@ def _build_arganimation_action(
     base_scale_vec = Vector(
         (node.base.scale[0], node.base.scale[1], node.base.scale[2])
     )
-    key_quat_to_blender = lambda q: _anim_quaternion_to_blender(q)
+
+    def key_quat_to_blender(q):
+        return _anim_quaternion_to_blender(q)
 
     for pos in posData:
         add_position_fcurves(
@@ -457,8 +474,8 @@ def create_arganimation_actions(node):
         if hasattr(node.base.quat_2, "to_matrix")
         else Quaternion(node.base.quat_2)
     )
-    aabS = _compose_oriented_scale_matrix(base_scale_vec, q2_raw)
-    aabT = Matrix.Translation(_arg_anim_vector_to_blender(node, node.base.position))
+    _compose_oriented_scale_matrix(base_scale_vec, q2_raw)
+    Matrix.Translation(_arg_anim_vector_to_blender(node, node.base.position))
 
     _bone_ctx = _import_ctx.bone_import_ctx or {}
     _is_armature_bone_source = node in (
@@ -537,13 +554,15 @@ def _clear_object_animation_tracks(ob):
         return
     try:
         ad.action = None
-    except Exception:
-        pass
+    except Exception as exc:
+        _log.debug(
+            "Could not clear action from animation data: {}".format(exc), level=2
+        )
     try:
         while ad.nla_tracks:
             ad.nla_tracks.remove(ad.nla_tracks[0])
-    except Exception:
-        pass
+    except Exception as exc:
+        _log.debug("Could not clear NLA tracks: {}".format(exc), level=2)
 
 
 def _action_has_visibility_curve(action):

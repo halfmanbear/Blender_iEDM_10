@@ -1,3 +1,5 @@
+import logging
+
 import bpy
 from mathutils import Vector
 
@@ -20,6 +22,8 @@ from .prelude import (
     _set_official_special_type,
 )
 
+_logger = logging.getLogger(__name__)
+
 
 def _store_textured_light_metadata(obj, node, surrogate_kind):
     if obj is None:
@@ -40,7 +44,7 @@ def _store_textured_light_metadata(obj, node, surrogate_kind):
         obj["_iedm_light_texture_mag_filter"] = int(getattr(tex, "mag_filter", 0) or 0)
         obj["_iedm_light_texture_min_filter"] = int(getattr(tex, "min_filter", 0) or 0)
     except Exception:
-        pass
+        _logger.debug("Ignoring optional operation failure", exc_info=True)
 
     uv_transform = getattr(tex, "uv_transform", None)
     if uv_transform is not None:
@@ -49,7 +53,7 @@ def _store_textured_light_metadata(obj, node, surrogate_kind):
                 float(v) for row in uv_transform for v in row
             ]
         except Exception:
-            pass
+            _logger.debug("Ignoring optional operation failure", exc_info=True)
 
 
 def _apply_textured_light_material(material, node):
@@ -70,7 +74,7 @@ def _apply_textured_light_material(material, node):
             material.node_tree.links, tex_node, group_node, "Emissive"
         )
     except Exception:
-        pass
+        _logger.debug("Ignoring optional operation failure", exc_info=True)
 
 
 def _create_textured_light_surrogate(node):
@@ -105,7 +109,7 @@ def _create_textured_light_surrogate(node):
             preview_ad = preview_light.animation_data
             preview_action = preview_ad.action if preview_ad else None
             bpy.data.lights.remove(preview_light)
-            # The preview light's animation has no remaining user once the light is gone.
+            # The preview light's animation has no user once the light is gone.
             if preview_action is not None and preview_action.users == 0:
                 bpy.data.actions.remove(preview_action)
         bpy.context.collection.objects.link(obj)

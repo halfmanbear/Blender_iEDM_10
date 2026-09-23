@@ -17,11 +17,9 @@ from ..edm_format.types import (
     AnimatingNode,
     ArgAnimatedBone,
     Bone,
-    LodNode,
     Node,
     RenderNode,
     SegmentsNode,
-    ShellNode,
     SkinNode,
     TransformNode,
 )
@@ -234,7 +232,10 @@ def derive_import_capabilities(edm):
 
     if pure_collision_payload:
         name = "DERIVED_PURE_COLLISION_PAYLOAD"
-        description = "Pure collision-only shell/segment graph with geometry-space basis conversion."
+        description = (
+            "Pure collision-only shell/segment graph with geometry-space "
+            "basis conversion."
+        )
     elif features.has_shell_nodes or features.has_segments_nodes:
         name = "DERIVED_EMBEDDED_COLLISION"
         description = (

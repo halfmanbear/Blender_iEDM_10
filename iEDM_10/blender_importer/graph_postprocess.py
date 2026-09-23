@@ -1,7 +1,6 @@
-import bpy
 from mathutils import Matrix
 
-from ..edm_format.types import ArgScaleNode, ArgVisibilityNode
+from ..edm_format.types import ArgScaleNode
 from .prelude import (
     _ROOT_BASIS_FIX,
     _import_ctx,

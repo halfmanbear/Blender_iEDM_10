@@ -4,6 +4,7 @@ from ..utils import action_fcurves
 from .light_materials import _safe_float
 from .prelude import (
     _anim_frame_to_scene_frame,
+    _log,
 )
 
 
@@ -24,8 +25,10 @@ def _apply_fake_light_animation_payload(obj, edm_material):
         base_luminance = 1.0
     try:
         obj.EDMProps.ANIMATED_BRIGHTNESS = 1.0
-    except Exception:
-        pass
+    except Exception as exc:
+        _log.debug(
+            "Could not initialize fake light brightness: {}".format(exc), level=2
+        )
 
     try:
         action_name = "FakeLight_{}".format(obj.name)
@@ -59,7 +62,7 @@ def _has_animated_fake_omni_payload(node):
 
 
 def _apply_animated_fake_omni_brightness(ob, node, light_count, verts_per_light=1):
-    """Reconstruct per-light brightness animation from AnimatedFakeOmniLightsNode payload.
+    """Reconstruct brightness animation from an AnimatedFakeOmniLightsNode.
 
     The binary stores lightCount * 128 float32 brightness values — each light's
     curve presampled at 128 evenly-spaced arg positions. The official exporter
@@ -79,7 +82,8 @@ def _apply_animated_fake_omni_brightness(ob, node, light_count, verts_per_light=
     available = len(anim_data_raw) // 4
     if data_count > available:
         print(
-            "Warning: animated fake light '{}': anim_data_count={} but payload holds {} floats; truncating".format(
+            "Warning: animated fake light '{}': anim_data_count={} but "
+            "payload holds {} floats; truncating".format(
                 getattr(node, "name", ""), data_count, available
             )
         )
@@ -94,7 +98,8 @@ def _apply_animated_fake_omni_brightness(ob, node, light_count, verts_per_light=
     if explicit_rate is not None and explicit_rate > 0:
         if explicit_rate != n_samples:
             print(
-                "Warning: animated fake light '{}': anim_sample_rate={} but data_count/light_count={}; "
+                "Warning: animated fake light '{}': anim_sample_rate={} but "
+                "data_count/light_count={}; "
                 "using explicit rate".format(
                     getattr(node, "name", ""), explicit_rate, n_samples
                 )
@@ -104,7 +109,8 @@ def _apply_animated_fake_omni_brightness(ob, node, light_count, verts_per_light=
         return
     if light_count * n_samples > data_count:
         print(
-            "Warning: animated fake light '{}': {} lights x {} samples exceeds {} floats; skipping brightness animation".format(
+            "Warning: animated fake light '{}': {} lights x {} samples "
+            "exceeds {} floats; skipping brightness animation".format(
                 getattr(node, "name", ""), light_count, n_samples, data_count
             )
         )
@@ -150,16 +156,20 @@ def _apply_animated_fake_omni_brightness(ob, node, light_count, verts_per_light=
     # 128 samples span Blender frames [0, 200]; frame_i = i * 200 / n_samples.
     try:
         ob.EDMProps.ANIMATED_BRIGHTNESS = 1.0
-    except Exception:
-        pass
+    except Exception as exc:
+        _log.debug(
+            "Could not initialize animated light brightness: {}".format(exc), level=2
+        )
 
     action_name = "{}_{}".format(int(arg_handle), ob.name)
     action = bpy.data.actions.new(action_name)
     try:
         if hasattr(action, "argument"):
             action.argument = int(arg_handle)
-    except Exception:
-        pass
+    except Exception as exc:
+        _log.debug(
+            "Could not set animated light action argument: {}".format(exc), level=2
+        )
 
     anim_data = ob.animation_data_create()
     anim_data.action = action
@@ -170,8 +180,10 @@ def _apply_animated_fake_omni_brightness(ob, node, light_count, verts_per_light=
         try:
             ob.EDMProps.ANIMATED_BRIGHTNESS = float(brightness)
             ob.keyframe_insert(data_path="EDMProps.ANIMATED_BRIGHTNESS", frame=frame)
-        except Exception:
-            pass
+        except Exception as exc:
+            _log.debug(
+                "Could not insert animated brightness key: {}".format(exc), level=2
+            )
 
     curve = action_fcurves(action).find("EDMProps.ANIMATED_BRIGHTNESS")
     if curve is not None:
@@ -179,5 +191,8 @@ def _apply_animated_fake_omni_brightness(ob, node, light_count, verts_per_light=
             kp.interpolation = "LINEAR"
         try:
             curve.extrapolation = "CONSTANT"
-        except Exception:
-            pass
+        except Exception as exc:
+            _log.debug(
+                "Could not set brightness curve extrapolation: {}".format(exc),
+                level=2,
+            )

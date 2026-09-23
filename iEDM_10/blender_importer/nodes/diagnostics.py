@@ -1,10 +1,12 @@
 import bpy
+
 from ..graph_build import iterate_all_objects
 from ..prelude import _import_ctx
 
 
 def _collect_diagnostic_counts(edm, graph):
     from collections import Counter
+
     edm_counts = Counter()
     created_counts = Counter()
     skipped_empty = 0

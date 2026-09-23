@@ -1,7 +1,9 @@
 """Source-matrix oracle for every static RenderNode mesh in each file.
 
-Blender --background --factory-startup --python tests/regression_source_meshes.py -- paths...
+Blender --background --factory-startup --python \
+    tests/regression_source_meshes.py -- paths...
 """
+
 import contextlib
 import io
 import sys
@@ -26,14 +28,16 @@ def sample(keys, t):
         return keys[0].value.copy()
     if t >= keys[-1].frame:
         return keys[-1].value.copy()
-    for a, b in zip(keys, keys[1:]):
+    for a, b in zip(keys, keys[1:], strict=False):
         if a.frame <= t <= b.frame:
             u = (t - a.frame) / (b.frame - a.frame)
             va, vb = a.value, b.value
             if isinstance(va, Quaternion):
                 if va.dot(vb) < 0:
                     vb = -vb
-                return Quaternion(tuple(x * (1 - u) + y * u for x, y in zip(va, vb))).normalized()
+                return Quaternion(
+                    tuple(x * (1 - u) + y * u for x, y in zip(va, vb, strict=False))
+                ).normalized()
             return va.lerp(vb, u)
     raise AssertionError(t)
 
@@ -121,7 +125,10 @@ def check(path):
     for frame in FRAMES:
         bpy.context.scene.frame_set(frame)
         bpy.context.view_layer.update()
-        args = lambda arg: frame / 100 - 1
+
+        def args(arg, frame=frame):
+            return frame / 100 - 1
+
         cache = {}
         for render, obj, indices in targets:
             step = max(1, len(indices) // SAMPLES_PER_MESH)
@@ -134,14 +141,26 @@ def check(path):
             if error > TOLERANCE and error > worst.get(obj.name, (0.0,))[0]:
                 worst[obj.name] = (error, frame)
 
-    errors = sorted(((round(e, 4), f, name) for name, (e, f) in worst.items()), reverse=True)
-    print("RESULT", path.name, "meshes", len(targets), "skipped", skipped, "errors", errors, flush=True)
+    errors = sorted(
+        ((round(e, 4), f, name) for name, (e, f) in worst.items()), reverse=True
+    )
+    print(
+        "RESULT",
+        path.name,
+        "meshes",
+        len(targets),
+        "skipped",
+        skipped,
+        "errors",
+        errors,
+        flush=True,
+    )
     return errors
 
 
 iEDM_10.register()
 failures = {}
-for arg in sys.argv[sys.argv.index("--") + 1:]:
+for arg in sys.argv[sys.argv.index("--") + 1 :]:
     path = Path(arg).resolve()
     errors = check(path)
     if errors:

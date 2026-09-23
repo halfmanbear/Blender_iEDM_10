@@ -1,12 +1,15 @@
+import logging
+
 # Fragment: late-stage skin parent binding via bind-rest world position.
-
-
 import bpy
+
 from ..edm_format.mathtypes import (
     Matrix,
     Vector,
 )
 from .prelude import _import_ctx
+
+_logger = logging.getLogger(__name__)
 
 
 def _resolve_skin_parent_overrides_by_bind_rest():
@@ -24,7 +27,7 @@ def _resolve_skin_parent_overrides_by_bind_rest():
                 try:
                     return bone_name, mat.to_translation().copy()
                 except Exception:
-                    pass
+                    _logger.debug("Ignoring optional operation failure", exc_info=True)
         raw_loc = mesh_ob.get("_iedm_skin_bind_target_loc")
         if isinstance(raw_loc, (list, tuple)) and len(raw_loc) == 3:
             try:

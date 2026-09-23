@@ -50,9 +50,8 @@ def _apply_render_positioning(node):
         parent_is_real_transform = parent_transform is not None and not isinstance(
             parent_transform, ArgVisibilityNode
         )
-        applied_local_bl = False
         has_parent_obj = bool(node.parent and node.parent.blender)
-        shared_parent_obj = (
+        (
             getattr(shared_parent, "_blender_obj", None)
             if shared_parent is not None
             else None
@@ -128,7 +127,6 @@ def _apply_render_positioning(node):
                         ):
                             matrix_to_apply = _ROOT_BASIS_FIX @ matrix_to_apply
                     node.blender.matrix_basis = matrix_to_apply
-                applied_local_bl = True
             except Exception as e:
                 print(f"Warning in blender_importer/nodes/core.py: {e}")
 

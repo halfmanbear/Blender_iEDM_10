@@ -1,6 +1,7 @@
-from .core import BaseNode, NodeCategory, _V10_CATEGORY_KEYS, logger, reads_type
-from .render_shell import _read_index_data, _read_vertex_data
 import struct
+
+from .core import _V10_CATEGORY_KEYS, BaseNode, NodeCategory, logger, reads_type
+from .render_shell import _read_index_data, _read_vertex_data
 
 
 def _peek_lookup_token(stream):
@@ -130,7 +131,7 @@ class NumberNode(BaseNode):
                 self.read_v10_payload(stream)
                 if not _looks_like_next_number_boundary(stream):
                     raise IOError(
-                        "NumberNode inline payload did not end on a valid next-node boundary"
+                        "NumberNode inline payload did not end at a valid next-node boundary"
                     )
             except Exception as exc:
                 stream.seek(pos)
@@ -153,7 +154,8 @@ class NumberNode(BaseNode):
                     self._post_payload_read = True
                 else:
                     logger.warning(
-                        "Detected inline NumberNode payload starting with '%s' for '%s' "
+                        "Detected inline NumberNode payload starting with '%s' "
+                        "for '%s' "
                         "but could not find the next node boundary.",
                         inline_token,
                         getattr(self, "name", ""),

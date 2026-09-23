@@ -1,6 +1,7 @@
 import copy
 
 import bpy
+
 from .prelude import _ensure_official_material_bridge
 
 

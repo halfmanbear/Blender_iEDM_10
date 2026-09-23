@@ -6,7 +6,6 @@ from ..material_types import Material
 from ..mathtypes import Vector
 from ..propertiesset import PropertiesSet
 from ..typereader import reads_type
-
 from .core_support import (
     NodeCategory,
     _is_root_box_sentinel_pair,
@@ -25,7 +24,7 @@ class GraphNode(object):
     def set_parent(self, parent):
         if self.parent is parent:
             return
-        # If we have a parent, unregister from it (special case: Reassigning an indexed parent value)
+            # Unregister from a parent before reassigning an indexed parent value.
         if self.parent and not isinstance(self.parent, int):
             self.parent.children.remove(self)
         self.parent = parent
@@ -253,7 +252,7 @@ class Bone(TransformNode):
     @classmethod
     def read(cls, reader):
         self = super(Bone, cls).read(reader)
-        # Bone uses the TransformNode preamble, then serializes an additional matrixd for the
+        # Bone uses the TransformNode preamble, then serializes another matrixd for the
         # inverse bind / bone matrix.
         self.bone_matrix = reader.read_matrixd()
         return self

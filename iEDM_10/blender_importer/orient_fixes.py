@@ -140,11 +140,12 @@ def _fix_bonetransform_bone_child_render_world_positions():
         seen_targets.add(target_key)
 
         try:
-            # matrix_basis is in DCS/EDM world space; apply Rz(-90°)@RBF to convert to Blender world.
+            # matrix_basis is in DCS/EDM world space. Apply Rz(-90°)@RBF to convert.
             _basis_copy = target.matrix_basis.copy()
             _basis_loc = _basis_copy.to_translation()
             print(
-                "[iEDM][BTFIX] target={} mesh={} basis_loc=({:.4f},{:.4f},{:.4f}) parent={}".format(
+                "[iEDM][BTFIX] target={} mesh={} basis_loc=({:.4f},{:.4f},{:.4f}) "
+                "parent={}".format(
                     target.name,
                     ob.name,
                     _basis_loc.x,
@@ -161,7 +162,8 @@ def _fix_bonetransform_bone_child_render_world_positions():
             _log.warn("_fix_bonetransform_bone_child_render_world_positions", exc=e)
 
     _log.debug(
-        "_fix_bonetransform_bone_child_render_world_positions: fixed {} skipped_animated {}".format(
+        "_fix_bonetransform_bone_child_render_world_positions: fixed {} "
+        "skipped_animated {}".format(
             fixed,
             skipped_animated,
         ),

@@ -21,7 +21,7 @@ VectorLike = Any
 QuaternionLike = Any
 
 try:
-    from mathutils import Matrix, Vector, Quaternion
+    from mathutils import Matrix, Quaternion, Vector
 except ImportError:
     # We don't have mathutils. Make some very basic replacements.
     class Vector(tuple[Any, ...]):  # type: ignore[no-redef]
@@ -104,5 +104,5 @@ def quaternion_to_blender(q: QuaternionLike) -> QuaternionLike:
 
 
 def vector_to_blender(v: Sequence[float]) -> VectorLike:
-    """EDM v10 position vectors are already in Blender's Z-up axes — no conversion needed."""
+    """EDM v10 position vectors already use Blender's Z-up axes."""
     return Vector(v)

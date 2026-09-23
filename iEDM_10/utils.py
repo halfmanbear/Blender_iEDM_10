@@ -1,4 +1,5 @@
-import contextlib, os
+import contextlib
+import os
 
 
 def action_fcurves(action, id_type="OBJECT"):

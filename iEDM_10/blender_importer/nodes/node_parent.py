@@ -1,7 +1,6 @@
 # Fragment: core node processing — creates Blender objects from the EDM graph.
-
-
 import json
+import logging
 
 from ...edm_format.mathtypes import (
     Matrix,
@@ -15,6 +14,8 @@ from ...edm_format.types import (
 from ..prelude import (
     _ROOT_BASIS_FIX,
 )
+
+_logger = logging.getLogger(__name__)
 
 
 def _parent_node_object(node, ctx):
@@ -92,7 +93,7 @@ def _parent_node_object(node, ctx):
                         else ""
                     )
                 except Exception:
-                    pass
+                    _logger.debug("Ignoring optional operation failure", exc_info=True)
         except Exception as e:
             print(f"Warning in blender_importer/nodes/core.py: {e}")
 

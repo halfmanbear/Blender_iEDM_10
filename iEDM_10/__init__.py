@@ -9,7 +9,7 @@ bl_info = {
 }
 
 try:
-    import bpy
+    import bpy  # noqa: F401 - importing bpy detects Blender's runtime environment
 
     def register():
         from .io_operators import register as importer_register

@@ -9,10 +9,9 @@ EDM2 container as EDM v10 data.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import os
 import struct
-
+from dataclasses import dataclass
 
 EDM_MAGIC = b"EDM"
 
@@ -60,7 +59,10 @@ def identify_model_file(path: str | os.PathLike[str]) -> ModelFormatInfo:
         return ModelFormatInfo(
             family="EDM2",
             version=20,
-            detail="filename ends with '2' (matches UniModelDesc ClassReader20 heuristic)",
+            detail=(
+                "filename ends with '2' (matches the UniModelDesc ClassReader20 "
+                "heuristic)"
+            ),
         )
 
     return ModelFormatInfo(

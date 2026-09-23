@@ -2,14 +2,16 @@
 
 Records transform changes made by orientation postprocessing. An existing
 sentinel mesh detects whether importing an EDM modifies unrelated scene data.
-Pass EDM paths after -- to audit other assets. Use --report to save details, or --save-blend to save a single import.
+Pass EDM paths after -- to audit other assets. Use --report to save details,
+or --save-blend to save a single import.
 """
-import contextlib
+
 import argparse
+import contextlib
 import io
 import json
-from pathlib import Path
 import sys
+from pathlib import Path
 
 import bpy
 
@@ -38,8 +40,12 @@ def main():
     parser.add_argument("paths", nargs="*")
     parser.add_argument("--save-blend")
     parser.add_argument("--report")
-    args = parser.parse_args(sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else [])
-    paths = args.paths or [str(p) for p in sorted((ROOT / "tests" / "assets").glob("*.edm"))]
+    args = parser.parse_args(
+        sys.argv[sys.argv.index("--") + 1 :] if "--" in sys.argv else []
+    )
+    paths = args.paths or [
+        str(p) for p in sorted((ROOT / "tests" / "assets").glob("*.edm"))
+    ]
     if args.save_blend and len(paths) != 1:
         parser.error("--save-blend requires exactly one EDM")
     reports = []
@@ -53,19 +59,30 @@ def main():
         before = snapshot()[sentinel.name]
         changes = {}
 
-        def wrap(name):
+        def wrap(name, changes=changes):
             def run():
                 old = snapshot()
                 originals[name]()
                 new = snapshot()
                 changed = []
                 for key in old.keys() & new.keys():
-                    error = max(abs(a-b) for a, b in zip(old[key]["world"], new[key]["world"]))
+                    error = max(
+                        abs(a - b)
+                        for a, b in zip(
+                            old[key]["world"], new[key]["world"], strict=False
+                        )
+                    )
                     if error > 1e-5 or old[key]["action"] != new[key]["action"]:
-                        changed.append({"object": key, "matrix_delta": error,
-                                        "action_before": old[key]["action"],
-                                        "action_after": new[key]["action"]})
+                        changed.append(
+                            {
+                                "object": key,
+                                "matrix_delta": error,
+                                "action_before": old[key]["action"],
+                                "action_after": new[key]["action"],
+                            }
+                        )
                 changes[name] = changed
+
             return run
 
         for name in passes:
@@ -73,18 +90,32 @@ def main():
         log = io.StringIO()
         try:
             with contextlib.redirect_stdout(log):
-                reader.read_file(str(Path(path).resolve()), options={
-                    "mesh_origin_mode": "RAW", "preserve_scene_boxes": False,
-                })
+                reader.read_file(
+                    str(Path(path).resolve()),
+                    options={
+                        "mesh_origin_mode": "RAW",
+                        "preserve_scene_boxes": False,
+                    },
+                )
             after = snapshot()[sentinel.name]
             assert before == after, "Import modified the existing scene mesh"
-            report = {"file": Path(path).name,
-                "existing_mesh_changed": before != after, "passes": changes}
+            report = {
+                "file": Path(path).name,
+                "existing_mesh_changed": before != after,
+                "passes": changes,
+            }
             reports.append(report)
-            print("AUDIT " + json.dumps({**report, "passes": {k: len(v) for k, v in changes.items()}}))
+            print(
+                "AUDIT "
+                + json.dumps(
+                    {**report, "passes": {k: len(v) for k, v in changes.items()}}
+                )
+            )
             if args.save_blend:
                 bpy.data.objects.remove(sentinel, do_unlink=True)
-                bpy.ops.wm.save_as_mainfile(filepath=str(Path(args.save_blend).resolve()))
+                bpy.ops.wm.save_as_mainfile(
+                    filepath=str(Path(args.save_blend).resolve())
+                )
         except Exception:
             print(log.getvalue()[-4000:])
             raise

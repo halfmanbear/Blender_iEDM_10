@@ -1,18 +1,16 @@
-from ..utils import action_fcurves
-
-from .materials_bridge import _attach_official_material_bridge
-
-
 import fnmatch
 import glob
 import json
+import logging
 import os
 import re
 
 import bpy
+
+from ..utils import action_fcurves
 from .material_creation import _create_material_node_tree
 from .material_creation import _create_material_textures as _build_material_textures
-
+from .materials_bridge import _attach_official_material_bridge
 
 # Mapping from EDM animated-uniform names to EDMProps field names.
 _ANIMATED_UNIFORM_TO_EDMPROPS = {
@@ -27,6 +25,9 @@ _ANIMATED_UNIFORM_TO_EDMPROPS = {
     "lightMapShift": "AO_ARG",
     "opacityValue": "OPACITY_VALUE_ARG",
 }
+
+
+_logger = logging.getLogger(__name__)
 
 
 def _find_texture_file(name):
@@ -54,7 +55,7 @@ def _find_texture_file(name):
     # print("Found {} as: {}".format(name, files))
     if len(files) > 1:
         print(
-            "Warning: Found more than one possible match for texture named {}. Using {}".format(
+            "Warning: Multiple matches for texture '{}'; using {}".format(
                 name, files[0]
             )
         )
@@ -75,12 +76,12 @@ def _ensure_placeholder_texture_image(name):
     try:
         image.generated_color = (1.0, 1.0, 1.0, 1.0)
     except Exception:
-        pass
+        _logger.debug("Ignoring optional operation failure", exc_info=True)
     return image
 
 
 def _wire_uv_transform(nodes, links, tex_def, tex_image):
-    """Insert a TexCoord + Mapping node chain when the texture has a non-identity UV matrix."""
+    """Add a TexCoord and Mapping chain for a non-identity UV matrix."""
     matrix = getattr(tex_def, "matrix", None)
     if matrix is None:
         return
@@ -98,7 +99,8 @@ def _wire_uv_transform(nodes, links, tex_def, tex_image):
         loc, rot, scale = matrix.decompose()
     except Exception as e:
         print(
-            f"Warning: Could not decompose UV matrix for '{getattr(tex_def, 'name', '')}': {e}"
+            "Warning: Could not decompose UV matrix for "
+            f"'{getattr(tex_def, 'name', '')}': {e}"
         )
         return
     x = tex_image.location[0]
@@ -170,7 +172,7 @@ def _set_principled_uniforms(material, links, principled_bsdf, texture_nodes):
                     0.0, min(1.0, float(reflection_blurring))
                 )
             except Exception:
-                pass
+                _logger.debug("Ignoring optional operation failure", exc_info=True)
     else:
         principled_bsdf.inputs["Metallic"].default_value = 0.0
 
@@ -180,9 +182,9 @@ def _set_principled_uniforms(material, links, principled_bsdf, texture_nodes):
         specPower is not None
         and (material.material_name or "").lower() not in _metallic_materials
     ):
-        # This is a guess, might need tweaking. Assuming specPower is in a range of 0-1024 (common for older shaders)
-        # Higher specPower means a smaller, more intense highlight, which means lower roughness.
-        # Clamp before sqrt: specPower above 1024 would otherwise produce a complex number.
+        # This assumes specPower is in the common legacy range of 0-1024.
+        # Higher specPower means a smaller highlight and lower roughness.
+        # Clamp before sqrt: specPower above 1024 would produce a complex number.
         roughness = (
             max(0.0, 1.0 - (specPower / 1024.0)) ** 0.5
         )  # Using sqrt for a more perceptually linear mapping
@@ -198,7 +200,7 @@ def _set_principled_uniforms(material, links, principled_bsdf, texture_nodes):
         principled_bsdf.inputs["Specular IOR Level"].default_value = specFactor
 
     # Emissive from selfIlluminationValue/selfIlluminationColor (self-illum materials).
-    # These are stored as animated_uniforms when the official exporter writes emissive blocks.
+    # The official exporter stores these as animated_uniforms in emissive blocks.
     _self_illum_names = {
         "self_illum_material",
         "transparent_self_illum_material",
@@ -215,23 +217,24 @@ def _set_principled_uniforms(material, links, principled_bsdf, texture_nodes):
                     principled_bsdf.inputs["Emission Color"],
                 )
             except Exception:
-                pass
+                _logger.debug("Ignoring optional operation failure", exc_info=True)
         # selfIlluminationValue drives emission strength.
         siv = material.uniforms.get("selfIlluminationValue", None)
         if siv is None:
-            # Also check animated_uniforms (stored as key list when preserve_animated=False)
+            # Also check animated_uniforms, stored as a key list when animation is
+            # not preserved.
             anim_siv = material.animated_uniforms.get("selfIlluminationValue", None)
             if anim_siv and hasattr(anim_siv, "__iter__"):
                 try:
                     siv = float(next(iter(anim_siv)).value)
                 except Exception:
-                    pass
+                    _logger.debug("Ignoring optional operation failure", exc_info=True)
         try:
             principled_bsdf.inputs["Emission Strength"].default_value = (
                 float(siv) if siv is not None else 1.0
             )
         except Exception:
-            pass
+            _logger.debug("Ignoring optional operation failure", exc_info=True)
 
 
 def _finish_material(material, mat, nodes, principled_bsdf, texture_nodes):
@@ -258,7 +261,7 @@ def _finish_material(material, mat, nodes, principled_bsdf, texture_nodes):
     try:
         mat.use_backface_culling = getattr(material, "culling", 0) == 0
     except Exception:
-        pass
+        _logger.debug("Ignoring optional operation failure", exc_info=True)
 
     # Add official exporter-compatible EDM group node when available.
     official_attached = _attach_official_material_bridge(mat, material, texture_nodes)
@@ -490,7 +493,8 @@ def _create_material_socket_animations(mat, material):
 def _create_material_uv_animations(mat, material, texture_nodes):
     """Label Mapping nodes with arg numbers and animate their Location inputs.
 
-    The exporter finds UV-scroll animation by reading extract_arg_number(mapping_node.label)
+    The exporter finds UV-scroll animation in
+    ``extract_arg_number(mapping_node.label)``.
     and checking bpy_material.node_tree.animation_data on the Location input path.
     Without the label and keyframes, UV scroll is exported as a static offset.
     """
@@ -601,7 +605,7 @@ def _material_texture_payload(material):
             try:
                 entry["matrix"] = [[float(v) for v in row] for row in matrix]
             except Exception:
-                pass
+                _logger.debug("Ignoring optional operation failure", exc_info=True)
         payload.append(entry)
     return payload
 

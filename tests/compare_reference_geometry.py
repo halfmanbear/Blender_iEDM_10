@@ -3,11 +3,12 @@
 Run in background Blender with -- EDM_PATH.
 Reports symmetric nearest-vertex distances in world space at argument zero.
 """
+
 import contextlib
 import io
 import json
-from pathlib import Path
 import sys
+from pathlib import Path
 
 import bpy
 from mathutils.kdtree import KDTree
@@ -23,7 +24,7 @@ def geometry():
     depsgraph = bpy.context.evaluated_depsgraph_get()
     result = {}
     for ob in bpy.context.scene.objects:
-        if ob.type != 'MESH':
+        if ob.type != "MESH":
             continue
         evaluated = ob.evaluated_get(depsgraph)
         mesh = evaluated.to_mesh()
@@ -43,15 +44,18 @@ def distance(left, right):
 
 
 def main():
-    args = sys.argv[sys.argv.index('--')+1:]
+    args = sys.argv[sys.argv.index("--") + 1 :]
     path = Path(args[0]).resolve()
     iEDM_10.register()
     with contextlib.redirect_stdout(io.StringIO()):
-        bpy.ops.wm.open_mainfile(filepath=str(path.with_suffix('.blend')))
+        bpy.ops.wm.open_mainfile(filepath=str(path.with_suffix(".blend")))
         bpy.context.scene.frame_set(100)
         reference = geometry()
         bpy.ops.wm.read_factory_settings(use_empty=True)
-        reader.read_file(str(path), options={'mesh_origin_mode': 'RAW', 'preserve_scene_boxes': False})
+        reader.read_file(
+            str(path),
+            options={"mesh_origin_mode": "RAW", "preserve_scene_boxes": False},
+        )
         imported = geometry()
     matched = reference.keys() & imported.keys()
     assert matched, "No matching reference meshes"
@@ -60,11 +64,11 @@ def main():
         left, right = reference[name], imported[name]
         if left and right:
             error = max(distance(left, right), distance(right, left))
-            print('REFERENCE ' + json.dumps({'object': name, 'error': error}))
+            print("REFERENCE " + json.dumps({"object": name, "error": error}))
             if error > 1e-5:
                 failures.append(name)
-    assert not failures, 'Reference geometry mismatch: ' + ', '.join(failures)
+    assert not failures, "Reference geometry mismatch: " + ", ".join(failures)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

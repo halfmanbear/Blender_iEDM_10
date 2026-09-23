@@ -8,7 +8,6 @@ from inspect import isgenerator
 
 from .utils import get_root_object
 
-
 # Prefixes for render node categories.
 _prefixLookup = {
     "transform": "tf",
@@ -149,7 +148,7 @@ class TranslationGraph(object):
             for child in list(node.children):
                 _walk_node(child)
 
-            # If this was a generator, we need to call again but this must be the last time
+            # For a generator, call again; this must be the last time.
             if isgenerator(ret):
                 try:
                     next(ret)

@@ -1,6 +1,3 @@
-from .prelude import _log
-
-
 import math
 
 import bpy
@@ -9,7 +6,6 @@ from mathutils import Matrix, Vector
 from ..edm_format.types import (
     NumberNode,
     RenderNode,
-    SegmentsNode,
     ShellNode,
     SkinNode,
 )
@@ -19,6 +15,7 @@ from .prelude import (
     _ROOT_BASIS_FIX,
     _import_ctx,
     _import_profile_flag,
+    _log,
     _set_edmprop,
     _set_official_special_type,
 )
@@ -137,7 +134,8 @@ def _preserve_morph_payload(blender_obj, render_node):
             blender_obj["_iedm_morph_payload_storage"] = "text_b64"
     except Exception as e:
         print(
-            f"Warning preserving MorphNode payload on {getattr(blender_obj, 'name', '')}: {e}"
+            "Warning preserving MorphNode payload on "
+            f"{getattr(blender_obj, 'name', '')}: {e}"
         )
 
 
@@ -202,8 +200,10 @@ def _decode_morph_payload_to_shape_keys(blender_obj, render_node, transform):
             if delta_transform is not None:
                 try:
                     delta = delta_transform @ delta
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _log.debug(
+                        "Optional operation failed: {}".format(exc), level=2
+                    )
             max_abs_delta = max(
                 max_abs_delta,
                 abs(float(delta.x)),
@@ -231,8 +231,8 @@ def _decode_morph_payload_to_shape_keys(blender_obj, render_node, transform):
             blender_obj["_iedm_translation_source"] = "MorphNode"
             blender_obj["_iedm_morph_decode_mode"] = "raw_vec3_per_vertex"
             blender_obj["_iedm_morph_shape_key_count"] = int(decoded)
-        except Exception:
-            pass
+        except Exception as exc:
+            _log.debug("Optional operation failed: {}".format(exc), level=2)
     return decoded
 
 
@@ -325,8 +325,8 @@ def _apply_render_edmprops(ob, node, material):
         ob.EDMProps.DAMAGE_ARG = int(dmg)
     try:
         ob.EDMProps.TWO_SIDED = bool(int(getattr(material, "culling", 0)) != 0)
-    except Exception:
-        pass
+    except Exception as exc:
+        _log.debug("Optional operation failed: {}".format(exc), level=2)
 
 
 def _is_supported_mesh_node(node):

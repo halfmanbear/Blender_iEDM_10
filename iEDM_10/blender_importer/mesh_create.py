@@ -1,5 +1,6 @@
 import bmesh
 import bpy
+
 from ..edm_format.mathtypes import (
     Matrix,
     Vector,
@@ -9,9 +10,7 @@ from ..edm_format.mathtypes import (
 def _transform_mesh_vertices(source_vertices, vertex_format, transform):
     if transform is None:
         return source_vertices
-    transform_mat = (
-        Matrix(transform) if not hasattr(transform, "to_4x4") else transform
-    )
+    transform_mat = Matrix(transform) if not hasattr(transform, "to_4x4") else transform
     pos_idx = vertex_format.position_indices
     norm_idx = vertex_format.normal_indices
     normal_mat = transform_mat.to_3x3().inverted_safe().transposed()
@@ -56,7 +55,7 @@ def _mesh_primitive_mode(indices):
         return "lines", indices
     usable = len(indices) - (len(indices) % 3)
     print(
-        "Warning: Non-triangle index count {} encountered; truncating to {} indices".format(
+        "Warning: Non-triangle index count {}; truncating to {} indices".format(
             len(indices), usable
         )
     )
@@ -74,12 +73,10 @@ def _create_mesh(
     """Creates a blender mesh object from vertex, index and format data
 
     Args:
-      transform: Optional 4x4 matrix to transform vertex positions (for Y-up to Z-up conversion)
+    transform: Optional 4x4 matrix for converting vertex positions, e.g. Y-up to Z-up.
     """
 
-    source_vertices, new_indices = _select_mesh_indices(
-        vertexData, indexData, compact
-    )
+    source_vertices, new_indices = _select_mesh_indices(vertexData, indexData, compact)
 
     new_vertices = _transform_mesh_vertices(source_vertices, vertexFormat, transform)
     primitive_mode, new_indices = _mesh_primitive_mode(new_indices)
@@ -103,7 +100,7 @@ def _create_mesh(
                 uvIndexSets.append(list(range(uv_offset, uv_offset + 2)))
             uv_offset += max(0, count)
 
-    for i, vtx in enumerate(new_vertices):
+    for _i, vtx in enumerate(new_vertices):
         pos = Vector(vtx[x] for x in posIndex)
         vert = bm.verts.new(pos)
         if normIndex and vertex_normals is not None:
@@ -137,9 +134,11 @@ def _create_mesh(
                 f = bm.faces.new([bm.verts[i] for i in face])
                 # Add UV data if we have any
                 if uvIndexSets:
-                    for loop, v_idx in zip(f.loops, face):
+                    for loop, v_idx in zip(f.loops, face, strict=False):
                         vtx = new_vertices[v_idx]
-                        for uv_layer, uv_idx in zip(uv_layers, uvIndexSets):
+                        for uv_layer, uv_idx in zip(
+                            uv_layers, uvIndexSets, strict=False
+                        ):
                             if len(uv_idx) < 2:
                                 continue
                             if uv_idx[1] >= len(vtx):
@@ -163,7 +162,7 @@ def _create_mesh(
 
     if skipped_degenerate or skipped_duplicate:
         print(
-            "Info: Skipped {} degenerate and {} duplicate {} while building mesh".format(
+            "Info: Skipped {} degenerate and {} duplicate {} building mesh".format(
                 skipped_degenerate,
                 skipped_duplicate,
                 "faces" if primitive_mode == "triangles" else "edges",

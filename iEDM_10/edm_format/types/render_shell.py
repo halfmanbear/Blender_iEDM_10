@@ -1,17 +1,17 @@
-from collections import Counter
 import itertools
+from collections import Counter
 
-from ..basereader import EDMFormatError, MAX_REASONABLE_COUNT
+from ..basereader import MAX_REASONABLE_COUNT, EDMFormatError
+from ..material_types import VertexFormat
 from .core import (
+    _V10_CATEGORY_KEYS,
     BaseNode,
     NodeCategory,
     _read_with_layout_fallback,
     _scan_to_next_v10_type_token,
-    _V10_CATEGORY_KEYS,
     logger,
     reads_type,
 )
-from ..material_types import VertexFormat
 
 
 def _tag_shell_family_node(node, source_type):
@@ -293,7 +293,8 @@ class RenderNode(BaseNode):
 
         if self.parentData is None:
             raise RuntimeError(
-                "Attempting to split renderNode without parent data - has it already been split?"
+                "Attempting to split RenderNode without parent data; "
+                "it may already be split"
             )
         assert len(self.parentData) >= 1, (
             "Should never have a RenderNode without parent data"
@@ -365,7 +366,8 @@ class RenderNode(BaseNode):
                         mixed_owner_tris += 1
                         tri_indices.extend(tri)
                 # if mixed_owner_tris:
-                #   print(f"Info: {self.name} owner {owner_idx} absorbed {mixed_owner_tris} mixed-owner triangles")
+                #   print(f"Info: {self.name} owner {owner_idx} absorbed "
+                #         f"{mixed_owner_tris} mixed-owner triangles")
                 node.indexData = tri_indices
                 children.append(node)
             return children
@@ -374,7 +376,8 @@ class RenderNode(BaseNode):
         # all parent attachments by reusing the full geometry on each child.
         if parent_layout["mode"] == "duplicate_geometry":
             print(
-                f"Info: V10 zero-coverage attachment split for {self.name}; duplicating geometry across {len(self.parentData)} parents"
+                "Info: V10 zero-coverage split for {}; duplicating geometry "
+                "across {} parents".format(self.name, len(self.parentData))
             )
             children = []
             for i, (parent, _val1, val2) in enumerate(self.parentData):

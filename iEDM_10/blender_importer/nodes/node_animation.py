@@ -1,5 +1,6 @@
-# Fragment: core node processing — creates Blender objects from the EDM graph.
+import logging
 
+# Fragment: core node processing — creates Blender objects from the EDM graph.
 from ...edm_format.mathtypes import (
     Matrix,
     Vector,
@@ -21,6 +22,8 @@ from ..prelude import (
 from .armature import (
     _merge_visibility_action_into_transform_action,
 )
+
+_logger = logging.getLogger(__name__)
 
 
 def _hookup_node_animations(node, ctx, vis_actions, used_shared_parent):
@@ -100,7 +103,7 @@ def _hookup_node_animations(node, ctx, vis_actions, used_shared_parent):
                 try:
                     _tf_to_apply._blender_obj = node.blender
                 except Exception:
-                    pass
+                    _logger.debug("Ignoring optional operation failure", exc_info=True)
         else:
             apply_node_transform(
                 node, node.blender, used_shared_parent=used_shared_parent

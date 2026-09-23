@@ -51,9 +51,10 @@ def _collapse_redundant_helper_empty(
     """Mark a static identity helper as a passthrough when it can be collapsed."""
     if renderless_mode or helper_obj is None or semantic_obj is None:
         return False
-    if getattr(helper_obj, "type", None) != "EMPTY" or getattr(
-        semantic_obj, "type", None
-    ) != "EMPTY":
+    if (
+        getattr(helper_obj, "type", None) != "EMPTY"
+        or getattr(semantic_obj, "type", None) != "EMPTY"
+    ):
         return False
     if _has_object_animation(helper_obj):
         return False
@@ -108,7 +109,8 @@ def _compact_visibility_identity_intermediate(node):
             getattr(getattr(helper_obj, "parent", None), "name", None),
         )
     )
-    # Graph chain from helper transform node (either current renderless node, or parent of render node).
+    # Graph chain starts at the helper transform (current renderless node or
+    # parent of the render node).
     helper_graph = node if _renderless_helper_mode else getattr(node, "parent", None)
     if helper_graph is None:
         _trace("skip helper_graph missing")

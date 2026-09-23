@@ -165,7 +165,8 @@ def _stamp_render_metadata(node):
                 hit_args = [arg for arg in vis_chain if arg in tracked_args]
                 if hit_args:
                     _debug_log_event(
-                        "[iEDM][VISOBJ] obj={!r} render_cls={} render_name={!r} vis_chain={} parent={!r}".format(
+                        "[iEDM][VISOBJ] obj={!r} render_cls={} render_name={!r} "
+                        "vis_chain={} parent={!r}".format(
                             getattr(node.blender, "name", None),
                             type(node.render).__name__,
                             getattr(node.render, "name", "") or "",

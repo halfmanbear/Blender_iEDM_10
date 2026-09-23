@@ -4,21 +4,12 @@ reader
 Contains the central EDM->Blender conversion code
 """
 
-import bpy
-import bmesh
+import json
+import re
+import threading
 
-from ..utils import chdir, print_edm_graph
-from ..edm_format import EDMFile
 from ..edm_format.mathtypes import *
 from ..edm_format.types import *
-
-from ..translation import TranslationGraph, TranslationNode
-
-import re
-import os
-import itertools
-import math
-import json
 from .import_capabilities import DEFAULT_CAPABILITIES
 
 
@@ -60,9 +51,6 @@ def _default_visibility_debug_state():
         "event_limit": 200,
         "events": 0,
     }
-
-
-import threading
 
 
 class ImportContext(threading.local):
@@ -192,7 +180,7 @@ def _append_debug_log_line(line):
         with open(log_path, "a", encoding="utf-8") as handle:
             handle.write(str(line))
             handle.write("\n")
-    except Exception:
+    except Exception:  # noqa: S110 - logging must not recurse when its own writer fails
         pass
 
 
@@ -217,7 +205,7 @@ def _append_transform_log_line(line):
         with open(log_path, "a", encoding="utf-8") as handle:
             handle.write(str(line))
             handle.write("\n")
-    except Exception:
+    except Exception:  # noqa: S110 - logging must not recurse when its own writer fails
         pass
 
 
@@ -293,7 +281,7 @@ def _node_visibility_chain_args(node):
                 if vis_data:
                     arg = int(vis_data[0][0])
                     args.append(arg)
-            except Exception:
+            except Exception:  # noqa: S110 - logging must not recurse when its own writer fails
                 pass
         curr = getattr(curr, "parent", None)
     return args
@@ -321,7 +309,7 @@ def _anim_frame_to_scene_frame(frame_value):
 
 
 def _is_authored_argvis_control_pair(node):
-    """Return True for an authored ArgVisibility -> Arg* control pair with the same name.
+    """Check for an authored ArgVisibility -> Arg* pair with the same name.
 
     Official exports often encode control empties as:
       ArgVisibilityNode("Dummy604") -> ArgRotationNode("Dummy604")
@@ -375,10 +363,11 @@ def _canonical_control_name(name):
 
 
 def _is_nested_authored_argvis_control_pair(node):
-    """Return True for a same-name ArgVisibility -> Arg* pair under another animated parent.
+    """Check for same-name ArgVisibility -> Arg* under another animated parent.
 
     Example pattern in su-27_lod3.edm:
-      ArgRotationNode("Dummy670") -> ArgVisibilityNode("Dummy598") -> ArgRotationNode("Dummy598")
+    ArgRotationNode("Dummy670") -> ArgVisibilityNode("Dummy598")
+    -> ArgRotationNode("Dummy598")
 
     In these nested pairs, the inner Arg* node's non-zero base.position is the
     static offset of the middle wrapper object, while the deepest child object
@@ -402,7 +391,7 @@ def _is_nested_authored_argvis_control_pair(node):
 
 
 def _is_root_visibility_chain_authored_pair(node):
-    """Return True for same-name ArgVis -> Arg* pairs under only ArgVisibility ancestors.
+    """Check same-name ArgVis -> Arg* pairs under only ArgVisibility ancestors.
 
     These pairs are not the same as the nested animated-parent case above. They
     sit under a pure visibility wrapper chain from the file root, so they still
@@ -433,11 +422,13 @@ def _is_top_level_visibility_authored_pair(node):
     authored control even though one visibility wrapper sits between it and the
     file root:
 
-      Root -> ArgVisibility("Dummy648") -> ArgVisibility("Dummy603") -> ArgRotation("Dummy603")
+    Root -> ArgVisibility("Dummy648") -> ArgVisibility("Dummy603")
+    -> ArgRotation("Dummy603")
 
     Deeper visibility-only chains such as:
 
-      Root -> ArgVisibility("Dummy638") -> ArgVisibility("Dummy637") -> ArgVisibility("Dummy636") -> ArgRotation("Dummy597")
+    Root -> ArgVisibility("Dummy638") -> ArgVisibility("Dummy637")
+    -> ArgVisibility("Dummy636") -> ArgRotation("Dummy597")
 
     must not be treated as top-level controls.
     """
@@ -492,7 +483,7 @@ def _visibility_node_has_direct_anim_child(vis_node):
 
 
 def _nearest_visibility_ancestor_with_direct_anim_child(node):
-    """Return nearest ArgVisibility ancestor whose direct children include Arg* control."""
+    """Return nearest ArgVisibility ancestor with a direct Arg* child."""
     try:
         current = getattr(node, "parent", None)
         while current is not None:
@@ -508,7 +499,7 @@ def _nearest_visibility_ancestor_with_direct_anim_child(node):
 
 
 def _is_static_root_visibility_wrapper(node):
-    """Static ArgVisibility wrapper inside a root visibility family with outer Arg* sibling."""
+    """Find a static ArgVisibility wrapper with an outer Arg* sibling."""
     try:
         if node is None:
             return False
@@ -545,7 +536,7 @@ def _is_child_of_file_root(node):
     parent = getattr(node, "parent", None)
     if parent is None:
         # In raw EDM graph, a top-level node has parent=None.
-        # Exclude the translation graph root itself (which has a generic name or children without a base).
+        # Exclude the graph root, which has a generic name or children without a base.
         if hasattr(node, "transform") and not hasattr(node, "base"):
             return False
         return True
@@ -572,7 +563,7 @@ def _is_child_of_file_root(node):
             if getattr(current_parent, "parent", None) is None:
                 return True  # current_parent is the tree root node
             current = current_parent
-    except Exception:
+    except Exception:  # noqa: S110 - logging must not recurse when its own writer fails
         pass
     return False
 
@@ -594,7 +585,11 @@ def _assign_action(owner, action):
     """Assign an action and bind its slot; Blender 4.4+ can leave it unbound."""
     ad = owner.animation_data or owner.animation_data_create()
     ad.action = action
-    if action is not None and getattr(ad, "action_slot", False) is None and action.slots:
+    if (
+        action is not None
+        and getattr(ad, "action_slot", False) is None
+        and action.slots
+    ):
         ad.action_slot = action.slots[0]
     return ad
 

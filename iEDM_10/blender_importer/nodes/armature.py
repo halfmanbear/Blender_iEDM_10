@@ -1,6 +1,7 @@
-from ...utils import action_fcurves, new_grouped_fcurve
+import struct
 
 import bpy
+
 from ...edm_format.mathtypes import (
     Matrix,
     Quaternion,
@@ -12,6 +13,7 @@ from ...edm_format.types import (
     ArgVisibilityNode,
     Bone,
 )
+from ...utils import action_fcurves, new_grouped_fcurve
 from ..anim_actions import get_actions_for_node
 from ..prelude import (
     _ROOT_BASIS_FIX,
@@ -23,10 +25,6 @@ from ..prelude import (
     _matrix_trs_summary,
     _transform_display_name,
 )
-
-
-import math
-import struct
 
 
 def _channel_slices_from_vertex_format(vertex_format):
@@ -177,7 +175,8 @@ def _localize_skin_mesh_to_bind_target(mesh_obj, bind_target_loc):
 
 def _copy_fcurve_to_action(src_curve, dst_action, dst_path, action_group):
     dst_curve = new_grouped_fcurve(
-        dst_action, data_path=dst_path,
+        dst_action,
+        data_path=dst_path,
         index=src_curve.array_index,
         action_group=action_group,
     )
@@ -209,7 +208,7 @@ def _action_has_fcurve(action, data_path, index=None):
 
 
 def _copy_bone_rotation_curves(src_action, dst_action, bone_name, rest_quat_inv):
-    """Copy rotation_quaternion FCurves, converting from world-space to bone-local-space.
+    """Copy rotation_quaternion curves from world to bone-local space.
 
     Object-level actions bake leftRot (the bone's world-space rest rotation) into
     every keyframe so that rotation_quaternion=leftRot at the rest frame. Pose bone
@@ -225,12 +224,16 @@ def _copy_bone_rotation_curves(src_action, dst_action, bone_name, rest_quat_inv)
     if not src_curves:
         return
     dst_path = 'pose.bones["{}"].rotation_quaternion'.format(bone_name)
-    if any(action_fcurves(dst_action).find(dst_path, index=i) is not None for i in range(4)):
+    if any(
+        action_fcurves(dst_action).find(dst_path, index=i) is not None for i in range(4)
+    ):
         return
 
     dst_curves = []
     for i in range(4):
-        dc = new_grouped_fcurve(dst_action, data_path=dst_path, index=i, action_group=bone_name)
+        dc = new_grouped_fcurve(
+            dst_action, data_path=dst_path, index=i, action_group=bone_name
+        )
         if i in src_curves:
             dc.extrapolation = src_curves[i].extrapolation
         dst_curves.append(dc)
@@ -274,8 +277,8 @@ def _copy_bone_rotation_curves(src_action, dst_action, bone_name, rest_quat_inv)
                     try:
                         new_kp.handle_left_type = src_kp.handle_left_type
                         new_kp.handle_right_type = src_kp.handle_right_type
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        _log.debug("Optional operation failed: {}".format(exc), level=2)
     for dc in dst_curves:
         dc.update()
 
@@ -289,7 +292,9 @@ def _merge_visibility_action_into_transform_action(
     if _action_has_fcurve(transform_action, "VISIBLE"):
         return transform_action
 
-    vis_curves = [fcu for fcu in action_fcurves(vis_action) if fcu.data_path == "VISIBLE"]
+    vis_curves = [
+        fcu for fcu in action_fcurves(vis_action) if fcu.data_path == "VISIBLE"
+    ]
     if not vis_curves:
         return transform_action
 
@@ -306,7 +311,10 @@ def _merge_visibility_action_into_transform_action(
         )
         _copy_fcurve_to_action(src_curve, merged, src_curve.data_path, group_name)
     for src_curve in vis_curves:
-        if action_fcurves(merged).find("VISIBLE", index=src_curve.array_index) is not None:
+        if (
+            action_fcurves(merged).find("VISIBLE", index=src_curve.array_index)
+            is not None
+        ):
             continue
         group_name = (
             src_curve.group.name if getattr(src_curve, "group", None) else "Visibility"
@@ -375,9 +383,9 @@ def _transfer_bone_actions_to_armature(graph, arm_obj, node_to_bone_name):
                         if dst_action is None:
                             dst_action = bpy.data.actions.new(src_action.name)
                             action_map[src_action.name] = dst_action
-                        # rotation_quaternion curves carry leftRot baked in as the rest-frame
-                        # value.  Pose bone rotation_quaternion is relative to the edit-bone
-                        # orientation, so the rest frame must be identity.  Use the dedicated
+                        # rotation_quaternion curves carry leftRot baked into the rest value.
+                        # Pose bone rotation is relative to edit-bone orientation, so
+                        # rest frame must be identity. Use the dedicated
                         # helper to remove the rest rotation from each keyframe.
                         _copy_bone_rotation_curves(
                             src_action, dst_action, bone_name, rest_quat_inv
@@ -388,7 +396,7 @@ def _transfer_bone_actions_to_armature(graph, arm_obj, node_to_bone_name):
                             dst_path = 'pose.bones["{}"].{}'.format(
                                 bone_name, src_curve.data_path
                             )
-                            # Skip if this FCurve already exists (prevents crash on re-import)
+                            # Skip existing FCurves to prevent a crash on re-import.
                             if (
                                 action_fcurves(dst_action).find(
                                     dst_path, index=src_curve.array_index
@@ -557,8 +565,8 @@ def _create_armature_object(bone_nodes, parent_obj):
     # Determine Y-up to Z-up basis correction strategy.
     #
     # scene-root v10 (v10_root_object_basis_fix=True):
-    #   Parent carries _ROOT_BASIS_FIX. Armature cancels parent so arm.world ~= Identity.
-    #   Bone rests placed in Blender Z-up space. (apply_bone_root_fix=True, arm_carries=False)
+    #   Parent carries _ROOT_BASIS_FIX; armature cancels it so arm.world ~= Identity.
+    #   Bone rests use Blender Z-up (apply_bone_root_fix=True, arm_carries=False).
     #
     # BLOB_RENDER (v10_root_object_basis_fix=False):
     #   Parent does NOT carry _ROOT_BASIS_FIX. Armature carries it directly.
@@ -654,14 +662,16 @@ def _build_edit_bones(arm_obj, arm_data, bone_nodes, apply_bone_root_fix):
                 if not bb.is_identity:
                     rest = _bone_rest_matrix_for_node(node, apply_bone_root_fix)
                     print(
-                        "  [bone-bind] {} '{}' -> non-identity bind matrix, rest translation=({:.3f},{:.3f},{:.3f})".format(
+                        "  [bone-bind] {} '{}' -> non-identity bind matrix, "
+                        "rest translation=({:.3f},{:.3f},{:.3f})".format(
                             tf_type, tf_name, rest[0][3], rest[1][3], rest[2][3]
                         )
                     )
             else:
                 _bone_bind_missing += 1
                 print(
-                    "  [bone-bind] {} '{}' -> NO bind matrix (type={}, has_bone_matrix={}, has_inv_base_bone_matrix={})".format(
+                    "  [bone-bind] {} '{}' -> NO bind matrix (type={}, "
+                    "has_bone_matrix={}, has_inv_base_bone_matrix={})".format(
                         tf_type,
                         tf_name,
                         tf_type,
@@ -808,8 +818,8 @@ def _finalize_bone_import_ctx(
             bone_rest_matrix_by_name[bname] = _bone_rest_matrix_for_node(
                 tnode, apply_bone_root_fix
             ).copy()
-        except Exception:
-            pass
+        except Exception as exc:
+            _log.debug("Optional operation failed: {}".format(exc), level=2)
 
     _import_ctx.bone_import_ctx = {
         "armature": arm_obj,
@@ -839,8 +849,8 @@ def _apply_armature_transforms(arm_obj):
     try:
         if arm_obj.matrix_basis == Matrix.Identity(4):
             return
-    except Exception:
-        pass
+    except Exception as exc:
+        _log.debug("Optional operation failed: {}".format(exc), level=2)
     view_layer = bpy.context.view_layer
     prev_active = view_layer.objects.active
     try:
@@ -861,8 +871,8 @@ def _apply_armature_transforms(arm_obj):
     finally:
         try:
             arm_obj.select_set(False)
-        except Exception:
-            pass
+        except Exception as exc:
+            _log.debug("Optional operation failed: {}".format(exc), level=2)
         if prev_active is not None:
             view_layer.objects.active = prev_active
 
@@ -952,8 +962,8 @@ def _bind_skin_object(mesh_obj, skin_node):
                 float(bind_target_loc.y),
                 float(bind_target_loc.z),
             ]
-    except Exception:
-        pass
+    except Exception as exc:
+        _log.debug("Optional operation failed: {}".format(exc), level=2)
 
     def _skin_parent_candidates():
         if not name_bonus:
@@ -1077,8 +1087,9 @@ def _assign_skin_vertex_weights(
         else:
             group_map[skin_bones[0]].add([vi], 1.0, "REPLACE")
 
+
 def _bake_skin_mesh_object_transforms(mesh_obj):
-    """Bake any non-identity matrix_basis into vertex positions so matrix_basis = Identity.
+    """Bake non-identity matrix_basis into vertices so the basis becomes identity.
 
     The exporter requires skinned meshes to have applied transforms. After
     _bind_skin_object vertex positions are in the correct local space but the
@@ -1103,5 +1114,6 @@ def _bake_skin_mesh_object_transforms(mesh_obj):
         mesh_obj.matrix_basis = Matrix.Identity(4)
     except Exception as e:
         print(
-            f"Warning: _bake_skin_mesh_object_transforms failed for '{getattr(mesh_obj, 'name', '?')}': {e}"
+            "Warning: _bake_skin_mesh_object_transforms failed for "
+            f"'{getattr(mesh_obj, 'name', '?')}': {e}"
         )

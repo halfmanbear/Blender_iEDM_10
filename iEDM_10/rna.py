@@ -266,8 +266,9 @@ def _is_fallback_edmprops_bound():
     except Exception:
         return False
 
+    # (type, attribute) pairs added in register(); unregister() removes only these,
 
-# (type, attribute) pairs this addon added in register(); unregister() removes only these,
+
 # so properties another addon (e.g. io_scene_edm) registered first survive.
 _owned_props = []
 

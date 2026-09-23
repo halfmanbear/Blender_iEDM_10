@@ -1,15 +1,3 @@
-from ..utils import action_fcurves
-
-# Session orchestration fragment.
-# Functions here drive the top-level import sequence; the pipeline detail
-# (graph construction, node processing, animations) lives in import_pipeline.py.
-
-from .prelude import (
-    _visibility_scene_keys,
-    _visibility_scene_ranges,
-)
-
-
 import os
 from dataclasses import dataclass, field
 from typing import Mapping
@@ -20,7 +8,7 @@ from ..edm_format import EDMFile
 from ..edm_format.mathtypes import Matrix
 from ..edm_format.types import AnimatingNode, LodNode, TransformNode
 from ..edm_format.types.render_shell import SkinNode
-from ..utils import chdir, print_edm_graph
+from ..utils import action_fcurves, chdir, print_edm_graph
 from .bbox_utils import (
     _cache_root_aabb_payloads_on_scene,
     _create_light_box_from_root,
@@ -56,10 +44,14 @@ from .orient_fixes import (
     _fix_bonetransform_bone_child_render_world_positions,
 )
 from .orient_scale import _rewrite_oriented_scale_controls
+
+# Session orchestration fragment.
+# Functions here drive the top-level import sequence; the pipeline detail
+# (graph construction, node processing, animations) lives in import_pipeline.py.
 from .prelude import (
+    _ROOT_BASIS_FIX,
     DEFAULT_PROFILE,
     FRAME_SCALE,
-    _ROOT_BASIS_FIX,
     _assign_action,
     _import_capability_detail,
     _import_capability_name,
@@ -68,6 +60,8 @@ from .prelude import (
     _import_profile_flag,
     _import_profile_name,
     _log,
+    _visibility_scene_keys,
+    _visibility_scene_ranges,
 )
 from .skin_rewrites import _resolve_skin_parent_overrides_by_bind_rest
 from .vis_rewrites import (
@@ -182,7 +176,6 @@ def _configure_mesh_origin_mode(options, features):
     has_owner_encoded_split_renders = features.has_owner_encoded_split_renders
     has_generic_render_chunks = features.has_generic_render_chunks
     has_shell_nodes = features.has_shell_nodes
-    has_segments_nodes = features.has_segments_nodes
     plain_root_v10 = features.plain_root_v10
     auto_geometry_safe_v10_split = bool(
         plain_root_v10
@@ -203,10 +196,11 @@ def _configure_mesh_origin_mode(options, features):
     ):
         _import_ctx.mesh_origin_mode = "RAW"
         _log.info(
-            "Auto-selected mesh origin mode RAW for v10 split control-node asset (plain root, no bones)."
+            "Auto-selected RAW origin mode for a v10 split control-node "
+            "asset (plain root, no bones)."
         )
     elif (
-        False  # plain-root non-skeletal RAW auto-selection has no capability that enables it
+        False  # no capability enables plain-root non-skeletal RAW mode
         and can_auto_override_mesh_origin
         and _import_ctx.mesh_origin_mode != "RAW"
         and plain_root_v10
@@ -214,7 +208,8 @@ def _configure_mesh_origin_mode(options, features):
     ):
         _import_ctx.mesh_origin_mode = "RAW"
         _log.info(
-            "Auto-selected mesh origin mode RAW for v10 plain-root non-skeletal asset (preserve authored transforms)."
+            "Auto-selected RAW origin mode for a plain-root v10 asset "
+            "to preserve authored transforms."
         )
 
 
@@ -388,7 +383,7 @@ def _create_graph_root_object(graph, options, features):
                 # The compound (M1@M2) collapses via inv(compound), leaving RBF as the
                 # effective world transform.  For Bonetransform-prefix EDMs the raw
                 # geometry has its nose along local -Z, which RBF maps to Blender +Y.
-                # An extra Rz(-90°) rotates that +Y → +X to match DCS/Blender convention.
+                # An extra Rz(-90°) rotates +Y to +X for the DCS/Blender convention.
                 # Rz(-90°) = [[0,1,0,0],[-1,0,0,0],[0,0,1,0],[0,0,0,1]]
                 _MBl = type(_ROOT_BASIS_FIX)
                 _Rz_neg90 = _MBl(
@@ -443,13 +438,11 @@ def _debug_dump_stage_objects(stage_name):
             basis_loc, basis_rot, basis_scale = ob.matrix_basis.decompose()
             world_loc, world_rot, world_scale = ob.matrix_world.decompose()
             action = getattr(getattr(ob, "animation_data", None), "action", None)
-            curves = (
-                [fc.data_path for fc in action_fcurves(action)]
-                if action
-                else []
-            )
+            curves = [fc.data_path for fc in action_fcurves(action)] if action else []
             print(
-                "[iEDM][STAGE] stage={} obj={} type={} parent={} action={} curves={} basis_loc={} basis_rot_deg={} basis_scale={} world_loc={} world_rot_deg={} world_scale={}".format(
+                "[iEDM][STAGE] stage={} obj={} type={} parent={} action={} curves={} "
+                "basis_loc={} basis_rot_deg={} basis_scale={} world_loc={} "
+                "world_rot_deg={} world_scale={}".format(
                     stage_name,
                     ob.name,
                     getattr(ob, "type", ""),
@@ -586,8 +579,10 @@ def _run_skin_transform_postprocess():
             )
             try:
                 obj.select_set(False)
-            except Exception:
-                pass
+            except Exception as exc:
+                _log.debug(
+                    "Optional operation failed: {}".format(exc), level=2
+                )
     if prev_active is not None:
         view_layer.objects.active = prev_active
     if applied:
@@ -644,8 +639,10 @@ def read_file(filename, options=None):
         if _bl is not None:
             try:
                 _bl["_iedm_bt_prefix"] = True
-            except Exception:
-                pass
+            except Exception as exc:
+                _log.debug(
+                    "Optional operation failed: {}".format(exc), level=2
+                )
 
     _run_import_postprocess(edm, graph, options)
 
@@ -658,7 +655,8 @@ def _finalize_skin_bind_space(graph):
     rotated/scaled helpers rotate/scale absolute skeleton vertices a second time.
     Only meshes localized by this import participate.
     """
-    from mathutils import Matrix as BlenderMatrix, Vector
+    from mathutils import Matrix as BlenderMatrix
+    from mathutils import Vector
 
     seen = set()
     for node in graph.nodes:
@@ -688,7 +686,7 @@ def _finalize_skin_bind_space(graph):
 
 
 def _visibility_frame_intervals(vis_data):
-    """Intersect argument controls, union each control's ranges on the preview timeline."""
+    """Intersect controls and union each control's preview-timeline ranges."""
     intervals = [(0, FRAME_SCALE + 1)]
     for _arg, ranges in vis_data:
         control = _visibility_scene_ranges(ranges)

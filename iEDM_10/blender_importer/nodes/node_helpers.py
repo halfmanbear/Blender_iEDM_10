@@ -1,7 +1,6 @@
 # Fragment: core node processing — creates Blender objects from the EDM graph.
-
-
 import json
+import logging
 import math
 
 import bpy
@@ -25,6 +24,8 @@ from ..prelude import (
     _set_official_special_type,
     _strip_anim_prefix,
 )
+
+_logger = logging.getLogger(__name__)
 
 
 def _is_narrow_safe_identity_helper_name(name):
@@ -227,7 +228,7 @@ def _wrap_skin_object_with_skin_box(mesh_obj, skin_node):
                 separators=(",", ":"),
             )
         except Exception:
-            pass
+            _logger.debug("Ignoring optional operation failure", exc_info=True)
 
         target_collections = list(getattr(mesh_obj, "users_collection", []) or [])
         if not target_collections:
@@ -250,7 +251,7 @@ def _wrap_skin_object_with_skin_box(mesh_obj, skin_node):
         try:
             mesh_obj.matrix_world = old_world
         except Exception:
-            pass
+            _logger.debug("Ignoring optional operation failure", exc_info=True)
 
         return skin_box
     except Exception as e:

@@ -1,12 +1,10 @@
-from ..utils import action_fcurves
-
 # Fragment: apply_node_transform — assigns the local matrix to a Blender object.
-
 import math
 
 from mathutils import Matrix, Vector
 
 from ..edm_format.types import AnimatingNode, ArgAnimationNode, Connector, TransformNode
+from ..utils import action_fcurves
 from .animation import _is_pos90_x_basis_matrix, _normalize_euler_xyz
 from .graph_pipeline import (
     _debug_filter_terms,
@@ -29,22 +27,24 @@ def _transform_uses_quaternion_rotation(tfnode, obj=None):
     try:
         if obj is not None and _is_connector_object(obj):
             return False
-    except Exception:
-        pass
+    except Exception as exc:
+        _log.debug("Optional operation failed: {}".format(exc), level=2)
     try:
         action = getattr(getattr(obj, "animation_data", None), "action", None)
         if action is not None:
             if any(fc.data_path == "rotation_euler" for fc in action_fcurves(action)):
                 return False
-            if any(fc.data_path == "rotation_quaternion" for fc in action_fcurves(action)):
+            if any(
+                fc.data_path == "rotation_quaternion" for fc in action_fcurves(action)
+            ):
                 return True
-    except Exception:
-        pass
+    except Exception as exc:
+        _log.debug("Optional operation failed: {}".format(exc), level=2)
     try:
         if isinstance(tfnode, ArgAnimationNode) and getattr(tfnode, "rotData", None):
             return True
-    except Exception:
-        pass
+    except Exception as exc:
+        _log.debug("Optional operation failed: {}".format(exc), level=2)
     return False
 
 
@@ -80,8 +80,7 @@ def _debug_dump_parent_chain(tnode, tfnode, obj, local_mat):
         return
     node_name = getattr(tfnode, "name", "") or type(tfnode).__name__
     if not any(
-        term in node_name.lower() or term in obj.name.lower()
-        for term in filter_terms
+        term in node_name.lower() or term in obj.name.lower() for term in filter_terms
     ):
         return
     dumped = _import_ctx.transform_debug.setdefault("chain_dumped", set())
@@ -124,9 +123,7 @@ def _debug_dump_parent_chain(tnode, tfnode, obj, local_mat):
                 label = "<ROOT>"
             graph_parts.append(label)
             cur = getattr(cur, "parent", None)
-        print(
-            "[iEDM][CHAIN] graph_path={}".format(" / ".join(reversed(graph_parts)))
-        )
+        print("[iEDM][CHAIN] graph_path={}".format(" / ".join(reversed(graph_parts))))
     try:
         loc, rot, scale = local_mat.decompose()
         print(
@@ -136,8 +133,8 @@ def _debug_dump_parent_chain(tnode, tfnode, obj, local_mat):
                 _debug_fmt_vec3(scale),
             )
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        _log.debug("Optional operation failed: {}".format(exc), level=2)
 
     current = obj
     level = 0
@@ -146,7 +143,9 @@ def _debug_dump_parent_chain(tnode, tfnode, obj, local_mat):
             basis_loc, basis_rot, basis_scale = current.matrix_basis.decompose()
             world_loc, world_rot, world_scale = current.matrix_world.decompose()
             print(
-                "[iEDM][CHAIN] level={} obj={} type={} parent={} basis_loc={} basis_rot_deg={} basis_scale={} world_loc={} world_rot_deg={} world_scale={}".format(
+                "[iEDM][CHAIN] level={} obj={} type={} parent={} basis_loc={} "
+                "basis_rot_deg={} basis_scale={} world_loc={} world_rot_deg={} "
+                "world_scale={}".format(
                     level,
                     current.name,
                     getattr(current, "type", ""),
@@ -244,7 +243,7 @@ def _is_plain_root_connector_child(graph_node, blender_obj):
 
 
 def apply_node_transform(node, obj, used_shared_parent=False):
-    """Assigns the transform to a given node. node can be a TranslationNode or raw EDM node."""
+    """Assign a transform to a TranslationNode or raw EDM node."""
     tnode = node if hasattr(node, "transform") else None
     tfnode = tnode.transform if tnode else node
 
@@ -258,12 +257,6 @@ def apply_node_transform(node, obj, used_shared_parent=False):
         else False
     )
     obj.rotation_mode = "QUATERNION" if wants_quaternion_rotation else "XYZ"
-
-
-
-
-
-
 
     # 1. Base Transform from Node.transform
     final_local = (

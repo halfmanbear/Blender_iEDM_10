@@ -2,7 +2,6 @@ import logging
 
 from ..mathtypes import Matrix, Quaternion, Vector
 from ..typereader import reads_type
-
 from .core_nodes import Node
 from .core_support import AnimatingNode, get_type_reader
 
@@ -234,8 +233,9 @@ class ArgScaleNode(ArgAnimationNode):
                 or abs(abs(v[3]) - 1.0) > 1e-4
             ):
                 logger.warning(
-                    "Scale orientation quaternion is non-identity (arg=%d, frame=%g, xyzw=%s). "
-                    "Importer will try helper-chain reconstruction; unsupported paths may still differ.",
+                    "Scale orientation quaternion is non-identity "
+                    "(arg=%d, frame=%g, xyzw=%s). Importer will try helper-chain "
+                    "reconstruction; unsupported paths may differ.",
                     arg,
                     k.frame,
                     tuple(round(float(x), 4) for x in v),

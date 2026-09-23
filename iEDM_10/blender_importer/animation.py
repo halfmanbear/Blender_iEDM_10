@@ -1,19 +1,18 @@
-from ..utils import action_fcurves
-
 import math
+
+from mathutils import Euler
+
 from ..edm_format.mathtypes import (
     Matrix,
     Quaternion,
 )
+from ..utils import action_fcurves
 from .graph_pipeline import (
     _anim_quaternion_to_blender,
     _anim_scale_components,
     _anim_vector_to_blender,
 )
-from .prelude import _anim_frame_to_scene_frame
-
-
-from mathutils import Euler
+from .prelude import _anim_frame_to_scene_frame, _log
 
 
 def _arg_anim_vector_to_blender(node, value):
@@ -72,13 +71,16 @@ def _normalize_euler_action_curves(action, eps=1e-6):
             curves[0].keyframe_points[idx].co[1] = norm.x
             curves[1].keyframe_points[idx].co[1] = norm.y
             curves[2].keyframe_points[idx].co[1] = norm.z
-        except Exception:
+        except Exception as exc:
+            _log.debug("Skipping invalid Euler animation key: {}".format(exc), level=2)
             continue
     for fc in curves:
         try:
             fc.update()
-        except Exception:
-            pass
+        except Exception as exc:
+            _log.debug(
+                "Could not update Euler animation curve: {}".format(exc), level=2
+            )
 
 
 def _finalize_authored_transform_action(action):
@@ -88,8 +90,10 @@ def _finalize_authored_transform_action(action):
     for fc in action_fcurves(action):
         try:
             fc.extrapolation = "CONSTANT"
-        except Exception:
-            pass
+        except Exception as exc:
+            _log.debug(
+                "Could not set constant curve extrapolation: {}".format(exc), level=2
+            )
 
 
 def add_position_fcurves(
@@ -115,7 +119,7 @@ def add_position_fcurves(
         newPosMat = transform_left @ Matrix.Translation(anim_pos) @ transform_right
         newPos = newPosMat.decompose()[0]
 
-        for curve, component in zip(curves, newPos):
+        for curve, component in zip(curves, newPos, strict=False):
             curve.keyframe_points.add(1)
             curve.keyframe_points[-1].co = (frame, component)
             curve.keyframe_points[-1].interpolation = "LINEAR"
@@ -123,8 +127,8 @@ def add_position_fcurves(
     for curve in curves:
         try:
             curve.update()
-        except Exception:
-            pass
+        except Exception as exc:
+            _log.debug("Could not update animation curve: {}".format(exc), level=2)
 
 
 def add_rotation_fcurves(
@@ -167,7 +171,7 @@ def add_rotation_fcurves(
         else:
             components = newRotQuat
 
-        for curve, component in zip(curves, components):
+        for curve, component in zip(curves, components, strict=False):
             curve.keyframe_points.add(1)
             curve.keyframe_points[-1].co = (frame, component)
             curve.keyframe_points[-1].interpolation = "LINEAR"
@@ -175,8 +179,8 @@ def add_rotation_fcurves(
     for curve in curves:
         try:
             curve.update()
-        except Exception:
-            pass
+        except Exception as exc:
+            _log.debug("Optional operation failed: {}".format(exc), level=2)
 
 
 def add_scale_fcurves(action, keys, frame_mapper=None, base_scale=None):
@@ -205,7 +209,7 @@ def add_scale_fcurves(action, keys, frame_mapper=None, base_scale=None):
             for idx, component in enumerate(_anim_scale_components(value))
         )
 
-        for curve, component in zip(curves, comps):
+        for curve, component in zip(curves, comps, strict=False):
             curve.keyframe_points.add(1)
             curve.keyframe_points[-1].co = (frame, component)
             curve.keyframe_points[-1].interpolation = "LINEAR"
@@ -213,8 +217,8 @@ def add_scale_fcurves(action, keys, frame_mapper=None, base_scale=None):
     for curve in curves:
         try:
             curve.update()
-        except Exception:
-            pass
+        except Exception as exc:
+            _log.debug("Optional operation failed: {}".format(exc), level=2)
 
 
 def _is_pos90_x_basis_matrix(mat, eps=1e-3):

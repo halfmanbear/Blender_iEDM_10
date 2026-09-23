@@ -1,3 +1,4 @@
+import logging
 import math
 import os
 
@@ -13,6 +14,8 @@ from .prelude import (
     _ensure_official_material_bridge,
     _import_ctx,
 )
+
+_logger = logging.getLogger(__name__)
 
 
 def _create_fake_light_material(obj_name, kind="fake_omni"):
@@ -232,7 +235,7 @@ def _apply_fake_light_material_payload(material, edm_material, kind):
                     material.node_tree.links, tex_node, group_node, "Emissive"
                 )
             except Exception:
-                pass
+                _logger.debug("Ignoring optional operation failure", exc_info=True)
 
     uniforms = getattr(edm_material, "uniforms", None) or {}
     anim_uniforms = getattr(edm_material, "animated_uniforms", None) or {}
@@ -273,7 +276,7 @@ def _apply_fake_light_material_payload(material, edm_material, kind):
                 _set_material_group_input(group_node, "Inner Angle", theta_deg)
                 _set_material_group_input(group_node, "Outer Angle", phi_deg)
             except Exception:
-                pass
+                _logger.debug("Ignoring optional operation failure", exc_info=True)
         specular = uniforms.get("specularAmount")
         if specular is not None:
             _set_material_group_input(

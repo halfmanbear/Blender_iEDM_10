@@ -1,6 +1,5 @@
 import logging
 import struct
-from abc import ABC
 from collections import Counter, OrderedDict
 from enum import Enum
 
@@ -20,7 +19,7 @@ class NodeCategory(Enum):
     light = "LIGHT_NODES"
 
 
-class AnimatingNode(ABC):
+class AnimatingNode:
     """Abstract base class for all nodes that animate the object"""
 
 
@@ -106,7 +105,7 @@ def _is_root_box_sentinel_pair(
 
 def _same_vec3(a, b, eps=1.0e-6):
     try:
-        return all(abs(float(x) - float(y)) <= eps for x, y in zip(a, b))
+        return all(abs(float(x) - float(y)) <= eps for x, y in zip(a, b, strict=False))
     except Exception:
         return False
 

@@ -3,10 +3,9 @@ from __future__ import annotations
 from collections import Counter, OrderedDict, namedtuple
 from typing import Any, Callable
 
-from .typereader import AnimatedProperty, ArgumentProperty
-
 from .mathtypes import Vector
 from .propertiesset import PropertiesSet, StreamReader
+from .typereader import AnimatedProperty, ArgumentProperty
 
 # Known vertex channels observed in official exporter output and real EDM assets.
 # Keep this map broad enough to avoid dropping recognized payload layouts.
@@ -34,9 +33,7 @@ class VertexFormat(object):
     nnormal: int
     ntexture: int
 
-    def __init__(
-        self, channelData: str | bytes | dict[str, int] | None = None
-    ) -> None:
+    def __init__(self, channelData: str | bytes | dict[str, int] | None = None) -> None:
         """Initialise vertex format. takes a byte array, numeric per-channel string,
         or a dictionary naming each count."""
         if isinstance(channelData, str):
@@ -315,7 +312,7 @@ class Material(object):
                         c["model::Key<key::VEC{}F>".format(vLen)] += len(entry.keys)
                     else:
                         raise IOError(
-                            "Have not encountered writing animated property of type {}/{}".format(
+                            "Cannot write animated property of type {}/{}".format(
                                 entry, type(entry)
                             )
                         )

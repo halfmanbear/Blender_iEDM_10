@@ -1,5 +1,3 @@
-from ..utils import action_fcurves
-
 """Evaluate EDM bone transforms without flattening their animated ancestors.
 
 The helper graph uses ordinary Blender actions and constraints, so saved scenes
@@ -7,9 +5,10 @@ continue to animate without Python handlers or the importer being installed.
 """
 
 import bpy
-from mathutils import Matrix, Quaternion, Vector
+from mathutils import Matrix
 
 from ..edm_format.types import ArgAnimationNode
+from ..utils import action_fcurves
 from .anim_actions import _scale_orientation_quaternion
 from .prelude import _ROOT_BASIS_FIX, _anim_frame_to_scene_frame, _import_ctx
 
@@ -68,7 +67,7 @@ def _keys_action(obj, arg, path, keys, convert=lambda value: value):
         curve = action_fcurves(action).new(path, index=index)
         curve.extrapolation = "CONSTANT"
         curve.keyframe_points.add(len(samples))
-        for point, (frame, value) in zip(curve.keyframe_points, samples):
+        for point, (frame, value) in zip(curve.keyframe_points, samples, strict=False):
             point.co = (_anim_frame_to_scene_frame(frame), value[index])
             point.interpolation = "LINEAR"
         curve.update()
@@ -82,19 +81,27 @@ def _keys_action(obj, arg, path, keys, convert=lambda value: value):
 def _scale_chain(collection, name, parent, scale, orient):
     parent = _empty(collection, name + "_orient", parent, orient.to_matrix().to_4x4())
     parent = _empty(collection, name + "_scale", parent, Matrix.Diagonal((*scale, 1)))
-    return _empty(collection, name + "_unorient", parent, orient.inverted().to_matrix().to_4x4())
+    return _empty(
+        collection, name + "_unorient", parent, orient.inverted().to_matrix().to_4x4()
+    )
 
 
 def _animated_node(collection, name, parent, source):
     base = source.base
-    parent = _affine(collection, name + "_base", parent,
-                     Matrix(base.matrix) @ Matrix.Translation(base.position))
+    parent = _affine(
+        collection,
+        name + "_base",
+        parent,
+        Matrix(base.matrix) @ Matrix.Translation(base.position),
+    )
     # Translations precede default rotation; separate arguments add here.
     for index, (arg, keys) in enumerate(source.posData):
         if keys:
             parent = _empty(collection, f"{name}_pos{index}", parent)
             _keys_action(parent, arg, "location", keys)
-    parent = _empty(collection, name + "_rotation", parent, base.quat_1.to_matrix().to_4x4())
+    parent = _empty(
+        collection, name + "_rotation", parent, base.quat_1.to_matrix().to_4x4()
+    )
     for index, (arg, keys) in enumerate(source.rotData):
         if keys:
             parent = _empty(collection, f"{name}_rot{index}", parent)
@@ -106,15 +113,25 @@ def _animated_node(collection, name, parent, source):
         prefix = f"{name}_scale{index}"
         parent = _empty(collection, prefix + "_orient", parent)
         if orient_keys:
-            _keys_action(parent, arg, "rotation_quaternion", orient_keys,
-                         _scale_orientation_quaternion)
+            _keys_action(
+                parent,
+                arg,
+                "rotation_quaternion",
+                orient_keys,
+                _scale_orientation_quaternion,
+            )
         parent = _empty(collection, prefix, parent)
         if scale_keys:
             _keys_action(parent, arg, "scale", scale_keys)
         parent = _empty(collection, prefix + "_unorient", parent)
         if orient_keys:
-            _keys_action(parent, arg, "rotation_quaternion", orient_keys,
-                         lambda value: _scale_orientation_quaternion(value).inverted())
+            _keys_action(
+                parent,
+                arg,
+                "rotation_quaternion",
+                orient_keys,
+                lambda value: _scale_orientation_quaternion(value).inverted(),
+            )
     return parent
 
 
@@ -129,8 +146,12 @@ def build_bone_control_graph(graph):
     bpy.context.scene.collection.children.link(collection)
     bpy.context.view_layer.update()
     basis = _ROOT_BASIS_FIX
-    root = _empty(collection, "_EDMBoneControls", graph.root.blender,
-                  graph.root.blender.matrix_world.inverted() @ basis)
+    root = _empty(
+        collection,
+        "_EDMBoneControls",
+        graph.root.blender,
+        graph.root.blender.matrix_world.inverted() @ basis,
+    )
     sources = {}
 
     def build(source):
@@ -143,8 +164,12 @@ def build_bone_control_graph(graph):
         if isinstance(source, ArgAnimationNode):
             obj = _animated_node(collection, name, parent, source)
         else:
-            obj = _affine(collection, name, parent,
-                          Matrix(getattr(source, "matrix", Matrix.Identity(4))))
+            obj = _affine(
+                collection,
+                name,
+                parent,
+                Matrix(getattr(source, "matrix", Matrix.Identity(4))),
+            )
         sources[source] = obj
         return obj
 
@@ -152,7 +177,9 @@ def build_bone_control_graph(graph):
         source = node.transform
         parent = build(source)
         rest_world = rig.matrix_world @ rig.data.bones[name].matrix_local
-        inv_bind = getattr(source, "bone_matrix", getattr(source, "inv_base_bone_matrix", None))
+        inv_bind = getattr(
+            source, "bone_matrix", getattr(source, "inv_base_bone_matrix", None)
+        )
         if inv_bind is None:
             raise ValueError(f"Missing inverse bind for {name}")
         correction = Matrix(inv_bind) @ basis.inverted() @ rest_world
@@ -162,7 +189,7 @@ def build_bone_control_graph(graph):
         constraint.target = target
         constraint.owner_space = "WORLD"
         constraint.target_space = "WORLD"
-    # Bones now carry every animated ancestor; an animated mesh parent would apply it twice.
+    # Bones carry every animated ancestor; an animated mesh parent would apply it twice.
     for obj in bpy.data.objects:
         if obj.type != "MESH" or obj.parent in (None, rig):
             continue

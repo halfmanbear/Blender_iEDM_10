@@ -19,6 +19,15 @@ ignore = [
 "iEDM_10/blender_importer/import_pipeline.py" = ["F401"]
 "iEDM_10/edm_format/types/__init__.py" = ["F401", "F403"]
 "iEDM_10/blender_importer/prelude.py" = ["F403", "F405"]
+# Blender regression scripts add the repository root to sys.path before
+# importing the add-on, so those imports intentionally follow that bootstrap.
+"tests/audit_transform_postprocess.py" = ["E402"]
+"tests/compare_reference_geometry.py" = ["E402"]
+"tests/regression_aircraft_import.py" = ["E402"]
+"tests/regression_blender_integration.py" = ["E402"]
+"tests/regression_origin_modes.py" = ["E402"]
+"tests/regression_reported_parts.py" = ["E402"]
+"tests/regression_source_meshes.py" = ["E402"]
 
 [tool.ruff.lint.mccabe]
 # Cyclomatic complexity, not nesting depth. 15 flags genuinely tangled

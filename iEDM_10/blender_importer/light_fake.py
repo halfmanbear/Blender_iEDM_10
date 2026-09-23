@@ -1,4 +1,5 @@
 import json
+import logging
 import math
 
 import bpy
@@ -23,6 +24,8 @@ from .light_materials import _material_for_fake_light
 from .prelude import (
     _set_official_special_type,
 )
+
+_logger = logging.getLogger(__name__)
 
 
 def create_fake_omni_lights(node):
@@ -97,7 +100,7 @@ def _create_surface_spot_mesh(name, positions, dirs_bl, sizes):
     verts = []
     faces = []
     uv_quads = []
-    for center, normal, size_val in zip(positions, dirs_bl, sizes):
+    for center, normal, size_val in zip(positions, dirs_bl, sizes, strict=False):
         up = Vector((0.0, 0.0, 1.0))
         if abs(normal.dot(up)) > 0.999:
             up = Vector((0.0, 1.0, 0.0))
@@ -131,7 +134,7 @@ def _create_surface_spot_mesh(name, positions, dirs_bl, sizes):
             loop_uv = uv_layer.data
             for poly in mesh.polygons:
                 q = uv_quads[poly.index]
-                for li, uv in zip(poly.loop_indices, q):
+                for li, uv in zip(poly.loop_indices, q, strict=False):
                     loop_uv[li].uv = uv
         except Exception as e:
             print(f"Warning in blender_importer/lights.py: {e}")
@@ -201,7 +204,7 @@ def create_fake_spot_lights(node):
             try:
                 two_sided = two_sided or bool(int(entry.get("flag", 0)) & 0x1)
             except Exception:
-                pass
+                _logger.debug("Ignoring optional operation failure", exc_info=True)
 
     if not positions:
         ob = bpy.data.objects.new(name, None)
@@ -306,7 +309,8 @@ def create_fake_als_lights(node):
                 obj["_iedm_fake_als_payload_storage"] = "text_json"
         except Exception as e:
             print(
-                f"Warning preserving FakeALSNode payload on {getattr(obj, 'name', '')}: {e}"
+                "Warning preserving FakeALSNode payload on "
+                f"{getattr(obj, 'name', '')}: {e}"
             )
 
     name = node.name or "FakeALSLights"

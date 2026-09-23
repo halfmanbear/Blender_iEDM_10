@@ -1,25 +1,23 @@
-from ..utils import action_fcurves
-
 # Fragment: multi-arg control splitting and control/mesh-pair renaming.
-
-
 import bpy
+
 from ..edm_format.mathtypes import Matrix
 from ..edm_format.types import ArgAnimationNode
-from .graph_pipeline import _get_action_argument
+from ..utils import action_fcurves
 from .anim_actions import (
     _action_chain_sort_value,
     _action_has_visibility_curve,
     _build_arganimation_action,
     _build_nonarmature_action_plan,
-    _clone_action_filtered,
     _clear_object_animation_tracks,
+    _clone_action_filtered,
     _collect_merged_transform_actions_for_graph_node,
     _needs_multi_arg_rotation_helper_split,
     _sorted_transform_actions_for_execution,
     _visibility_source_for_graph_node,
     get_actions_for_node,
 )
+from .graph_pipeline import _get_action_argument
 from .prelude import (
     _SUFFIX_RE,
     _assign_action,
@@ -33,7 +31,7 @@ def _action_paths(action):
 
 
 def _relative_keys_from_source(action, node):
-    """Re-key an inner split carrier on an identity basis; the owner holds the static part."""
+    """Re-key an inner split carrier; the owner holds the static part."""
     arg = _get_action_argument(action)
     sources = [
         t
@@ -52,7 +50,7 @@ def _relative_keys_from_source(action, node):
         src = action_fcurves(rebuilt).find(fc.data_path, index=fc.array_index)
         if src is None or len(src.keyframe_points) != len(fc.keyframe_points):
             continue
-        for dst, point in zip(fc.keyframe_points, src.keyframe_points):
+        for dst, point in zip(fc.keyframe_points, src.keyframe_points, strict=False):
             dst.co.y = dst.handle_left.y = dst.handle_right.y = point.co.y
         fc.update()
     bpy.data.actions.remove(rebuilt)
@@ -126,7 +124,8 @@ def _split_multi_arg_rotation_controls(graph):
             later_paths |= _action_paths(action)
         inner_static = None
         if "location" in later_paths:
-            # Position deltas are neither rotated nor scaled: keep static R @ S innermost.
+            # Position deltas are neither rotated nor scaled.
+            # Keep static R @ S innermost.
             ob.matrix_basis = Matrix.Translation(static_loc)
             inner_static = Matrix.LocRotScale(
                 None,
@@ -250,7 +249,7 @@ def _rename_control_wrapper_mesh_pairs(graph):
         desired_parent_name = prefix + desired_mesh_name
 
         # Only rewrite when the current names are a Blender duplicate split of the same
-        # semantic base (`tf_0466` + `tf_0466.001`) or when the child already carries the
+        # semantic base (`tf_0466` + `tf_0466.001`) or when the child carries the
         # semantic base but the parent still steals it.
         if (
             current_parent_base != desired_mesh_name

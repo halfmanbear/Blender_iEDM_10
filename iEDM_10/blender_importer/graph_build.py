@@ -2,6 +2,7 @@
 
 
 import itertools
+
 from ..edm_format.mathtypes import (
     Matrix,
     Vector,
@@ -24,6 +25,7 @@ from .prelude import (
     _ROOT_BASIS_FIX,
     _import_ctx,
     _import_profile_flag,
+    _log,
     is_skeleton_node,
 )
 
@@ -56,14 +58,14 @@ def iterate_all_objects(edmFile):
 def _init_graph(edmFile):
     """Create TranslationNodes for all EDM transform nodes and wire the hierarchy.
 
-    Returns (graph, nodeLookup) where nodeLookup maps EDM transform node -> TranslationNode.
+    Returns ``(graph, nodeLookup)`` mapping EDM nodes to TranslationNodes.
     """
     graph = TranslationGraph()
     graph.root.transform = edmFile.nodes[0]
     try:
         edmFile.nodes[0]._translation_node = graph.root
-    except Exception:
-        pass
+    except Exception as exc:
+        _log.debug("Could not attach graph root metadata: {}".format(exc), level=2)
     nodeLookup = {edmFile.nodes[0]: graph.root}
 
     for i, tfnode in enumerate(edmFile.nodes):
@@ -74,8 +76,8 @@ def _init_graph(edmFile):
         newNode.transform = tfnode
         try:
             tfnode._translation_node = newNode
-        except Exception:
-            pass
+        except Exception as exc:
+            _log.debug("Could not attach node graph metadata: {}".format(exc), level=2)
         nodeLookup[tfnode] = newNode
         graph.nodes.append(newNode)
 
@@ -83,7 +85,8 @@ def _init_graph(edmFile):
         if node.transform.parent:
             if node.transform.parent not in nodeLookup:
                 raise ValueError(
-                    f"Transform node has parent not in node list: {node.transform.parent}"
+                    "Transform node has parent not in node list: "
+                    f"{node.transform.parent}"
                 )
             node.parent = nodeLookup[node.transform.parent]
             node.parent.children.append(node)
@@ -126,7 +129,7 @@ def _attach_render_nodes(graph, edmFile, nodeLookup):
 
 
 def _make_collapse_tf_render_visitor(graph):
-    """Return a walk_tree visitor that merges single-child RENDER nodes up into their TRANSFORM parent."""
+    """Merge single-child RENDER nodes into their TRANSFORM parent."""
 
     def _collapse_transform_render_chains(node):
         if node.type != "TRANSFORM":
@@ -173,7 +176,7 @@ def _mark_graph_root_local(graph):
 
 
 def _compute_node_local_matrices(graph):
-    """Pre-compute _local_bl for every non-root graph node from its EDM transform and render offset."""
+    """Pre-compute ``_local_bl`` from each node's transform and render offset."""
     for node in graph.nodes:
         if node == graph.root:
             continue
