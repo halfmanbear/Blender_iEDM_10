@@ -39,10 +39,7 @@ def _apply_render_positioning(node):
         and getattr(node, "transform", None) is None
         and getattr(node, "blender", None) is not None
     ):
-        try:
-            apply_node_transform(node, node.blender, used_shared_parent=False)
-        except Exception as e:
-            print(f"Warning in blender_importer/nodes/core.py: {e}")
+        _apply_connector_position(node)
 
     if _is_render_only_positioning:
         shared_parent = getattr(node.render, "shared_parent", None)
@@ -67,68 +64,7 @@ def _apply_render_positioning(node):
 
         local_bl = getattr(node, "_local_bl", None)
         if local_bl is not None and not _used_shared_parent_fallback:
-            try:
-                has_render_local = hasattr(node.render, "matrix") or hasattr(
-                    node.render, "pos"
-                )
-                if has_render_local:
-                    apply_node_transform(node, node.blender, used_shared_parent=False)
-                else:
-                    matrix_to_apply = (
-                        local_bl.copy() if hasattr(local_bl, "copy") else local_bl
-                    )
-                    _prrbf_base = (
-                        _import_profile_flag("plain_root_render_local_basis_fix")
-                        and _import_ctx.edm_version >= 10
-                        and node.transform is None
-                        and not getattr(
-                            _import_ctx, "use_scene_root_basis_object", True
-                        )
-                        and str(getattr(node.render, "name", "") or "")
-                    )
-                    _parent_node = getattr(node, "parent", None)
-                    _needs_render_basis_fix = _prrbf_base and (
-                        getattr(_parent_node, "_is_graph_root", False)
-                        or (
-                            isinstance(
-                                getattr(_parent_node, "transform", None),
-                                ArgVisibilityNode,
-                            )
-                            and getattr(
-                                getattr(_parent_node, "parent", None),
-                                "_is_graph_root",
-                                False,
-                            )
-                            and any(
-                                isinstance(
-                                    getattr(sib, "transform", None), AnimatingNode
-                                )
-                                and not isinstance(
-                                    getattr(sib, "transform", None), ArgVisibilityNode
-                                )
-                                for sib in list(
-                                    getattr(_parent_node, "children", []) or []
-                                )
-                            )
-                        )
-                    )
-                    if (
-                        not _needs_render_basis_fix
-                        and isinstance(getattr(node, "render", None), SkinNode)
-                        and not bool(node.blender.get("_iedm_skin_parent_override"))
-                    ):
-                        _bone_ctx = getattr(_import_ctx, "bone_import_ctx", None) or {}
-                        if bool(_bone_ctx.get("arm_carries_basis_fix")):
-                            _needs_render_basis_fix = True
-                    if _needs_render_basis_fix:
-                        if not (
-                            isinstance(getattr(node, "render", None), SkinNode)
-                            and bool(node.blender.get("_iedm_skin_parent_override"))
-                        ):
-                            matrix_to_apply = _ROOT_BASIS_FIX @ matrix_to_apply
-                    node.blender.matrix_basis = matrix_to_apply
-            except Exception as e:
-                print(f"Warning in blender_importer/nodes/core.py: {e}")
+            _apply_render_local_matrix(node, local_bl)
 
         if (
             _import_ctx.mesh_origin_mode == "APPROX"
@@ -147,60 +83,116 @@ def _apply_render_positioning(node):
         if isinstance(getattr(node, "render", None), SkinNode):
             _wrap_skin_object_with_skin_box(node.blender, node.render)
 
-    # Tag identity passthrough for render-only nodes
-    try:
-        if node.blender and node.render is not None and node.transform is None:
-            ob = node.blender
-            ob_name = getattr(ob, "name", "") or ""
-            has_parent = getattr(ob, "parent", None) is not None
-            has_blender_dup_suffix = (
-                len(ob_name) > 4 and ob_name[-4] == "." and ob_name[-3:].isdigit()
-            )
-            parent_is_vis = isinstance(
-                getattr(node.parent, "transform", None), ArgVisibilityNode
-            )
-            render_cls_name = type(node.render).__name__
-            is_fake_light_render = render_cls_name in {
-                "FakeOmniLightsNode",
-                "FakeSpotLightsNode",
-            }
-            if (
-                has_parent
-                and _ob_local_is_identity(ob)
-                and (has_blender_dup_suffix or (parent_is_vis and is_fake_light_render))
-            ):
-                ob["_iedm_identity_passthrough"] = True
-                if has_blender_dup_suffix and _is_narrow_safe_identity_helper_name(
-                    ob_name
-                ):
-                    ob["_iedm_narrow_identity_passthrough"] = True
-                if parent_is_vis and is_fake_light_render:
-                    ob["_iedm_narrow_identity_passthrough"] = True
-    except Exception as e:
-        print(f"Warning in blender_importer/nodes/core.py: {e}")
-
-    # Combined transform+render fake-light helpers under visibility wrapper
-    try:
-        if node.blender and node.render is not None and node.transform is not None:
-            ob = node.blender
-            parent_is_vis = isinstance(
-                getattr(node.parent, "transform", None), ArgVisibilityNode
-            )
-            is_anim_tf = isinstance(node.transform, AnimatingNode)
-            render_cls_name = type(node.render).__name__
-            is_fake_light_render = render_cls_name in {
-                "FakeOmniLightsNode",
-                "FakeSpotLightsNode",
-            }
-            if (
-                parent_is_vis
-                and is_fake_light_render
-                and (not is_anim_tf)
-                and _ob_local_is_identity(ob)
-            ):
-                ob["_iedm_identity_passthrough"] = True
-                ob["_iedm_narrow_identity_passthrough"] = True
-    except Exception as e:
-        print(f"Warning in blender_importer/nodes/core.py: {e}")
+    _tag_render_identity_passthrough(node)
+    _tag_combined_fake_light_helper(node)
 
     return _used_shared_parent_fallback
+
+
+def _apply_connector_position(node):
+    try:
+        apply_node_transform(node, node.blender, used_shared_parent=False)
+    except Exception as exc:
+        print(f"Warning in blender_importer/nodes/core.py: {exc}")
+
+
+def _apply_render_local_matrix(node, local_matrix):
+    try:
+        has_render_local = hasattr(node.render, "matrix") or hasattr(node.render, "pos")
+        if has_render_local:
+            apply_node_transform(node, node.blender, used_shared_parent=False)
+            return
+        matrix_to_apply = (
+            local_matrix.copy() if hasattr(local_matrix, "copy") else local_matrix
+        )
+        needs_root_fix = _needs_render_root_basis_fix(node)
+        has_skin_override = isinstance(
+            getattr(node, "render", None), SkinNode
+        ) and bool(node.blender.get("_iedm_skin_parent_override"))
+        if not needs_root_fix and isinstance(getattr(node, "render", None), SkinNode):
+            context = getattr(_import_ctx, "bone_import_ctx", None) or {}
+            needs_root_fix = (
+                bool(context.get("arm_carries_basis_fix")) and not has_skin_override
+            )
+        if needs_root_fix and not has_skin_override:
+            matrix_to_apply = _ROOT_BASIS_FIX @ matrix_to_apply
+        node.blender.matrix_basis = matrix_to_apply
+    except Exception as exc:
+        print(f"Warning in blender_importer/nodes/core.py: {exc}")
+
+
+def _needs_render_root_basis_fix(node):
+    parent = getattr(node, "parent", None)
+    if not (
+        _import_profile_flag("plain_root_render_local_basis_fix")
+        and _import_ctx.edm_version >= 10
+        and node.transform is None
+        and not getattr(_import_ctx, "use_scene_root_basis_object", True)
+        and str(getattr(node.render, "name", "") or "")
+    ):
+        return False
+    if getattr(parent, "_is_graph_root", False):
+        return True
+    is_visibility_root = isinstance(
+        getattr(parent, "transform", None), ArgVisibilityNode
+    ) and getattr(getattr(parent, "parent", None), "_is_graph_root", False)
+    has_animated_child = any(
+        isinstance(getattr(child, "transform", None), AnimatingNode)
+        and not isinstance(getattr(child, "transform", None), ArgVisibilityNode)
+        for child in list(getattr(parent, "children", []) or [])
+    )
+    return is_visibility_root and has_animated_child
+
+
+def _tag_render_identity_passthrough(node):
+    try:
+        if not (node.blender and node.render is not None and node.transform is None):
+            return
+        obj = node.blender
+        name = getattr(obj, "name", "") or ""
+        has_dup_suffix = len(name) > 4 and name[-4] == "." and name[-3:].isdigit()
+        parent_is_visibility = isinstance(
+            getattr(node.parent, "transform", None), ArgVisibilityNode
+        )
+        fake_light = type(node.render).__name__ in {
+            "FakeOmniLightsNode",
+            "FakeSpotLightsNode",
+        }
+        if not (
+            getattr(obj, "parent", None) is not None
+            and _ob_local_is_identity(obj)
+            and (has_dup_suffix or (parent_is_visibility and fake_light))
+        ):
+            return
+        obj["_iedm_identity_passthrough"] = True
+        if (has_dup_suffix and _is_narrow_safe_identity_helper_name(name)) or (
+            parent_is_visibility and fake_light
+        ):
+            obj["_iedm_narrow_identity_passthrough"] = True
+    except Exception as exc:
+        print(f"Warning in blender_importer/nodes/core.py: {exc}")
+
+
+def _tag_combined_fake_light_helper(node):
+    try:
+        if not (
+            node.blender and node.render is not None and node.transform is not None
+        ):
+            return
+        parent_is_visibility = isinstance(
+            getattr(node.parent, "transform", None), ArgVisibilityNode
+        )
+        fake_light = type(node.render).__name__ in {
+            "FakeOmniLightsNode",
+            "FakeSpotLightsNode",
+        }
+        if (
+            parent_is_visibility
+            and fake_light
+            and not isinstance(node.transform, AnimatingNode)
+            and _ob_local_is_identity(node.blender)
+        ):
+            node.blender["_iedm_identity_passthrough"] = True
+            node.blender["_iedm_narrow_identity_passthrough"] = True
+    except Exception as exc:
+        print(f"Warning in blender_importer/nodes/core.py: {exc}")

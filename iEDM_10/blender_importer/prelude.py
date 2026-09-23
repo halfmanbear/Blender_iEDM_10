@@ -662,6 +662,17 @@ def _is_bone_transform(tfnode):
     return tfnode is not None and "Bone" in type(tfnode).__name__
 
 
+def _is_skeleton_controller(node):
+    """Return whether the node itself carries animation or light structure."""
+    if node.transform:
+        name = getattr(node.transform, "name", "") or ""
+        if isinstance(node.transform, AnimatingNode):
+            return True
+        if _is_anim_node_name(name) or "Light Transform" in name:
+            return True
+    return bool(node.render and type(node.render).__name__ == "LightNode")
+
+
 def is_skeleton_node(node):
     """Determine if a graph node should be preserved as a separate Empty/Armature.
 
@@ -674,16 +685,7 @@ def is_skeleton_node(node):
         return False
 
     # AnimatingNodes, LightNodes and nodes with anim prefixes are always skeletal
-    if node.transform:
-        name = getattr(node.transform, "name", "") or ""
-        if isinstance(node.transform, AnimatingNode):
-            return True
-        if _is_anim_node_name(name):
-            return True
-        if "Light Transform" in name:
-            return True
-
-    if node.render and type(node.render).__name__ == "LightNode":
+    if _is_skeleton_controller(node):
         return True
 
     # Ancestors of Bone nodes should be preserved. _mark_skeleton_nodes caches the

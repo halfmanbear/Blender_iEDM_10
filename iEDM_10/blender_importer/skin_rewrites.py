@@ -12,6 +12,60 @@ from .prelude import _import_ctx
 _logger = logging.getLogger(__name__)
 
 
+def _read_skin_bind_target_loc(mesh_ob, bone_rest_matrix_by_name):
+    bone_name = str(mesh_ob.get("_iedm_skin_bind_target_bone", "") or "")
+    if bone_name:
+        mat = bone_rest_matrix_by_name.get(bone_name)
+        if mat is not None:
+            try:
+                return bone_name, mat.to_translation().copy()
+            except Exception:
+                _logger.debug("Ignoring optional operation failure", exc_info=True)
+    raw_loc = mesh_ob.get("_iedm_skin_bind_target_loc")
+    if isinstance(raw_loc, (list, tuple)) and len(raw_loc) == 3:
+        try:
+            return bone_name, Vector(
+                (float(raw_loc[0]), float(raw_loc[1]), float(raw_loc[2]))
+            )
+        except Exception:
+            return bone_name, None
+    return bone_name, None
+
+def _iter_skin_parent_candidates(mesh_ob, render_name, bind_target_name):
+    seen = set()
+
+    def _add(obj, reason):
+        if obj is None or obj == mesh_ob:
+            return
+        if getattr(obj, "type", "") == "MESH":
+            return
+        key = (
+            obj.name_full if hasattr(obj, "name_full") else getattr(obj, "name", "")
+        )
+        if key in seen:
+            return
+        seen.add(key)
+        yield (obj, reason)
+
+    current = getattr(mesh_ob, "parent", None)
+    while current is not None:
+        for item in _add(current, "ancestor"):
+            yield item
+        current = getattr(current, "parent", None)
+
+    for obj in list(getattr(bpy.data, "objects", []) or []):
+        obj_name = str(getattr(obj, "name", "") or "")
+        dbg_tf_name = str(obj.get("_iedm_dbg_tf_name", "") or "")
+        if render_name and (obj_name == render_name or dbg_tf_name == render_name):
+            for item in _add(obj, "render_name"):
+                yield item
+        if bind_target_name and (
+            obj_name == bind_target_name or dbg_tf_name == bind_target_name
+        ):
+            for item in _add(obj, "bind_name"):
+                yield item
+
+
 def _resolve_skin_parent_overrides_by_bind_rest():
     """Late-stage deterministic skin parent selection using settled world transforms."""
     ctx = getattr(_import_ctx, "bone_import_ctx", None) or {}
@@ -19,67 +73,12 @@ def _resolve_skin_parent_overrides_by_bind_rest():
     if not bone_rest_matrix_by_name:
         return
 
-    def _read_bind_target_loc(mesh_ob):
-        bone_name = str(mesh_ob.get("_iedm_skin_bind_target_bone", "") or "")
-        if bone_name:
-            mat = bone_rest_matrix_by_name.get(bone_name)
-            if mat is not None:
-                try:
-                    return bone_name, mat.to_translation().copy()
-                except Exception:
-                    _logger.debug("Ignoring optional operation failure", exc_info=True)
-        raw_loc = mesh_ob.get("_iedm_skin_bind_target_loc")
-        if isinstance(raw_loc, (list, tuple)) and len(raw_loc) == 3:
-            try:
-                return bone_name, Vector(
-                    (float(raw_loc[0]), float(raw_loc[1]), float(raw_loc[2]))
-                )
-            except Exception:
-                return bone_name, None
-        return bone_name, None
 
-    def _iter_candidates(mesh_ob, render_name, bind_target_name):
-        seen = set()
-
-        def _add(obj, reason):
-            if obj is None or obj == mesh_ob:
-                return
-            if getattr(obj, "type", "") == "MESH":
-                return
-            key = (
-                obj.name_full if hasattr(obj, "name_full") else getattr(obj, "name", "")
-            )
-            if key in seen:
-                return
-            seen.add(key)
-            yield (obj, reason)
-
-        current = getattr(mesh_ob, "parent", None)
-        while current is not None:
-            for item in _add(current, "ancestor"):
-                yield item
-            current = getattr(current, "parent", None)
-
-        for obj in list(getattr(bpy.data, "objects", []) or []):
-            obj_name = str(getattr(obj, "name", "") or "")
-            dbg_tf_name = str(obj.get("_iedm_dbg_tf_name", "") or "")
-            if render_name and (obj_name == render_name or dbg_tf_name == render_name):
-                for item in _add(obj, "render_name"):
-                    yield item
-            if bind_target_name and (
-                obj_name == bind_target_name or dbg_tf_name == bind_target_name
-            ):
-                for item in _add(obj, "bind_name"):
-                    yield item
 
     bpy.context.view_layer.update()
 
     for mesh_ob in list(getattr(bpy.data, "objects", []) or []):
-        if getattr(mesh_ob, "type", "") != "MESH":
-            continue
-        if not bool(mesh_ob.get("_iedm_skin_parent_override")):
-            continue
-        if str(mesh_ob.get("_iedm_src_render_cls", "") or "") != "SkinNode":
+        if not _is_late_skin_parent_candidate(mesh_ob):
             continue
 
         render_name = str(
@@ -87,10 +86,14 @@ def _resolve_skin_parent_overrides_by_bind_rest():
             or mesh_ob.get("_iedm_dbg_skin_render_name", "")
             or ""
         )
-        bind_target_name, bind_target_loc = _read_bind_target_loc(mesh_ob)
+        bind_target_name, bind_target_loc = _read_skin_bind_target_loc(
+            mesh_ob, bone_rest_matrix_by_name
+        )
 
         rows = []
-        for obj, reason in _iter_candidates(mesh_ob, render_name, bind_target_name):
+        for obj, reason in _iter_skin_parent_candidates(
+            mesh_ob, render_name, bind_target_name
+        ):
             try:
                 world_loc = obj.matrix_world.to_translation().copy()
             except Exception:
@@ -148,3 +151,11 @@ def _resolve_skin_parent_overrides_by_bind_rest():
             mesh_ob["_iedm_skin_parent_override_late"] = True
         except Exception as e:
             print(f"Warning in _resolve_skin_parent_overrides_by_bind_rest: {e}")
+
+
+def _is_late_skin_parent_candidate(mesh_obj):
+    return (
+        getattr(mesh_obj, "type", "") == "MESH"
+        and bool(mesh_obj.get("_iedm_skin_parent_override"))
+        and str(mesh_obj.get("_iedm_src_render_cls", "") or "") == "SkinNode"
+    )

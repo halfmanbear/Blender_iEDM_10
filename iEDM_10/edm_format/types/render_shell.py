@@ -22,7 +22,6 @@ def _tag_shell_family_node(node, source_type):
         node._shell_family = source_type.replace("model::", "").replace("Node", "")
     return node
 
-
 def _read_index_data(stream, classification=None):
     "Performs the common index-reading operation"
     dtPos = stream.tell()
@@ -51,7 +50,6 @@ def _read_index_data(stream, classification=None):
 
     return (unknown, data)
 
-
 def _write_index_data(indexData, vertexDataLength, writer):
     # Index data
     if vertexDataLength < 256:
@@ -74,7 +72,6 @@ def _write_index_data(indexData, vertexDataLength, writer):
     writer.write_uint(5)
     iWriter(indexData)
 
-
 def _read_vertex_data(stream, classification=None):
     count = stream.read_count("vertex count")
     stride = stream.read_count("vertex stride")
@@ -95,13 +92,11 @@ def _read_vertex_data(stream, classification=None):
     vtxData = [vtxData[i : i + stride] for i in range(0, len(vtxData), stride)]
     return vtxData
 
-
 def _write_vertex_data(data, writer):
     writer.write_uint(len(data))
     writer.write_uint(len(data[0][0]))  # stride = floats per vertex
     flat_data = list(itertools.chain(*data))
     writer.write_floats(flat_data)
-
 
 def _read_parent_data(stream):
     # Read the parent section
@@ -117,7 +112,6 @@ def _read_parent_data(stream):
             ranges = list(stream.read_ints(2))
             parentData.append((node, ranges[0], ranges[1]))
         return parentData
-
 
 def _classify_render_parent_data(parentData, vertexData, indexData):
     """Best-effort classification of v10 RenderNode parent attachment layouts.
@@ -182,7 +176,6 @@ def _classify_render_parent_data(parentData, vertexData, indexData):
         else:
             result["mode"] = "coverage_table_mismatch"
     return result
-
 
 def _render_audit(self, verts="__gv_bytes", inds="__gi_bytes"):
     c = Counter()
@@ -375,25 +368,7 @@ class RenderNode(BaseNode):
         # V10 zero-coverage tables without usable owner variation should preserve
         # all parent attachments by reusing the full geometry on each child.
         if parent_layout["mode"] == "duplicate_geometry":
-            print(
-                "Info: V10 zero-coverage split for {}; duplicating geometry "
-                "across {} parents".format(self.name, len(self.parentData))
-            )
-            children = []
-            for i, (parent, _val1, val2) in enumerate(self.parentData):
-                node = RenderNode()
-                node.version = self.version
-                node.name = "{}_{}".format(self.name, i)
-                node.name_unknown = True
-                node.props = self.props
-                node.material = self.material
-                node.parent = parent
-                node.indexData = self.indexData
-                node.damage_argument = val2
-                node.vertexData = self.vertexData
-                node.parentData_layout = dict(parent_layout)
-                children.append(node)
-            return children
+            return self._split_duplicate_geometry(parent_layout)
 
         start = 0
         children = []
@@ -431,6 +406,28 @@ class RenderNode(BaseNode):
             start = idxTo
             children.append(node)
 
+        return children
+
+    def _split_duplicate_geometry(self, parent_layout):
+        """Duplicate a zero-coverage mesh for each declared parent."""
+        print(
+            "Info: V10 zero-coverage split for {}; duplicating geometry "
+            "across {} parents".format(self.name, len(self.parentData))
+        )
+        children = []
+        for i, (parent, _val1, val2) in enumerate(self.parentData):
+            node = RenderNode()
+            node.version = self.version
+            node.name = "{}_{}".format(self.name, i)
+            node.name_unknown = True
+            node.props = self.props
+            node.material = self.material
+            node.parent = parent
+            node.indexData = self.indexData
+            node.damage_argument = val2
+            node.vertexData = self.vertexData
+            node.parentData_layout = dict(parent_layout)
+            children.append(node)
         return children
 
 

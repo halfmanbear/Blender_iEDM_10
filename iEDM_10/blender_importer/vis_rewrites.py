@@ -84,71 +84,59 @@ def _apply_plain_root_visibility_basis_fix(graph):
         return
 
     for node in getattr(graph, "nodes", []) or []:
-        tf = getattr(node, "transform", None)
-        ob = getattr(node, "blender", None)
-        tf_cls_name = type(tf).__name__ if tf is not None else ""
-        collapsed_cls_names = [
-            type(extra_tf).__name__
-            for extra_tf in (getattr(node, "_collapsed_transforms", []) or [])
-        ]
-        if ob is None or tf_cls_name != "ArgVisibilityNode":
+        if not _is_plain_root_visibility_candidate(node):
             continue
-        if not _ob_local_is_identity(ob):
-            continue
-        if not getattr(getattr(node, "parent", None), "_is_graph_root", False):
-            continue
-        if any(cls_name != "ArgVisibilityNode" for cls_name in collapsed_cls_names):
-            continue
-        if type(getattr(node, "render", None)).__name__ == "SkinNode":
-            continue
-
-        child_nodes = list(getattr(node, "children", []) or [])
-        descendant_nodes = []
-        stack = list(child_nodes)
-        while stack:
-            cur = stack.pop()
-            descendant_nodes.append(cur)
-            stack.extend(list(getattr(cur, "children", []) or []))
-
-        # Skip ArgVis wrapper chains that hide any deeper animated transform.
-        # The animated leaf already has its authored/root basis baked into its
-        # zero_transform_local_matrix. Rotating the top visibility wrapper adds an
-        # extra +90 X and mirrors the whole branch in world space.
-        has_anim_descendant_in_graph = any(
-            isinstance(getattr(ch, "transform", None), AnimatingNode)
-            and not isinstance(getattr(ch, "transform", None), ArgVisibilityNode)
-            for ch in descendant_nodes
-        )
-        if has_anim_descendant_in_graph:
-            continue
-
-        if any(
-            type(getattr(child, "render", None)).__name__ == "SkinNode"
-            for child in descendant_nodes
-        ):
-            continue
-
-        has_render_descendant = type(
-            getattr(node, "render", None)
-        ).__name__ == "RenderNode" or any(
-            type(getattr(child, "render", None)).__name__ == "RenderNode"
-            for child in descendant_nodes
-        )
-        if not has_render_descendant:
-            continue
-
-        direct_child_objects = list(getattr(ob, "children", []) or [])
-        has_nonidentity_child_empty = any(
-            getattr(child, "type", "") == "EMPTY" and not _ob_local_is_identity(child)
-            for child in direct_child_objects
-        )
-        if has_nonidentity_child_empty:
-            continue
-
+        ob = node.blender
         try:
             ob.matrix_basis = _ROOT_BASIS_FIX @ ob.matrix_basis
         except Exception as e:
             _log.warn("_apply_plain_root_visibility_basis_fix", exc=e)
+
+
+def _is_plain_root_visibility_candidate(node):
+    """Check whether an identity root ArgVis wrapper needs the basis fix."""
+    ob = getattr(node, "blender", None)
+    tf = getattr(node, "transform", None)
+    if ob is None or type(tf).__name__ != "ArgVisibilityNode":
+        return False
+    if not _ob_local_is_identity(ob):
+        return False
+    if not getattr(getattr(node, "parent", None), "_is_graph_root", False):
+        return False
+    collapsed = getattr(node, "_collapsed_transforms", []) or []
+    if any(type(extra_tf).__name__ != "ArgVisibilityNode" for extra_tf in collapsed):
+        return False
+    if type(getattr(node, "render", None)).__name__ == "SkinNode":
+        return False
+
+    descendants = []
+    stack = list(getattr(node, "children", []) or [])
+    while stack:
+        current = stack.pop()
+        descendants.append(current)
+        stack.extend(list(getattr(current, "children", []) or []))
+    # An animated or skinned descendant already handles its own basis conversion.
+    if any(
+        isinstance(getattr(child, "transform", None), AnimatingNode)
+        and not isinstance(getattr(child, "transform", None), ArgVisibilityNode)
+        for child in descendants
+    ):
+        return False
+    if any(
+        type(getattr(child, "render", None)).__name__ == "SkinNode"
+        for child in descendants
+    ):
+        return False
+    has_render = type(getattr(node, "render", None)).__name__ == "RenderNode" or any(
+        type(getattr(child, "render", None)).__name__ == "RenderNode"
+        for child in descendants
+    )
+    if not has_render:
+        return False
+    return not any(
+        getattr(child, "type", "") == "EMPTY" and not _ob_local_is_identity(child)
+        for child in list(getattr(ob, "children", []) or [])
+    )
 
 
 def _apply_visibility_pair_wrapper_object_basis_fix():
@@ -191,117 +179,193 @@ def _apply_visibility_pair_wrapper_object_basis_fix():
             _log.warn("_apply_visibility_pair_wrapper_object_basis_fix", exc=e)
 
 
+def _flat_to_matrix(value):
+    try:
+        if hasattr(value, "to_list"):
+            value = value.to_list()
+        elif not isinstance(value, (list, tuple)):
+            value = list(value)
+    except Exception:
+        return None
+    if not isinstance(value, (list, tuple)) or len(value) != 16:
+        return None
+    try:
+        return Matrix(
+            (
+                tuple(float(v) for v in value[0:4]),
+                tuple(float(v) for v in value[4:8]),
+                tuple(float(v) for v in value[8:12]),
+                tuple(float(v) for v in value[12:16]),
+            )
+        )
+    except Exception:
+        return None
+
+def _matrix_close(a, b, eps=1e-5):
+    try:
+        return all(
+            abs(float(a[r][c]) - float(b[r][c])) <= eps
+            for r in range(4)
+            for c in range(4)
+        )
+    except Exception:
+        return False
+
+
 def _restore_skin_visibility_transform_basis():
     """Restore same-name transform helper basis for root visibility skin branches."""
     if _import_ctx.edm_version < 10:
         return
-
-    def _flat_to_matrix(value):
-        try:
-            if hasattr(value, "to_list"):
-                value = value.to_list()
-            elif not isinstance(value, (list, tuple)):
-                value = list(value)
-        except Exception:
-            return None
-        if not isinstance(value, (list, tuple)) or len(value) != 16:
-            return None
-        try:
-            return Matrix(
-                (
-                    tuple(float(v) for v in value[0:4]),
-                    tuple(float(v) for v in value[4:8]),
-                    tuple(float(v) for v in value[8:12]),
-                    tuple(float(v) for v in value[12:16]),
-                )
-            )
-        except Exception:
-            return None
-
-    def _matrix_close(a, b, eps=1e-5):
-        try:
-            return all(
-                abs(float(a[r][c]) - float(b[r][c])) <= eps
-                for r in range(4)
-                for c in range(4)
-            )
-        except Exception:
-            return False
-
     for vis_ob in list(getattr(bpy.data, "objects", []) or []):
         if getattr(vis_ob, "type", "") != "EMPTY":
             continue
         if not bool(vis_ob.get("_iedm_vis_passthrough")):
             continue
+        _restore_skin_visibility_object(vis_ob)
 
-        vis_name = str(getattr(vis_ob, "name", "") or "")
-        if not vis_name:
-            continue
 
-        transform_children = []
-        vis_skin_children = []
-        for child in list(getattr(vis_ob, "children", []) or []):
-            if getattr(child, "type", "") == "EMPTY":
-                if (
-                    str(child.get("_iedm_dbg_tf_cls", "") or "") == "TransformNode"
-                    and str(child.get("_iedm_dbg_tf_name", "") or "") == vis_name
-                ):
-                    transform_children.append(child)
-            elif getattr(child, "type", "") == "MESH":
-                if (
-                    bool(child.get("_iedm_skin_parent_override"))
-                    and str(child.get("_iedm_src_render_cls", "") or "") == "SkinNode"
-                    and str(child.get("_iedm_src_render_name", "") or "") == vis_name
-                ):
-                    vis_skin_children.append(child)
+def _restore_skin_visibility_object(vis_ob):
+    """Move skin meshes back under their matching transform helper."""
+    vis_name = str(getattr(vis_ob, "name", "") or "")
+    if not vis_name:
+        return
+    transform_children, vis_skin_children = _matching_visibility_children(
+        vis_ob, vis_name
+    )
+    if len(transform_children) != 1:
+        return
+    helper = transform_children[0]
+    helper_skin_children = _matching_skin_children(helper, vis_name)
+    if not vis_skin_children and not helper_skin_children:
+        return
+    authored_local = _flat_to_matrix(helper.get("IEDM_LOCAL_BL_MAT"))
+    if (
+        authored_local is None
+        or _matrix_close(authored_local, Matrix.Identity(4))
+        or not _ob_local_is_identity(helper)
+        or not _matrix_close(vis_ob.matrix_basis, authored_local)
+    ):
+        return
+    try:
+        vis_ob.matrix_basis = Matrix.Identity(4)
+        helper.matrix_basis = authored_local
+    except Exception as exc:
+        _log.warn("_restore_skin_visibility_transform_basis", exc=exc)
+        return
+    _reparent_visibility_skin_children(vis_skin_children, helper)
+    _tag_visibility_skin_children(helper_skin_children, helper)
 
-        if len(transform_children) != 1:
-            continue
 
-        helper = transform_children[0]
-        helper_skin_children = [
-            child
-            for child in list(getattr(helper, "children", []) or [])
+def _matching_visibility_children(vis_ob, vis_name):
+    transform_children = []
+    skin_children = []
+    for child in list(getattr(vis_ob, "children", []) or []):
+        if getattr(child, "type", "") == "EMPTY":
             if (
-                getattr(child, "type", "") == "MESH"
-                and bool(child.get("_iedm_skin_parent_override"))
-                and str(child.get("_iedm_src_render_cls", "") or "") == "SkinNode"
-                and str(child.get("_iedm_src_render_name", "") or "") == vis_name
-            )
-        ]
-        if not vis_skin_children and not helper_skin_children:
-            continue
+                str(child.get("_iedm_dbg_tf_cls", "") or "") == "TransformNode"
+                and str(child.get("_iedm_dbg_tf_name", "") or "") == vis_name
+            ):
+                transform_children.append(child)
+        elif getattr(child, "type", "") == "MESH" and _is_matching_skin_child(
+            child, vis_name
+        ):
+            skin_children.append(child)
+    return transform_children, skin_children
 
-        authored_local = _flat_to_matrix(helper.get("IEDM_LOCAL_BL_MAT"))
-        if authored_local is None:
-            continue
-        if _matrix_close(authored_local, Matrix.Identity(4)):
-            continue
-        if not _ob_local_is_identity(helper):
-            continue
-        if not _matrix_close(vis_ob.matrix_basis, authored_local):
-            continue
 
+def _matching_skin_children(parent, vis_name):
+    return [
+        child
+        for child in list(getattr(parent, "children", []) or [])
+        if getattr(child, "type", "") == "MESH"
+        and _is_matching_skin_child(child, vis_name)
+    ]
+
+
+def _is_matching_skin_child(child, vis_name):
+    return (
+        bool(child.get("_iedm_skin_parent_override"))
+        and str(child.get("_iedm_src_render_cls", "") or "") == "SkinNode"
+        and str(child.get("_iedm_src_render_name", "") or "") == vis_name
+    )
+
+def _reparent_visibility_skin_children(children, helper):
+    for child in children:
         try:
-            vis_ob.matrix_basis = Matrix.Identity(4)
-            helper.matrix_basis = authored_local
-        except Exception as e:
-            _log.warn("_restore_skin_visibility_transform_basis", exc=e)
+            _reparent_preserve_world(child, helper)
+            child["_iedm_dbg_skin_helper_name"] = helper.name
+        except Exception as exc:
+            _log.warn("_restore_skin_visibility_transform_basis reparent", exc=exc)
+
+def _tag_visibility_skin_children(children, helper):
+    for child in children:
+        try:
+            child["_iedm_dbg_skin_helper_name"] = helper.name
+        except Exception as exc:
+            _log.warn("_restore_skin_visibility_transform_basis tag", exc=exc)
+
+def _has_inverse_scale_child(ob):
+    for child in list(getattr(ob, "children", []) or []):
+        try:
+            loc, rot, scale = child.matrix_basis.decompose()
+        except Exception:
             continue
+        max_scale = max(
+            abs(float(scale.x)), abs(float(scale.y)), abs(float(scale.z))
+        )
+        min_scale = min(
+            abs(float(scale.x)), abs(float(scale.y)), abs(float(scale.z))
+        )
+        if max_scale <= 0.0 or max_scale >= 0.1:
+            continue
+        if min_scale / max_scale < 0.95:
+            continue
+        if (
+            abs(float(loc.x)) > 1e-4
+            or abs(float(loc.y)) > 1e-4
+            or abs(float(loc.z)) > 1e-4
+        ):
+            continue
+        try:
+            if abs(rot.angle) > math.radians(1.0):
+                continue
+        except Exception as exc:
+            _log.debug(
+                "Optional operation failed: {}".format(exc), level=2
+            )
+        if any(
+            getattr(desc, "type", "") == "MESH"
+            for desc in getattr(child, "children_recursive", []) or []
+        ):
+            return True
+    return False
 
-        for mesh_ob in vis_skin_children:
-            try:
-                _reparent_preserve_world(mesh_ob, helper)
-                mesh_ob["_iedm_dbg_skin_helper_name"] = helper.name
-            except Exception as e:
-                _log.warn("_restore_skin_visibility_transform_basis reparent", exc=e)
+def _is_identityish_basis(ob):
+    try:
+        loc, rot, scale = ob.matrix_basis.decompose()
+        if (
+            abs(float(loc.x)) > 1e-4
+            or abs(float(loc.y)) > 1e-4
+            or abs(float(loc.z)) > 1e-4
+        ):
+            return False
+        if (
+            abs(float(scale.x) - 1.0) > 1e-4
+            or abs(float(scale.y) - 1.0) > 1e-4
+            or abs(float(scale.z) - 1.0) > 1e-4
+        ):
+            return False
+        return abs(rot.angle) <= math.radians(1.0)
+    except Exception:
+        return False
 
-        for mesh_ob in helper_skin_children:
-            try:
-                mesh_ob["_iedm_dbg_skin_helper_name"] = helper.name
-            except Exception as e:
-                _log.warn("_restore_skin_visibility_transform_basis tag", exc=e)
-
+def _same_world_rotation(a, b):
+    try:
+        _la, ra, _sa = a.matrix_world.decompose()
+        _lb, rb, _sb = b.matrix_world.decompose()
+        return abs(ra.rotation_difference(rb).angle) <= math.radians(1.0)
+    except Exception:
+        return False
 
 def _fix_inverse_scaled_visibility_rest_offset():
     """Repair inverse-scaled visibility wrapper rest offsets structurally.
@@ -314,68 +378,8 @@ def _fix_inverse_scaled_visibility_rest_offset():
     off object names or a specific EDM file.
     """
 
-    def _has_inverse_scale_child(ob):
-        for child in list(getattr(ob, "children", []) or []):
-            try:
-                loc, rot, scale = child.matrix_basis.decompose()
-            except Exception:
-                continue
-            max_scale = max(
-                abs(float(scale.x)), abs(float(scale.y)), abs(float(scale.z))
-            )
-            min_scale = min(
-                abs(float(scale.x)), abs(float(scale.y)), abs(float(scale.z))
-            )
-            if max_scale <= 0.0 or max_scale >= 0.1:
-                continue
-            if min_scale / max_scale < 0.95:
-                continue
-            if (
-                abs(float(loc.x)) > 1e-4
-                or abs(float(loc.y)) > 1e-4
-                or abs(float(loc.z)) > 1e-4
-            ):
-                continue
-            try:
-                if abs(rot.angle) > math.radians(1.0):
-                    continue
-            except Exception as exc:
-                _log.debug(
-                    "Optional operation failed: {}".format(exc), level=2
-                )
-            if any(
-                getattr(desc, "type", "") == "MESH"
-                for desc in getattr(child, "children_recursive", []) or []
-            ):
-                return True
-        return False
 
-    def _is_identityish_basis(ob):
-        try:
-            loc, rot, scale = ob.matrix_basis.decompose()
-            if (
-                abs(float(loc.x)) > 1e-4
-                or abs(float(loc.y)) > 1e-4
-                or abs(float(loc.z)) > 1e-4
-            ):
-                return False
-            if (
-                abs(float(scale.x) - 1.0) > 1e-4
-                or abs(float(scale.y) - 1.0) > 1e-4
-                or abs(float(scale.z) - 1.0) > 1e-4
-            ):
-                return False
-            return abs(rot.angle) <= math.radians(1.0)
-        except Exception:
-            return False
 
-    def _same_world_rotation(a, b):
-        try:
-            _la, ra, _sa = a.matrix_world.decompose()
-            _lb, rb, _sb = b.matrix_world.decompose()
-            return abs(ra.rotation_difference(rb).angle) <= math.radians(1.0)
-        except Exception:
-            return False
 
     changed = False
     for ob in list(getattr(bpy.data, "objects", []) or []):
@@ -434,16 +438,34 @@ def _fix_inverse_scaled_visibility_rest_offset():
         except Exception as exc:
             _log.debug("Optional operation failed: {}".format(exc), level=2)
 
+def _is_basis_only_rotation(mat, eps=1e-4):
+    try:
+        loc = mat.to_translation()
+        if loc.length > eps:
+            return False
+        scale = mat.to_scale()
+        for s in scale:
+            if abs(s - 1.0) > eps:
+                return False
+        return True
+    except Exception:
+        return False
+
+def _get_root_name(obj):
+    root = obj
+    while getattr(root, "parent", None) is not None:
+        root = root.parent
+    return getattr(root, "name", "")
 
 def _apply_argvis_chain_basis_fix():
-    """Strip erroneous ±90 X basis rotation from intermediate visibility wrappers.
+    """Strip unwanted 90-degree X basis rotations from visibility wrappers.
 
     Some scene-root-authored v10 graphs create visibility wrapper chains where
     intermediate nodes carry only the coordinate system conversion rotation. This
     fix removes the rotation from visibility nodes that:
     1. Are ArgVisibilityNode with an ArgVisibilityNode parent
     2. The parent is a direct child of _EDMFileRoot (or a root-level wrapper)
-    3. The node's matrix is essentially just a ±90 X basis rotation
+    3. The node has a basis-only quarter-turn rotation.
 
     Also handles animated objects (ArgRotationNode children) under ArgVisibilityNode
     parents where the ArgVisibilityNode carries an unnecessary rotation.
@@ -455,85 +477,15 @@ def _apply_argvis_chain_basis_fix():
     if not getattr(_import_ctx, "use_scene_root_basis_object", True):
         return
 
-    def _is_basis_only_rotation(mat, eps=1e-4):
-        try:
-            loc = mat.to_translation()
-            if loc.length > eps:
-                return False
-            scale = mat.to_scale()
-            for s in scale:
-                if abs(s - 1.0) > eps:
-                    return False
-            return True
-        except Exception:
-            return False
 
-    def _get_root_name(obj):
-        root = obj
-        while getattr(root, "parent", None) is not None:
-            root = root.parent
-        return getattr(root, "name", "")
 
     bpy.context.view_layer.update()
 
     case1_fixed = 0
     case2_fixed = 0
     for ob in list(getattr(bpy.data, "objects", []) or []):
-        if getattr(ob, "type", "") != "EMPTY":
-            continue
-
-        parent = getattr(ob, "parent", None)
-        if parent is None:
-            continue
-
-        ob_type = str(ob.get("_iedm_dbg_tf_cls", "") or "")
-        parent_type = str(parent.get("_iedm_dbg_tf_cls", "") or "")
-        root_name = _get_root_name(ob)
-
-        # Case 1: ArgVisibilityNode -> ArgVisibilityNode chain
-        if ob_type == "ArgVisibilityNode" and parent_type == "ArgVisibilityNode":
-            if root_name != "_EDMFileRoot":
-                continue
-
-            mat = ob.matrix_basis
-            if not _is_basis_only_rotation(mat):
-                continue
-
-            if _is_neg90_x_basis_matrix(mat):
-                try:
-                    ob.matrix_basis = _ROOT_BASIS_FIX.inverted() @ ob.matrix_basis
-                    case1_fixed += 1
-                except Exception as e:
-                    _log.warn("_apply_argvis_chain_basis_fix", exc=e)
-            elif _is_pos90_x_basis_matrix(mat):
-                try:
-                    ob.matrix_basis = Matrix.Identity(4)
-                    case1_fixed += 1
-                except Exception as e:
-                    _log.warn("_apply_argvis_chain_basis_fix pos90", exc=e)
-
-        # Case 2: animated child under a parent with a basis-only rotation.
-        elif parent_type == "ArgVisibilityNode":
-            if root_name != "_EDMFileRoot":
-                continue
-
-            parent_mat = parent.matrix_basis
-            if not _is_basis_only_rotation(parent_mat):
-                continue
-
-            scale = ob.scale
-            if scale.length < 0.1:
-                continue
-
-            try:
-                if _is_neg90_x_basis_matrix(parent_mat):
-                    ob.matrix_basis = _ROOT_BASIS_FIX @ ob.matrix_basis
-                    case2_fixed += 1
-                elif _is_pos90_x_basis_matrix(parent_mat):
-                    ob.matrix_basis = _ROOT_BASIS_FIX.inverted() @ ob.matrix_basis
-                    case2_fixed += 1
-            except Exception as e:
-                _log.warn("_apply_argvis_chain_basis_fix animated", exc=e)
+        case1_fixed += _fix_argvis_wrapper_rotation(ob)
+        case2_fixed += _fix_argvis_child_rotation(ob)
 
     _log.debug(
         "_apply_argvis_chain_basis_fix: case1_fixed={}, case2_fixed={}".format(
@@ -541,3 +493,51 @@ def _apply_argvis_chain_basis_fix():
         ),
         level=1,
     )
+
+def _fix_argvis_wrapper_rotation(ob):
+    """Remove a basis-only rotation from a root visibility wrapper."""
+    parent = getattr(ob, "parent", None)
+    if getattr(ob, "type", "") != "EMPTY" or parent is None:
+        return 0
+    if (
+        str(ob.get("_iedm_dbg_tf_cls", "") or "") != "ArgVisibilityNode"
+        or str(parent.get("_iedm_dbg_tf_cls", "") or "") != "ArgVisibilityNode"
+        or _get_root_name(ob) != "_EDMFileRoot"
+    ):
+        return 0
+    matrix = ob.matrix_basis
+    if not _is_basis_only_rotation(matrix):
+        return 0
+    try:
+        if _is_neg90_x_basis_matrix(matrix):
+            ob.matrix_basis = _ROOT_BASIS_FIX.inverted() @ matrix
+            return 1
+        if _is_pos90_x_basis_matrix(matrix):
+            ob.matrix_basis = Matrix.Identity(4)
+            return 1
+    except Exception as exc:
+        _log.warn("_apply_argvis_chain_basis_fix", exc=exc)
+    return 0
+
+def _fix_argvis_child_rotation(ob):
+    """Correct a scaled child under a rotated root visibility wrapper."""
+    parent = getattr(ob, "parent", None)
+    if getattr(ob, "type", "") != "EMPTY" or parent is None:
+        return 0
+    if str(parent.get("_iedm_dbg_tf_cls", "") or "") != "ArgVisibilityNode":
+        return 0
+    if _get_root_name(ob) != "_EDMFileRoot":
+        return 0
+    parent_matrix = parent.matrix_basis
+    if not _is_basis_only_rotation(parent_matrix) or ob.scale.length < 0.1:
+        return 0
+    try:
+        if _is_neg90_x_basis_matrix(parent_matrix):
+            ob.matrix_basis = _ROOT_BASIS_FIX @ ob.matrix_basis
+            return 1
+        if _is_pos90_x_basis_matrix(parent_matrix):
+            ob.matrix_basis = _ROOT_BASIS_FIX.inverted() @ ob.matrix_basis
+            return 1
+    except Exception as exc:
+        _log.warn("_apply_argvis_chain_basis_fix animated", exc=exc)
+    return 0

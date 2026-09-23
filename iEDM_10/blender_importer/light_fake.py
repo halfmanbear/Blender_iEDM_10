@@ -145,66 +145,7 @@ def create_fake_spot_lights(node):
     """Create a mesh object for FakeSpotLightsNode."""
     name = node.name or "FakeSpotLights"
 
-    positions = []
-    dirs_bl = []
-    sizes = []
-    two_sided = False
-    for i, entry in enumerate(node.data):
-        pos_edm = entry["position"]
-        positions.append(vector_to_blender(pos_edm))
-
-        # Direction is more reliable in parentData than the currently-partial raw
-        # fake-spot entry parser.
-        dir_edm = None
-        if i < len(getattr(node, "parentData", [])):
-            pd = node.parentData[i]
-            if len(pd) >= 3:
-                cand = pd[2]
-                try:
-                    if all(math.isfinite(float(v)) for v in cand):
-                        dir_edm = tuple(float(v) for v in cand)
-                except Exception:
-                    dir_edm = None
-        if dir_edm is None:
-            cand = getattr(node, "trailing_direction", None)
-            if cand is not None:
-                try:
-                    if all(math.isfinite(float(v)) for v in cand):
-                        dir_edm = tuple(float(v) for v in cand)
-                except Exception:
-                    dir_edm = None
-        if dir_edm is None:
-            cand = entry.get("direction")
-            try:
-                if cand is not None and all(math.isfinite(float(v)) for v in cand):
-                    dir_edm = tuple(float(v) for v in cand)
-            except Exception:
-                dir_edm = None
-        if dir_edm is None:
-            dir_edm = (1.0, 0.0, 0.0)
-
-        dvec = vector_to_blender(dir_edm)
-        if dvec.length <= 1e-8:
-            dvec = Vector((1.0, 0.0, 0.0))
-        else:
-            dvec.normalize()
-        dirs_bl.append(dvec)
-
-        s = entry.get("size", 0.0)
-        try:
-            s = abs(float(s))
-        except Exception:
-            s = 0.0
-        if not math.isfinite(s) or s <= 1e-6:
-            s = 0.1
-        sizes.append(s)
-        if entry.get("back_side") is True:
-            two_sided = True
-        elif "flag" in entry:
-            try:
-                two_sided = two_sided or bool(int(entry.get("flag", 0)) & 0x1)
-            except Exception:
-                _logger.debug("Ignoring optional operation failure", exc_info=True)
+    positions, dirs_bl, sizes, two_sided = _collect_fake_spot_data(node)
 
     if not positions:
         ob = bpy.data.objects.new(name, None)
@@ -215,14 +156,7 @@ def create_fake_spot_lights(node):
         return ob
 
     mode = _classify_fake_spot_mode(positions, dirs_bl)
-    if mode == "non_surface_box":
-        mesh = _create_axis_box_mesh(name, positions)
-        if mesh is None:
-            mesh = _create_fake_light_mesh(name, positions)
-    elif mode == "non_surface_points":
-        mesh = _create_fake_light_mesh(name, positions)
-    else:
-        mesh = _create_surface_spot_mesh(name, positions, dirs_bl, sizes)
+    mesh = _create_fake_spot_mesh(name, mode, positions, dirs_bl, sizes)
 
     ob = bpy.data.objects.new(name, mesh)
     _set_official_special_type(ob, "FAKE_LIGHT")
@@ -233,18 +167,7 @@ def create_fake_spot_lights(node):
         mesh.materials.clear()
         mesh.materials.append(fake_mat)
 
-    if hasattr(ob, "EDMProps"):
-        ob.EDMProps.SURFACE_MODE = mode == "surface"
-        ob.EDMProps.TWO_SIDED = bool(two_sided)
-        ob.EDMProps.SIZE = float(sizes[0]) if sizes else 0.1
-        if mode != "surface":
-            front_lb, front_rt, back_lb, back_rt = _default_fake_spot_uvs(
-                bool(two_sided)
-            )
-            ob.EDMProps.UV_LB = front_lb
-            ob.EDMProps.UV_RT = front_rt
-            ob.EDMProps.UV_LB_BACK = back_lb
-            ob.EDMProps.UV_RT_BACK = back_rt
+    _set_fake_spot_properties(ob, mode, sizes, two_sided)
     if _has_animated_fake_omni_payload(node):
         _apply_animated_fake_omni_brightness(
             ob, node, len(node.data), verts_per_light=4 if mode == "surface" else 1
@@ -259,6 +182,88 @@ def create_fake_spot_lights(node):
             ob, direction, distance=max(1.0, float(sizes[0]) * 0.5 if sizes else 1.0)
         )
     return ob
+
+
+def _collect_fake_spot_data(node):
+    """Convert parsed position, direction, size and side flags for each light."""
+    positions, directions, sizes = [], [], []
+    two_sided = False
+    for index, entry in enumerate(node.data):
+        positions.append(vector_to_blender(entry["position"]))
+        direction = _fake_spot_direction(node, entry, index)
+        vector = vector_to_blender(direction)
+        if vector.length <= 1e-8:
+            vector = Vector((1.0, 0.0, 0.0))
+        else:
+            vector.normalize()
+        directions.append(vector)
+        sizes.append(_fake_spot_size(entry))
+        two_sided = two_sided or _fake_spot_is_two_sided(entry)
+    return positions, directions, sizes, two_sided
+
+
+def _fake_spot_direction(node, entry, index):
+    """Choose the best finite source direction, preferring parent metadata."""
+    candidates = []
+    parent_data = getattr(node, "parentData", [])
+    if index < len(parent_data) and len(parent_data[index]) >= 3:
+        candidates.append(parent_data[index][2])
+    candidates.extend(
+        (getattr(node, "trailing_direction", None), entry.get("direction"))
+    )
+    for candidate in candidates:
+        try:
+            if candidate is not None and all(
+                math.isfinite(float(v)) for v in candidate
+            ):
+                return tuple(float(v) for v in candidate)
+        except Exception:  # noqa: S112 - skip malformed optional direction candidates.
+            continue
+    return (1.0, 0.0, 0.0)
+
+
+def _fake_spot_size(entry):
+    """Return a positive finite spot size, using the importer default otherwise."""
+    try:
+        size = abs(float(entry.get("size", 0.0)))
+    except Exception:
+        return 0.1
+    return size if math.isfinite(size) and size > 1e-6 else 0.1
+
+
+def _fake_spot_is_two_sided(entry):
+    if entry.get("back_side") is True:
+        return True
+    try:
+        return bool(int(entry.get("flag", 0)) & 0x1)
+    except Exception:
+        _logger.debug("Ignoring optional operation failure", exc_info=True)
+        return False
+
+
+def _create_fake_spot_mesh(name, mode, positions, directions, sizes):
+    if mode == "non_surface_box":
+        mesh = _create_axis_box_mesh(name, positions)
+        return mesh if mesh is not None else _create_fake_light_mesh(name, positions)
+    if mode == "non_surface_points":
+        return _create_fake_light_mesh(name, positions)
+    return _create_surface_spot_mesh(name, positions, directions, sizes)
+
+
+def _set_fake_spot_properties(ob, mode, sizes, two_sided):
+    if not hasattr(ob, "EDMProps"):
+        return
+    props = ob.EDMProps
+    props.SURFACE_MODE = mode == "surface"
+    props.TWO_SIDED = bool(two_sided)
+    props.SIZE = float(sizes[0]) if sizes else 0.1
+    if mode == "surface":
+        return
+    front_lb, front_rt, back_lb, back_rt = _default_fake_spot_uvs(bool(two_sided))
+    props.UV_LB = front_lb
+    props.UV_RT = front_rt
+    props.UV_LB_BACK = back_lb
+    props.UV_RT_BACK = back_rt
 
 
 def create_fake_als_lights(node):

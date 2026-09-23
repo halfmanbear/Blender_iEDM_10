@@ -94,65 +94,8 @@ class EDMFile(object):
 
             node.set_parent(self.nodes[parent])
 
-        # Read the renderable objects
         objects = _read_main_object_dictionary(reader)
-        logger.debug("EDM object categories: %s", list(objects.keys()))
-        self.connectors = objects.get("CONNECTORS", [])
-        self.shellNodes = objects.get("SHELL_NODES", [])
-        self.lightNodes = objects.get("LIGHT_NODES", [])
-        for node_list in objects.values():
-            for node in node_list:
-                prepare = getattr(node, "prepare", None)
-                if callable(prepare):
-                    try:
-                        prepare(self.nodes, self.root.materials)
-                    except Exception as exc:
-                        logger.warning(
-                            "Prepare failed for %s '%s' (%s: %s)",
-                            type(node).__name__,
-                            getattr(node, "name", ""),
-                            type(exc).__name__,
-                            exc,
-                        )
-        self.renderNodes = []
-        # Split any renderNodes as one may contain several objects
-        for node in objects.get("RENDER_NODES", []):
-            if isinstance(node, RenderNode):
-                for splitNode in node.split():
-                    self.renderNodes.append(splitNode)
-            else:
-                self.renderNodes.append(node)
-
-        # v10 stores NumberNode mesh payloads in a trailing post-section after the
-        # main object dictionary. Bind payload blocks onto NumberNode placeholders.
-        if reader.v10:
-            number_nodes = [
-                n
-                for n in self.renderNodes
-                if isinstance(n, NumberNode)
-                and not getattr(n, "_post_payload_read", False)
-            ]
-            if number_nodes:
-                payload_error = False
-                for n in number_nodes:
-                    # Bail out safely if payload is not available/parseable.
-                    pos = reader.tell()
-                    try:
-                        n.read_v10_payload(reader)
-                    except Exception as exc:
-                        payload_error = True
-                        reader.seek(pos)
-                        logger.warning(
-                            "NumberNode post-payload parse failed (%s: %s); "
-                            "skipping remaining NumberNode payloads.",
-                            type(exc).__name__,
-                            exc,
-                        )
-                        break
-                if payload_error:
-                    for n in number_nodes:
-                        if not getattr(n, "_post_payload_read", False):
-                            n.parent = None
+        self._read_render_nodes(reader, objects, NumberNode, RenderNode)
 
         # ClassReader10_loadRoot ends cleanly after the sections loop — there is no
         # trailing data written by standard DCS World EDM tooling.
@@ -184,6 +127,66 @@ class EDMFile(object):
         self._link_objects()
 
         self._validate_indexes(reader)
+
+    def _read_render_nodes(self, reader, objects, number_node_type, render_node_type):
+        """Prepare parsed objects, split render chunks and read trailing payloads."""
+        logger.debug("EDM object categories: %s", list(objects.keys()))
+        self.connectors = objects.get("CONNECTORS", [])
+        self.shellNodes = objects.get("SHELL_NODES", [])
+        self.lightNodes = objects.get("LIGHT_NODES", [])
+        for node_list in objects.values():
+            for node in node_list:
+                prepare = getattr(node, "prepare", None)
+                if callable(prepare):
+                    try:
+                        prepare(self.nodes, self.root.materials)
+                    except Exception as exc:
+                        logger.warning(
+                            "Prepare failed for %s '%s' (%s: %s)",
+                            type(node).__name__,
+                            getattr(node, "name", ""),
+                            type(exc).__name__,
+                            exc,
+                        )
+        self.renderNodes = []
+        for node in objects.get("RENDER_NODES", []):
+            if isinstance(node, render_node_type):
+                self.renderNodes.extend(node.split())
+            else:
+                self.renderNodes.append(node)
+
+        if reader.v10:
+            self._read_number_node_payloads(reader, number_node_type)
+
+    def _read_number_node_payloads(self, reader, number_node_type):
+        """Read trailing v10 mesh payloads for NumberNode placeholders."""
+        number_nodes = [
+            node
+            for node in self.renderNodes
+            if isinstance(node, number_node_type)
+            and not getattr(node, "_post_payload_read", False)
+        ]
+        if not number_nodes:
+            return
+        payload_error = False
+        for node in number_nodes:
+            position = reader.tell()
+            try:
+                node.read_v10_payload(reader)
+            except Exception as exc:
+                payload_error = True
+                reader.seek(position)
+                logger.warning(
+                    "NumberNode post-payload parse failed (%s: %s); "
+                    "skipping remaining NumberNode payloads.",
+                    type(exc).__name__,
+                    exc,
+                )
+                break
+        if payload_error:
+            for node in number_nodes:
+                if not getattr(node, "_post_payload_read", False):
+                    node.parent = None
 
     def _link_objects(self):
         # Set up parents and other links (e.g. material, bone...)

@@ -79,167 +79,96 @@ def _compact_visibility_identity_intermediate(node):
     """
     if node is None or not getattr(node, "blender", None):
         return
-    _renderless_helper_mode = getattr(node, "render", None) is None and isinstance(
+    renderless = getattr(node, "render", None) is None and isinstance(
         getattr(node, "transform", None), TransformNode
     )
-    if getattr(node, "render", None) is None and not _renderless_helper_mode:
+    if getattr(node, "render", None) is None and not renderless:
         return
-
-    fake_obj = node.blender
-
-    def _trace(msg):
+    fake_obj = None if renderless else node.blender
+    helper_obj = node.blender if renderless else getattr(fake_obj, "parent", None)
+    if not renderless and (
+        helper_obj is None or getattr(helper_obj, "type", None) != "EMPTY"
+    ):
         return
-
-    if _renderless_helper_mode:
-        helper_obj = node.blender
-        fake_obj = None
-        _trace("renderless-helper mode")
-    else:
-        helper_obj = getattr(fake_obj, "parent", None)
-        if helper_obj is None or getattr(helper_obj, "type", None) != "EMPTY":
-            _trace(
-                "skip helper_obj parent missing/non-empty type={}".format(
-                    getattr(helper_obj, "type", None) if helper_obj else None
-                )
-            )
-            return
-    _trace(
-        "objs helper={} helper_parent={}".format(
-            getattr(helper_obj, "name", None),
-            getattr(getattr(helper_obj, "parent", None), "name", None),
-        )
-    )
-    # Graph chain starts at the helper transform (current renderless node or
-    # parent of the render node).
-    helper_graph = node if _renderless_helper_mode else getattr(node, "parent", None)
-    if helper_graph is None:
-        _trace("skip helper_graph missing")
-        return
-    if not isinstance(
+    helper_graph = node if renderless else getattr(node, "parent", None)
+    if helper_graph is None or not isinstance(
         getattr(helper_graph, "transform", None), (TransformNode, AnimatingNode)
     ):
-        _trace(
-            "skip helper_graph type={}".format(
-                type(getattr(helper_graph, "transform", None)).__name__
-            )
-        )
         return
-    _trace(
-        "graph helper_tf={} parent_tf={}".format(
-            type(getattr(helper_graph, "transform", None)).__name__,
-            type(
-                getattr(getattr(helper_graph, "parent", None), "transform", None)
-            ).__name__
-            if getattr(helper_graph, "parent", None)
-            else None,
+    parent_graph = getattr(helper_graph, "parent", None)
+    if isinstance(getattr(parent_graph, "transform", None), ArgVisibilityNode):
+        _compact_legacy_visibility_helper(
+            helper_obj, fake_obj, renderless, helper_graph, parent_graph
         )
-    )
+    else:
+        _compact_nested_visibility_helper(
+            helper_obj, fake_obj, renderless, parent_graph
+        )
 
-    # Case 1: v_* -> identity helper -> fake-light (legacy helper compaction)
-    helper_parent_graph = getattr(helper_graph, "parent", None)
-    if isinstance(getattr(helper_parent_graph, "transform", None), ArgVisibilityNode):
-        vis_name = str(
-            getattr(getattr(helper_parent_graph, "transform", None), "name", "") or ""
-        )
-        if not vis_name.startswith(
-            ("Cylinder", "Fspot", "Omni", "Omni_l", "Box", "ChamferBox", "Object")
-        ):
-            _trace("skip case1 vis_name={!r}".format(vis_name))
-            return
-        semantic_obj = getattr(helper_obj, "parent", None)
-        helper_local = _get_local(helper_obj)
-        if (
-            semantic_obj is not None
-            and getattr(semantic_obj, "type", None) == "EMPTY"
-            and not _has_object_animation(helper_obj)
-            and helper_local is not None
-            and not _is_identity_matrix_approx(helper_local)
-            and _is_identity_matrix_approx(semantic_obj.matrix_basis)
-            # Hoisting moves every sibling. Blender children do not exist yet at
-            # this point, so the graph decides whether the helper is alone.
-            and len(getattr(helper_parent_graph, "children", []) or []) == 1
-        ):
-            if _set_local(semantic_obj, helper_local):
-                _trace("case1 moved helper_local to semantic")
-                _set_local(helper_obj, Matrix.Identity(4))
-                _collapse_redundant_helper_empty(
-                    helper_obj, semantic_obj, fake_obj, _renderless_helper_mode
-                )
-                return
-        if not _has_object_animation(helper_obj) and _is_identity_matrix_approx(
-            helper_obj.matrix_basis
-        ):
-            fake_local = _get_local(fake_obj) if fake_obj is not None else None
-            if fake_local is not None and not _is_identity_matrix_approx(fake_local):
-                if _set_local(helper_obj, fake_local):
-                    _trace("case1 moved fake_local to helper")
-                    _set_local(fake_obj, Matrix.Identity(4))
-            else:
-                _trace("case1 fake_local none/identity")
-        else:
-            _trace("case1 helper animated or non-identity helper_basis")
+
+def _compact_legacy_visibility_helper(
+    helper_obj, fake_obj, renderless, helper_graph, parent_graph
+):
+    """Handle v_* -> identity helper -> fake-light chains."""
+    visibility_name = str(getattr(parent_graph.transform, "name", "") or "")
+    if not _is_fake_light_visibility_name(visibility_name):
         return
+    semantic_obj = getattr(helper_obj, "parent", None)
+    helper_local = _get_local(helper_obj)
+    if (
+        semantic_obj is not None
+        and getattr(semantic_obj, "type", None) == "EMPTY"
+        and not _has_object_animation(helper_obj)
+        and helper_local is not None
+        and not _is_identity_matrix_approx(helper_local)
+        and _is_identity_matrix_approx(semantic_obj.matrix_basis)
+        and len(getattr(parent_graph, "children", []) or []) == 1
+        and _set_local(semantic_obj, helper_local)
+    ):
+        _set_local(helper_obj, Matrix.Identity(4))
+        _collapse_redundant_helper_empty(helper_obj, semantic_obj, fake_obj, renderless)
+        return
+    if _has_object_animation(helper_obj) or not _is_identity_matrix_approx(
+        helper_obj.matrix_basis
+    ):
+        return
+    fake_local = _get_local(fake_obj) if fake_obj is not None else None
+    if fake_local is not None and not _is_identity_matrix_approx(fake_local):
+        if _set_local(helper_obj, fake_local):
+            _set_local(fake_obj, Matrix.Identity(4))
 
-    # Case 2: v_* -> semantic(identity) -> transformed helper -> fake-light
-    semantic_graph = helper_parent_graph
+
+def _compact_nested_visibility_helper(helper_obj, fake_obj, renderless, semantic_graph):
+    """Handle v_* -> semantic -> transformed helper -> fake-light chains."""
     if semantic_graph is None or not isinstance(
         getattr(semantic_graph, "transform", None), (TransformNode, AnimatingNode)
     ):
-        _trace(
-            "skip case2 semantic_graph tf={}".format(
-                type(getattr(semantic_graph, "transform", None)).__name__
-                if semantic_graph
-                else None
-            )
-        )
         return
     vis_graph = getattr(semantic_graph, "parent", None)
     if vis_graph is None or not isinstance(
         getattr(vis_graph, "transform", None), ArgVisibilityNode
     ):
-        _trace(
-            "skip case2 vis_graph tf={}".format(
-                type(getattr(vis_graph, "transform", None)).__name__
-                if vis_graph
-                else None
-            )
-        )
         return
-    vis_name = str(getattr(getattr(vis_graph, "transform", None), "name", "") or "")
-    if not vis_name.startswith(
-        ("Cylinder", "Fspot", "Omni", "Omni_l", "Box", "ChamferBox", "Object")
-    ):
-        _trace("skip case2 vis_name={!r}".format(vis_name))
+    if not _is_fake_light_visibility_name(getattr(vis_graph.transform, "name", "")):
         return
-
     semantic_obj = getattr(helper_obj, "parent", None)
     if semantic_obj is None or getattr(semantic_obj, "type", None) != "EMPTY":
-        _trace(
-            "skip case2 semantic_obj missing/non-empty type={}".format(
-                getattr(semantic_obj, "type", None) if semantic_obj else None
-            )
-        )
         return
     if _has_object_animation(helper_obj):
-        _trace("skip case2 helper animated")
         return
-
     helper_local = _get_local(helper_obj)
     if helper_local is None or _is_identity_matrix_approx(helper_local):
-        _trace("skip case2 helper_local none/identity")
         return
     if not _is_identity_matrix_approx(semantic_obj.matrix_basis):
-        _trace("skip case2 semantic basis non-identity")
         return
-    # Hoisting moves every sibling. Blender children do not exist yet at this
-    # point, so the graph decides whether the helper is alone.
     if len(getattr(semantic_graph, "children", []) or []) != 1:
-        _trace("skip case2 semantic has siblings")
         return
-
     if _set_local(semantic_obj, helper_local):
-        _trace("case2 moved helper_local to semantic")
         _set_local(helper_obj, Matrix.Identity(4))
-        _collapse_redundant_helper_empty(
-            helper_obj, semantic_obj, fake_obj, _renderless_helper_mode
-        )
+        _collapse_redundant_helper_empty(helper_obj, semantic_obj, fake_obj, renderless)
+
+
+def _is_fake_light_visibility_name(name):
+    return str(name or "").startswith(
+        ("Cylinder", "Fspot", "Omni", "Omni_l", "Box", "ChamferBox", "Object")
+    )

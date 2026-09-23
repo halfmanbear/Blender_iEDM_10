@@ -65,8 +65,6 @@ def _collect_diagnostic_counts(edm, graph):
 
 def _print_import_diagnostics(edm, graph):
     """Print summary of EDM node types found vs Blender objects created."""
-    from collections import Counter
-
     (
         edm_counts,
         created_counts,
@@ -78,6 +76,22 @@ def _print_import_diagnostics(edm, graph):
         split_child_total,
     ) = _collect_diagnostic_counts(edm, graph)
     print("\n--- Import Diagnostics ---")
+    _print_node_count_diagnostics(
+        edm_counts, created_counts, source_type_counts, shell_layout_counts
+    )
+    _print_root_diagnostics(edm)
+    _print_billboard_diagnostics(edm)
+    _print_split_layout_diagnostics(
+        split_layout_counts, skipped_empty, split_layout_examples
+    )
+    print(f"Total Blender objects: {len([o for o in bpy.data.objects])}")
+    print("--- End Diagnostics ---\n")
+
+
+def _print_node_count_diagnostics(
+    edm_counts, created_counts, source_type_counts, shell_layout_counts
+):
+    """Print parsed and created node totals by type."""
     print("EDM render nodes by type:")
     for name, count in sorted(edm_counts.items()):
         print(f"  {name}: {count}")
@@ -92,6 +106,8 @@ def _print_import_diagnostics(edm, graph):
         print("Shell-family fallback layouts:")
         for name, count in sorted(shell_layout_counts.items()):
             print(f"  {name}: {count}")
+def _print_root_diagnostics(edm):
+    """Print optional root bounding boxes and header values."""
     root = getattr(edm, "root", None)
     if root is not None:
         print("Root boxes:")
@@ -103,6 +119,8 @@ def _print_import_diagnostics(edm, graph):
             print(f"  light_box: {root.light_box}")
         print(f"  unknownC: {getattr(root, 'unknownC', None)}")
         print(f"  maxArgPlusOne: {getattr(root, 'maxArgPlusOne', None)}")
+def _print_billboard_diagnostics(edm):
+    """Print a short sample of parsed billboard payload summaries."""
     billboard_nodes = [
         node
         for node in iterate_all_objects(edm)
@@ -119,6 +137,10 @@ def _print_import_diagnostics(edm, graph):
                     summary.get("tail_u16"),
                 )
             )
+def _print_split_layout_diagnostics(split_layout_counts, skipped_empty, examples):
+    """Print render split statistics and optional layout details."""
+    from collections import Counter
+
     if split_layout_counts:
         print("RenderNode split layouts:")
         for name, count in sorted(split_layout_counts.items()):
@@ -127,11 +149,11 @@ def _print_import_diagnostics(edm, graph):
         print(f"  Skipped (empty indexData / no handler): {skipped_empty}")
     if (
         getattr(_import_ctx, "render_split_debug", {}).get("enabled")
-        and split_layout_examples
+        and examples
     ):
         print("RenderNode split details:")
-        for mode in sorted(split_layout_examples):
-            node = split_layout_examples[mode]
+        for mode in sorted(examples):
+            node = examples[mode]
             layout = getattr(node, "parentData_layout", {}) or {}
             parent_data = getattr(node, "parentData", None) or []
             index_count = len(getattr(node, "indexData", []) or [])
@@ -159,5 +181,3 @@ def _print_import_diagnostics(edm, graph):
             )
             if parent_data:
                 print(f"    parentData={parent_data}")
-    print(f"Total Blender objects: {len([o for o in bpy.data.objects])}")
-    print("--- End Diagnostics ---\n")

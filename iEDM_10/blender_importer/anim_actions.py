@@ -117,7 +117,6 @@ def _frame_value_components(value):
         except Exception:
             return ()
 
-
 def _frame_values_close(a, b, eps=1e-5):
     av = _frame_value_components(a)
     bv = _frame_value_components(b)
@@ -131,10 +130,8 @@ def _frame_values_close(a, b, eps=1e-5):
         return all(abs(x + y) <= eps for x, y in zip(av, bv, strict=False))
     return False
 
-
 def _is_plain_root_unit_interval_argrot(node):
     return _plain_root_unit_interval_rot_sets(node) is not None
-
 
 def _scale_orientation_quaternion(value):
     if hasattr(value, "to_matrix"):
@@ -142,7 +139,6 @@ def _scale_orientation_quaternion(value):
     comps = tuple(float(v) for v in value[:4])
     # Scale orientation keys are stored as (x, y, z, w).
     return Quaternion((comps[3], comps[0], comps[1], comps[2]))
-
 
 def _compose_oriented_scale_matrix(scale_vec, orientation_quat):
     scale_mat = MatrixScale(Vector((scale_vec[0], scale_vec[1], scale_vec[2])))
@@ -156,7 +152,6 @@ def _compose_oriented_scale_matrix(scale_vec, orientation_quat):
     orient_mat = orient.to_matrix().to_4x4()
     return orient_mat @ scale_mat @ orient_mat.inverted()
 
-
 def _action_chain_sort_value(action, default=-1):
     if action is None:
         return default
@@ -164,7 +159,6 @@ def _action_chain_sort_value(action, default=-1):
         return int(action.get("_iedm_chain_sort", default))
     except Exception:
         return default
-
 
 def _sorted_transform_actions_for_execution(actions):
     transform_actions = list(actions or [])
@@ -178,7 +172,6 @@ def _sorted_transform_actions_for_execution(actions):
         ),
         reverse=True,
     )
-
 
 def _needs_multi_arg_rotation_helper_split(node):
     tf = getattr(node, "transform", None)
@@ -195,7 +188,6 @@ def _needs_multi_arg_rotation_helper_split(node):
                 args.add(arg)
     return len(args) > 1
 
-
 def _has_nonidentity_scale_orientation_keys(keys4):
     for key in list(keys4 or []):
         try:
@@ -208,7 +200,6 @@ def _has_nonidentity_scale_orientation_keys(keys4):
         if not _quat_is_identity(quat):
             return True
     return False
-
 
 def _copy_fcurve_points_local(src_curve, dst_curve):
     for kp in src_curve.keyframe_points:
@@ -228,7 +219,6 @@ def _copy_fcurve_points_local(src_curve, dst_curve):
             _log.debug(
                 "Could not copy animation keyframe metadata: {}".format(exc), level=2
             )
-
 
 def _clone_action_filtered(
     action, name_suffix="", exclude_paths=None, include_paths=None
@@ -259,7 +249,6 @@ def _clone_action_filtered(
             _log.debug("Could not remove empty cloned action: {}".format(exc), level=2)
         return None
     return cloned
-
 
 def _create_scale_orientation_rotation_action(
     name, keys4, frame_mapper=None, invert=False
@@ -292,7 +281,6 @@ def _create_scale_orientation_rotation_action(
         except Exception as exc:
             _log.debug("Could not update animation curve: {}".format(exc), level=2)
     return action
-
 
 def _build_arganimation_action(
     node,
@@ -409,7 +397,6 @@ def _build_arganimation_action(
     )
     _finalize_authored_transform_action(action)
     return action
-
 
 def create_arganimation_actions(node):
     "Creates a set of actions to represent an ArgAnimationNode"
@@ -531,7 +518,6 @@ def create_arganimation_actions(node):
         )
     return actions
 
-
 def get_actions_for_node(node):
     """Accepts a node and gets or creates actions to apply their animations"""
     if hasattr(node, "actions") and node.actions:
@@ -544,7 +530,6 @@ def get_actions_for_node(node):
             actions = create_arganimation_actions(node)
         node.actions = actions
     return actions
-
 
 def _clear_object_animation_tracks(ob):
     if ob is None:
@@ -564,7 +549,6 @@ def _clear_object_animation_tracks(ob):
     except Exception as exc:
         _log.debug("Could not clear NLA tracks: {}".format(exc), level=2)
 
-
 def _action_has_visibility_curve(action):
     if action is None:
         return False
@@ -572,7 +556,6 @@ def _action_has_visibility_curve(action):
         return action_fcurves(action).find("VISIBLE") is not None
     except Exception:
         return False
-
 
 def _build_nonarmature_action_plan(transform_actions, vis_actions):
     grouped = {}
@@ -590,7 +573,6 @@ def _build_nonarmature_action_plan(transform_actions, vis_actions):
         if merged:
             planned.append(merged[0])
     return planned
-
 
 def _collect_merged_transform_actions_for_graph_node(node, ctx=None):
     ctx = ctx or (_import_ctx.bone_import_ctx or {})
@@ -630,7 +612,6 @@ def _collect_merged_transform_actions_for_graph_node(node, ctx=None):
             if extra_tf is not tf:
                 actions.extend(get_actions_for_node(extra_tf))
     return _merge_actions_by_argument(actions)
-
 
 def _visibility_source_for_graph_node(node):
     tf = getattr(node, "transform", None)

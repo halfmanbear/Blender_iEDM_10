@@ -420,76 +420,85 @@ def _rewrite_oriented_scale_controls(graph):
                 pre_base["_iedm_oriented_scale_helper"] = True
                 child = pre_base
 
-        _sanim_arg_pfx = "{}_".format(int(scale_arg)) if scale_arg is not None else ""
-        if has_anim_scale:
-            if has_anim_orient:
-                post_anim = _insert_parent_wrapper_object(
-                    child,
-                    "{}_iedm_sanim_post".format(ob.name),
-                    Matrix.Identity(4),
-                    reset_child_local=False,
-                )
-                post_anim.rotation_mode = "QUATERNION"
-                post_anim["_iedm_oriented_scale_helper"] = True
-                post_action = _create_scale_orientation_rotation_action(
-                    "{}{}_iedm_sanim_post".format(_sanim_arg_pfx, ob.name),
-                    keys4,
-                    frame_mapper=frame_mapper,
-                    invert=True,
-                )
-                if post_action is not None:
-                    if scale_arg is not None and hasattr(post_action, "argument"):
-                        post_action.argument = int(scale_arg)
-                    _assign_action(post_anim, post_action)
-                child = post_anim
-
-            anim_scale = _insert_parent_wrapper_object(
-                child,
-                "{}_iedm_sanim".format(ob.name),
-                Matrix.Identity(4),
-                reset_child_local=False,
-            )
-            anim_scale["_iedm_oriented_scale_helper"] = True
-            anim_scale_action = bpy.data.actions.new(
-                "{}{}_iedm_sanim".format(_sanim_arg_pfx, ob.name)
-            )
-            if scale_arg is not None and hasattr(anim_scale_action, "argument"):
-                anim_scale_action.argument = int(scale_arg)
-            add_scale_fcurves(
-                anim_scale_action, keys3, frame_mapper=frame_mapper, base_scale=None
-            )
-            if len(action_fcurves(anim_scale_action)):
-                _assign_action(anim_scale, anim_scale_action)
-            else:
-                try:
-                    bpy.data.actions.remove(anim_scale_action)
-                except Exception as exc:
-                    _log.debug(
-                        "Optional operation failed: {}".format(exc), level=2
-                    )
-            child = anim_scale
-
-            if has_anim_orient:
-                pre_anim = _insert_parent_wrapper_object(
-                    child,
-                    "{}_iedm_sanim_pre".format(ob.name),
-                    Matrix.Identity(4),
-                    reset_child_local=False,
-                )
-                pre_anim.rotation_mode = "QUATERNION"
-                pre_anim["_iedm_oriented_scale_helper"] = True
-                pre_action = _create_scale_orientation_rotation_action(
-                    "{}{}_iedm_sanim_pre".format(_sanim_arg_pfx, ob.name),
-                    keys4,
-                    frame_mapper=frame_mapper,
-                    invert=False,
-                )
-                if pre_action is not None:
-                    if scale_arg is not None and hasattr(pre_action, "argument"):
-                        pre_action.argument = int(scale_arg)
-                    _assign_action(pre_anim, pre_action)
-                child = pre_anim
+        child = _create_animated_scale_chain(
+            child, ob, scale_arg, keys3, keys4, has_anim_scale, has_anim_orient
+        )
 
         _finish_oriented_scale_rewrite(
             node, source_tf, ob, top_wrapper, render_local, leaf_vis_action
         )
+
+
+def _create_animated_scale_chain(
+    child, obj, scale_arg, scale_keys, orientation_keys, has_scale, has_orientation
+):
+    """Wrap an object in the authored animated scale/orientation action chain."""
+    if not has_scale:
+        return child
+    argument_prefix = "{}_".format(int(scale_arg)) if scale_arg is not None else ""
+    if has_orientation:
+        post_anim = _insert_parent_wrapper_object(
+            child,
+            "{}_iedm_sanim_post".format(obj.name),
+            Matrix.Identity(4),
+            reset_child_local=False,
+        )
+        post_anim.rotation_mode = "QUATERNION"
+        post_anim["_iedm_oriented_scale_helper"] = True
+        post_action = _create_scale_orientation_rotation_action(
+            "{}{}_iedm_sanim_post".format(argument_prefix, obj.name),
+            orientation_keys,
+            frame_mapper=None,
+            invert=True,
+        )
+        _assign_oriented_scale_action(post_anim, post_action, scale_arg)
+        child = post_anim
+
+    anim_scale = _insert_parent_wrapper_object(
+        child,
+        "{}_iedm_sanim".format(obj.name),
+        Matrix.Identity(4),
+        reset_child_local=False,
+    )
+    anim_scale["_iedm_oriented_scale_helper"] = True
+    anim_scale_action = bpy.data.actions.new(
+        "{}{}_iedm_sanim".format(argument_prefix, obj.name)
+    )
+    if scale_arg is not None and hasattr(anim_scale_action, "argument"):
+        anim_scale_action.argument = int(scale_arg)
+    add_scale_fcurves(anim_scale_action, scale_keys, frame_mapper=None, base_scale=None)
+    if len(action_fcurves(anim_scale_action)):
+        _assign_action(anim_scale, anim_scale_action)
+    else:
+        try:
+            bpy.data.actions.remove(anim_scale_action)
+        except Exception as exc:
+            _log.debug("Optional operation failed: {}".format(exc), level=2)
+    child = anim_scale
+
+    if has_orientation:
+        pre_anim = _insert_parent_wrapper_object(
+            child,
+            "{}_iedm_sanim_pre".format(obj.name),
+            Matrix.Identity(4),
+            reset_child_local=False,
+        )
+        pre_anim.rotation_mode = "QUATERNION"
+        pre_anim["_iedm_oriented_scale_helper"] = True
+        pre_action = _create_scale_orientation_rotation_action(
+            "{}{}_iedm_sanim_pre".format(argument_prefix, obj.name),
+            orientation_keys,
+            frame_mapper=None,
+            invert=False,
+        )
+        _assign_oriented_scale_action(pre_anim, pre_action, scale_arg)
+        child = pre_anim
+    return child
+
+
+def _assign_oriented_scale_action(obj, action, scale_arg):
+    if action is None:
+        return
+    if scale_arg is not None and hasattr(action, "argument"):
+        action.argument = int(scale_arg)
+    _assign_action(obj, action)

@@ -24,118 +24,117 @@ from .node_helpers import _is_narrow_safe_identity_helper_name
 
 
 def _stamp_transform_metadata(node):
-    if node.transform and node.blender:
-        try:
-            node.transform._blender_obj = node.blender
-        except Exception as e:
-            print(f"Warning in blender_importer/nodes/core.py: {e}")
-        if isinstance(node.transform, ArgVisibilityNode):
+    if not (node.transform and node.blender):
+        return
+    try:
+        node.transform._blender_obj = node.blender
+    except Exception as e:
+        print(f"Warning in blender_importer/nodes/core.py: {e}")
+    if isinstance(node.transform, ArgVisibilityNode):
+        _stamp_visibility_transform_metadata(node)
+    else:
+        _stamp_static_transform_metadata(node)
+
+
+def _stamp_visibility_transform_metadata(node):
+    try:
+        vis_alias = getattr(node.transform, "name", "") or ""
+        for _pfx in ("ar_", "al_", "as_"):
+            if vis_alias.startswith(_pfx):
+                vis_alias = vis_alias[len(_pfx) :]
+                break
+        if vis_alias:
+            node.blender["_iedm_vis_export_name"] = vis_alias
+    except Exception as e:
+        print(f"Warning in blender_importer/nodes/core.py: {e}")
+    try:
+        vis_payload = []
+        for entry in getattr(node.transform, "visData", []) or []:
+            if not isinstance(entry, (list, tuple)) or len(entry) != 2:
+                continue
             try:
-                vis_alias = getattr(node.transform, "name", "") or ""
-                for _pfx in ("ar_", "al_", "as_"):
-                    if vis_alias.startswith(_pfx):
-                        vis_alias = vis_alias[len(_pfx) :]
-                        break
-                if vis_alias:
-                    node.blender["_iedm_vis_export_name"] = vis_alias
-            except Exception as e:
-                print(f"Warning in blender_importer/nodes/core.py: {e}")
+                varg = int(entry[0])
+            except Exception:
+                continue
+            vranges = []
+            src_ranges = entry[1] if isinstance(entry[1], (list, tuple)) else []
+            for rng in src_ranges:
+                if not isinstance(rng, (list, tuple)) or len(rng) != 2:
+                    continue
+                try:
+                    vranges.append([float(rng[0]), float(rng[1])])
+                except Exception:
+                    continue
+            vis_payload.append([varg, vranges])
+        if vis_payload:
+            node.blender["_iedm_vis_raw_args"] = json.dumps(
+                vis_payload, separators=(",", ":")
+            )
+    except Exception as e:
+        print(f"Warning in blender_importer/nodes/core.py: {e}")
+    try:
+        if node.render is None and getattr(node.blender, "type", None) == "EMPTY":
+            node.blender["_iedm_vis_passthrough"] = True
+    except Exception as e:
+        print(f"Warning in blender_importer/nodes/core.py: {e}")
+
+
+def _stamp_static_transform_metadata(node):
+    try:
+        ob = node.blender
+        tf_name = getattr(node.transform, "name", "") or ""
+        ob_name = getattr(ob, "name", "") or ""
+        is_static_tf = not isinstance(node.transform, AnimatingNode)
+        is_renderless_empty = (
+            node.render is None and getattr(ob, "type", None) == "EMPTY"
+        )
+        has_one_child = len(getattr(node, "children", []) or []) == 1
+        has_blender_dup_suffix = (
+            len(ob_name) > 4 and ob_name[-4] == "." and ob_name[-3:].isdigit()
+        )
+        not_bone_related = not isinstance(node.transform, (Bone, ArgAnimatedBone))
+        if (
+            is_static_tf
+            and is_renderless_empty
+            and has_one_child
+            and has_blender_dup_suffix
+            and not_bone_related
+            and _ob_local_is_identity(ob)
+        ):
+            ob["_iedm_identity_passthrough"] = True
+            if _is_narrow_safe_identity_helper_name(
+                ob_name
+            ) or _is_narrow_safe_identity_helper_name(tf_name):
+                ob["_iedm_narrow_identity_passthrough"] = True
+        elif (
+            is_static_tf
+            and is_renderless_empty
+            and has_one_child
+            and not_bone_related
+            and isinstance(getattr(node.parent, "transform", None), ArgVisibilityNode)
+            and _ob_local_is_identity(ob)
+        ):
             try:
-                vis_payload = []
-                for entry in getattr(node.transform, "visData", []) or []:
-                    if not isinstance(entry, (list, tuple)) or len(entry) != 2:
-                        continue
-                    try:
-                        varg = int(entry[0])
-                    except Exception:
-                        continue
-                    vranges = []
-                    src_ranges = entry[1] if isinstance(entry[1], (list, tuple)) else []
-                    for rng in src_ranges:
-                        if not isinstance(rng, (list, tuple)) or len(rng) != 2:
-                            continue
-                        try:
-                            vranges.append([float(rng[0]), float(rng[1])])
-                        except Exception:
-                            continue
-                    vis_payload.append([varg, vranges])
-                if vis_payload:
-                    node.blender["_iedm_vis_raw_args"] = json.dumps(
-                        vis_payload, separators=(",", ":")
-                    )
-            except Exception as e:
-                print(f"Warning in blender_importer/nodes/core.py: {e}")
-            try:
-                if (
-                    node.render is None
-                    and getattr(node.blender, "type", None) == "EMPTY"
-                ):
-                    node.blender["_iedm_vis_passthrough"] = True
-            except Exception as e:
-                print(f"Warning in blender_importer/nodes/core.py: {e}")
-        else:
-            # Mark importer-created static helper empties that only contribute an
-            # identity transform (Blender duplicate-name splitting artefacts).
-            try:
-                ob = node.blender
-                tf_name = getattr(node.transform, "name", "") or ""
-                ob_name = getattr(ob, "name", "") or ""
-                is_static_tf = not isinstance(node.transform, AnimatingNode)
-                is_renderless_empty = (
-                    node.render is None and getattr(ob, "type", None) == "EMPTY"
+                child0 = (getattr(node, "children", []) or [None])[0]
+                child_render_cls = (
+                    type(getattr(child0, "render", None)).__name__
+                    if child0 is not None
+                    else None
                 )
-                has_one_child = len(getattr(node, "children", []) or []) == 1
-                has_blender_dup_suffix = (
-                    len(ob_name) > 4 and ob_name[-4] == "." and ob_name[-3:].isdigit()
+                child_tf_name = str(
+                    getattr(getattr(child0, "transform", None), "name", "") or ""
                 )
-                not_bone_related = not isinstance(
-                    node.transform, (Bone, ArgAnimatedBone)
-                )
-                if (
-                    is_static_tf
-                    and is_renderless_empty
-                    and has_one_child
-                    and has_blender_dup_suffix
-                    and not_bone_related
-                    and _ob_local_is_identity(ob)
-                ):
-                    ob["_iedm_identity_passthrough"] = True
-                    if _is_narrow_safe_identity_helper_name(
-                        ob_name
-                    ) or _is_narrow_safe_identity_helper_name(tf_name):
-                        ob["_iedm_narrow_identity_passthrough"] = True
-                elif (
-                    is_static_tf
-                    and is_renderless_empty
-                    and has_one_child
-                    and not_bone_related
-                    and isinstance(
-                        getattr(node.parent, "transform", None), ArgVisibilityNode
-                    )
-                    and _ob_local_is_identity(ob)
-                ):
-                    try:
-                        child0 = (getattr(node, "children", []) or [None])[0]
-                        child_render_cls = (
-                            type(getattr(child0, "render", None)).__name__
-                            if child0 is not None
-                            else None
-                        )
-                        child_tf_name = str(
-                            getattr(getattr(child0, "transform", None), "name", "")
-                            or ""
-                        )
-                    except Exception:
-                        child_render_cls = None
-                        child_tf_name = ""
-                    if (
-                        child_render_cls == "LightNode"
-                        or child_tf_name == "Fake Light Transform"
-                    ):
-                        ob["_iedm_identity_passthrough"] = True
-                        ob["_iedm_narrow_identity_passthrough"] = True
-            except Exception as e:
-                print(f"Warning in blender_importer/nodes/core.py: {e}")
+            except Exception:
+                child_render_cls = None
+                child_tf_name = ""
+            if (
+                child_render_cls == "LightNode"
+                or child_tf_name == "Fake Light Transform"
+            ):
+                ob["_iedm_identity_passthrough"] = True
+                ob["_iedm_narrow_identity_passthrough"] = True
+    except Exception as e:
+        print(f"Warning in blender_importer/nodes/core.py: {e}")
 
 
 def _stamp_render_metadata(node):
@@ -200,131 +199,101 @@ def _stamp_animation_name(node):
 
 
 def _stamp_raw_animation_payload(node):
-    if isinstance(node.transform, ArgAnimationNode) and node.blender is not None:
+    if not isinstance(node.transform, ArgAnimationNode) or node.blender is None:
+        return
+    try:
+        raw = {}
+        _add_arganim_base_payload(node.transform, raw)
+        _add_arganim_key_payload(node.transform, raw)
+        _add_arganim_matrix_payload(node.transform, raw)
+        if raw:
+            node.blender["_iedm_raw_arganim_payload"] = json.dumps(
+                raw, separators=(",", ":")
+            )
+    except Exception as e:
+        print(f"Warning in blender_importer/nodes/core.py: {e}")
+
+
+def _add_arganim_base_payload(transform, payload):
+    base = getattr(transform, "base", None)
+    if base is None:
+        return
+    try:
+        matrix = Matrix(base.matrix)
+        payload["base_matrix"] = [float(value) for row in matrix for value in row]
+    except Exception as exc:
+        print(f"Warning in blender_importer/nodes/core.py: {exc}")
+    for field, attribute, count in (
+        ("base_position", "position", 3),
+        ("base_scale", "scale", 3),
+    ):
         try:
-            raw = {}
-            base = getattr(node.transform, "base", None)
-            if base is not None:
-                try:
-                    bm = Matrix(base.matrix)
-                    raw["base_matrix"] = [float(v) for row in bm for v in row]
-                except Exception as e:
-                    print(f"Warning in blender_importer/nodes/core.py: {e}")
-                try:
-                    raw["base_position"] = [float(x) for x in base.position[:3]]
-                except Exception as e:
-                    print(f"Warning in blender_importer/nodes/core.py: {e}")
-                try:
-                    q1 = (
-                        base.quat_1
-                        if hasattr(base.quat_1, "__iter__")
-                        else Quaternion(base.quat_1)
-                    )
-                    raw["base_quat_1"] = [float(x) for x in q1]
-                except Exception as e:
-                    print(f"Warning in blender_importer/nodes/core.py: {e}")
-                try:
-                    q2 = (
-                        base.quat_2
-                        if hasattr(base.quat_2, "__iter__")
-                        else Quaternion(base.quat_2)
-                    )
-                    raw["base_quat_2"] = [float(x) for x in q2]
-                except Exception as e:
-                    print(f"Warning in blender_importer/nodes/core.py: {e}")
-                try:
-                    raw["base_scale"] = [float(x) for x in base.scale[:3]]
-                except Exception as e:
-                    print(f"Warning in blender_importer/nodes/core.py: {e}")
+            payload[field] = [
+                float(value) for value in getattr(base, attribute)[:count]
+            ]
+        except Exception as exc:
+            print(f"Warning in blender_importer/nodes/core.py: {exc}")
+    for field in ("quat_1", "quat_2"):
+        try:
+            value = getattr(base, field)
+            quaternion = value if hasattr(value, "__iter__") else Quaternion(value)
+            payload["base_{}".format(field)] = [
+                float(component) for component in quaternion
+            ]
+        except Exception as exc:
+            print(f"Warning in blender_importer/nodes/core.py: {exc}")
 
-            pos_payload = []
-            for entry in getattr(node.transform, "posData", None) or []:
-                if not isinstance(entry, (list, tuple)) or len(entry) != 2:
-                    continue
-                arg, keys = entry
-                try:
-                    arg_i = int(arg)
-                except Exception:
-                    continue
-                key_rows = []
-                for k in keys or []:
-                    try:
-                        key_rows.append(
-                            [
-                                float(k.frame),
-                                float(k.value[0]),
-                                float(k.value[1]),
-                                float(k.value[2]),
-                            ]
-                        )
-                    except Exception:
-                        continue
-                pos_payload.append([arg_i, key_rows])
-            if pos_payload:
-                raw["pos_data"] = pos_payload
 
-            rot_payload = []
-            for entry in getattr(node.transform, "rotData", None) or []:
-                if not isinstance(entry, (list, tuple)) or len(entry) != 2:
-                    continue
-                arg, keys = entry
-                try:
-                    arg_i = int(arg)
-                except Exception:
-                    continue
-                key_rows = []
-                for k in keys or []:
-                    try:
-                        qv = (
-                            k.value
-                            if hasattr(k.value, "__iter__")
-                            else Quaternion(k.value)
-                        )
-                        key_rows.append(
-                            [
-                                float(k.frame),
-                                float(qv[0]),
-                                float(qv[1]),
-                                float(qv[2]),
-                                float(qv[3]),
-                            ]
-                        )
-                    except Exception:
-                        continue
-                rot_payload.append([arg_i, key_rows])
-            if rot_payload:
-                raw["rot_data"] = rot_payload
+def _add_arganim_key_payload(transform, payload):
+    position_data = _serialize_arganim_keys(getattr(transform, "posData", None), 3)
+    rotation_data = _serialize_arganim_keys(getattr(transform, "rotData", None), 4)
+    if position_data:
+        payload["pos_data"] = position_data
+    if rotation_data:
+        payload["rot_data"] = rotation_data
 
+
+def _serialize_arganim_keys(entries, component_count):
+    serialized = []
+    for entry in entries or []:
+        if not isinstance(entry, (list, tuple)) or len(entry) != 2:
+            continue
+        try:
+            argument = int(entry[0])
+        except Exception:
+            continue
+        keys = []
+        for key in entry[1] or []:
             try:
-                bmat_inv = getattr(getattr(node, "transform", None), "bmat_inv", None)
-                if bmat_inv is None:
-                    bmat_inv = getattr(
-                        getattr(getattr(node, "transform", None), "base", None),
-                        "bmat_inv",
-                        None,
-                    )
-                if bmat_inv is not None:
-                    raw["bmat_inv"] = [
-                        float(v) for row in Matrix(bmat_inv) for v in row
-                    ]
-            except Exception as e:
-                print(f"Warning in blender_importer/nodes/core.py: {e}")
+                value = key.value
+                if component_count == 4 and not hasattr(value, "__iter__"):
+                    value = Quaternion(value)
+                row = [float(key.frame)] + [
+                    float(value[index]) for index in range(component_count)
+                ]
+                keys.append(row)
+            except Exception:
+                continue
+        serialized.append([argument, keys])
+    return serialized
 
-            try:
-                zmat = getattr(node.transform, "zero_transform_local_matrix", None)
-                if zmat is not None:
-                    raw["zero_transform_local_matrix"] = [
-                        float(v) for row in Matrix(zmat) for v in row
-                    ]
-            except Exception as e:
-                print(f"Warning in blender_importer/nodes/core.py: {e}")
 
-            if raw:
-                node.blender["_iedm_raw_arganim_payload"] = json.dumps(
-                    raw, separators=(",", ":")
-                )
-        except Exception as e:
-            print(f"Warning in blender_importer/nodes/core.py: {e}")
+def _add_arganim_matrix_payload(transform, payload):
+    for field, matrix in (
+        ("bmat_inv", getattr(transform, "bmat_inv", None)),
+        (
+            "zero_transform_local_matrix",
+            getattr(transform, "zero_transform_local_matrix", None),
+        ),
+    ):
+        if field == "bmat_inv" and matrix is None:
+            matrix = getattr(getattr(transform, "base", None), "bmat_inv", None)
+        if matrix is None:
+            continue
+        try:
+            payload[field] = [float(value) for row in Matrix(matrix) for value in row]
+        except Exception as exc:
+            print(f"Warning in blender_importer/nodes/core.py: {exc}")
 
 
 def _stamp_debug_metadata(node):

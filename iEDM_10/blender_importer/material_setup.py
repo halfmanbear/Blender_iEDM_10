@@ -463,25 +463,7 @@ def _create_material_socket_animations(mat, material):
 
         for framedata in keys:
             try:
-                edm_time = float(getattr(framedata, "frame", 0.0))
-                blender_frame = (edm_time + 1.0) * 100.0
-                value = getattr(framedata, "value", None)
-                if value is None:
-                    continue
-                stype = socket.type
-                if stype == "VALUE":
-                    socket.default_value = float(value)
-                    mat.node_tree.keyframe_insert(
-                        data_path=anim_path, frame=blender_frame
-                    )
-                elif stype in ("RGBA", "VECTOR"):
-                    val_seq = tuple(float(v) for v in value)
-                    if stype == "RGBA" and len(val_seq) == 3:
-                        val_seq = val_seq + (1.0,)
-                    socket.default_value = val_seq
-                    mat.node_tree.keyframe_insert(
-                        data_path=anim_path, frame=blender_frame
-                    )
+                _keyframe_material_socket(mat, socket, anim_path, framedata)
             except Exception as e:
                 print(
                     f"Warning in material_setup._create_material_socket_animations: {e}"
@@ -553,22 +535,46 @@ def _create_material_uv_animations(mat, material, texture_nodes):
 
         for framedata in keys:
             try:
-                edm_time = float(getattr(framedata, "frame", 0.0))
-                blender_frame = (edm_time + 1.0) * 100.0
-                value = getattr(framedata, "value", None)
-                if value is None:
-                    continue
-                val_seq = tuple(float(v) for v in value)
-                if len(val_seq) == 2:
-                    val_seq = val_seq + (0.0,)
-                elif len(val_seq) > 3:
-                    val_seq = val_seq[:3]
-                loc_input.default_value = val_seq
-                mat.node_tree.keyframe_insert(data_path=anim_path, frame=blender_frame)
+                _keyframe_material_uv_location(
+                    mat, loc_input, anim_path, framedata
+                )
             except Exception as e:
                 print(f"Warning in material_setup._create_material_uv_animations: {e}")
 
         _mat_set_linear_on_path(action, anim_path)
+
+
+def _keyframe_material_socket(mat, socket, anim_path, framedata):
+    """Apply one animated material socket value and insert its keyframe."""
+    value = getattr(framedata, "value", None)
+    if value is None:
+        return
+    blender_frame = (float(getattr(framedata, "frame", 0.0)) + 1.0) * 100.0
+    if socket.type == "VALUE":
+        socket.default_value = float(value)
+    elif socket.type in ("RGBA", "VECTOR"):
+        value = tuple(float(component) for component in value)
+        if socket.type == "RGBA" and len(value) == 3:
+            value += (1.0,)
+        socket.default_value = value
+    else:
+        return
+    mat.node_tree.keyframe_insert(data_path=anim_path, frame=blender_frame)
+
+
+def _keyframe_material_uv_location(mat, location, anim_path, framedata):
+    """Apply one animated UV location and insert its keyframe."""
+    value = getattr(framedata, "value", None)
+    if value is None:
+        return
+    blender_frame = (float(getattr(framedata, "frame", 0.0)) + 1.0) * 100.0
+    value = tuple(float(component) for component in value)
+    if len(value) == 2:
+        value += (0.0,)
+    elif len(value) > 3:
+        value = value[:3]
+    location.default_value = value
+    mat.node_tree.keyframe_insert(data_path=anim_path, frame=blender_frame)
 
 
 def _material_prop_scalar(value):

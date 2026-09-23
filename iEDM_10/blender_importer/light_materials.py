@@ -267,18 +267,23 @@ def _apply_fake_light_material_payload(material, edm_material, kind):
         )
 
     if kind == "fake_spot":
-        cone_setup = uniforms.get("coneSetup")
-        cone_vec = _safe_vec(cone_setup, default=())
-        if len(cone_vec) >= 2:
-            try:
-                theta_deg = math.degrees(math.acos(max(-1.0, min(1.0, cone_vec[0]))))
-                phi_deg = math.degrees(math.acos(max(-1.0, min(1.0, cone_vec[1]))))
-                _set_material_group_input(group_node, "Inner Angle", theta_deg)
-                _set_material_group_input(group_node, "Outer Angle", phi_deg)
-            except Exception:
-                _logger.debug("Ignoring optional operation failure", exc_info=True)
+        _apply_fake_spot_cone_uniforms(group_node, uniforms)
         specular = uniforms.get("specularAmount")
         if specular is not None:
             _set_material_group_input(
                 group_node, "SpecularAmount", _safe_float(specular, 0.0)
             )
+
+
+def _apply_fake_spot_cone_uniforms(group_node, uniforms):
+    """Apply optional fake spot cone angles from the EDM material payload."""
+    cone_vec = _safe_vec(uniforms.get("coneSetup"), default=())
+    if len(cone_vec) < 2:
+        return
+    try:
+        inner_angle = math.degrees(math.acos(max(-1.0, min(1.0, cone_vec[0]))))
+        outer_angle = math.degrees(math.acos(max(-1.0, min(1.0, cone_vec[1]))))
+        _set_material_group_input(group_node, "Inner Angle", inner_angle)
+        _set_material_group_input(group_node, "Outer Angle", outer_angle)
+    except Exception:
+        _logger.debug("Ignoring optional operation failure", exc_info=True)

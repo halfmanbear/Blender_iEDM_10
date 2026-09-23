@@ -79,39 +79,7 @@ def _split_multi_arg_rotation_controls(graph):
         if len(planned_actions) <= 1:
             continue
 
-        # Keys carry the owner's static loc/rot; only the outermost carrier may keep it.
-        # An argument driving both position and a later rotation occupies two
-        # places in the chain, so carry each part in its own action.
-        divided = []
-        for action in planned_actions:
-            paths = _action_paths(action)
-            sort_value = _action_chain_sort_value(action, -1)
-            if (
-                sort_value > 0
-                and "location" in paths
-                and "rotation_quaternion" in paths
-            ):
-                position_part = _clone_action_filtered(
-                    action, "_pos", include_paths={"location"}
-                )
-                rotation_part = _clone_action_filtered(
-                    action, "_rot", exclude_paths={"location"}
-                )
-                if position_part is not None and rotation_part is not None:
-                    position_part["_iedm_chain_sort"] = -1
-                    rotation_part["_iedm_chain_sort"] = sort_value
-                    divided.extend((position_part, rotation_part))
-                    continue
-            divided.append(action)
-        planned_actions = divided
-
-        # EDM applies position, then rotations in authored order: T @ R0 @ R1 ...
-        planned_actions.sort(
-            key=lambda action: (
-                "location" not in _action_paths(action),
-                _action_chain_sort_value(action, -1),
-            )
-        )
+        planned_actions = _divide_position_rotation_actions(planned_actions)
         static_loc, static_rot, static_scale = ob.matrix_basis.decompose()
         seen_paths = set()
         for action in planned_actions:
@@ -135,54 +103,83 @@ def _split_multi_arg_rotation_controls(graph):
         elif "rotation_quaternion" in later_paths - _action_paths(planned_actions[0]):
             ob.matrix_basis = Matrix.LocRotScale(static_loc, None, static_scale)
 
-        direct_children = [ch for ch in list(ob.children)]
-        _clear_object_animation_tracks(ob)
-        _assign_action(ob, planned_actions[0])
-        ob["_iedm_multi_arg_rotation_split"] = True
+        _build_rotation_helper_chain(
+            ob, planned_actions, inner_static, scene_collection
+        )
 
-        parent_for_chain = ob
-        created_helpers = []
-        for action in planned_actions[1:]:
-            helper = bpy.data.objects.new(ob.name, None)
-            helper.empty_display_size = 0.1
-            scene_collection.objects.link(helper)
-            helper.parent = parent_for_chain
-            helper.matrix_parent_inverse = Matrix.Identity(4)
-            helper.matrix_basis = Matrix.Identity(4)
-            if "rotation_quaternion" in _action_paths(action):
-                helper.rotation_mode = "QUATERNION"
-            _assign_action(helper, action)
-            helper["_iedm_identity_passthrough"] = True
-            helper["_iedm_narrow_identity_passthrough"] = True
-            if _action_has_visibility_curve(action):
-                helper["_iedm_vis_passthrough"] = True
-            created_helpers.append(helper)
-            parent_for_chain = helper
 
-        if inner_static is not None and any(
-            abs(inner_static[r][c] - (1.0 if r == c else 0.0)) > 1e-6
-            for r in range(4)
-            for c in range(4)
-        ):
-            static_helper = bpy.data.objects.new(ob.name, None)
-            static_helper.empty_display_size = 0.1
-            scene_collection.objects.link(static_helper)
-            static_helper.parent = parent_for_chain
-            static_helper.matrix_basis = inner_static
-            created_helpers.append(static_helper)
-            parent_for_chain = static_helper
+def _divide_position_rotation_actions(actions):
+    """Separate arguments that animate position and rotation into distinct links."""
+    divided = []
+    for action in actions:
+        paths = _action_paths(action)
+        sort_value = _action_chain_sort_value(action, -1)
+        if sort_value > 0 and {"location", "rotation_quaternion"} <= paths:
+            position = _clone_action_filtered(
+                action, "_pos", include_paths={"location"}
+            )
+            rotation = _clone_action_filtered(
+                action, "_rot", exclude_paths={"location"}
+            )
+            if position is not None and rotation is not None:
+                position["_iedm_chain_sort"] = -1
+                rotation["_iedm_chain_sort"] = sort_value
+                divided.extend((position, rotation))
+                continue
+        divided.append(action)
+    # EDM evaluates position before rotations, then rotations in authored order.
+    divided.sort(
+        key=lambda action: (
+            "location" not in _action_paths(action),
+            _action_chain_sort_value(action, -1),
+        )
+    )
+    return divided
 
-        if created_helpers:
-            target_parent = created_helpers[-1]
-            for child in direct_children:
-                if child in created_helpers:
-                    continue
-                if child.parent == ob:
-                    # The new controls are identity wrappers at rest. Preserve the
-                    # authored child local transform; their world matrices are not yet
-                    # evaluated here, so world-preserving reparenting duplicates the
-                    # original parent's transform in the child.
-                    child.parent = target_parent
+
+def _build_rotation_helper_chain(obj, actions, inner_static, scene_collection):
+    """Assign split actions to identity helpers and preserve direct children."""
+    children = list(obj.children)
+    _clear_object_animation_tracks(obj)
+    _assign_action(obj, actions[0])
+    obj["_iedm_multi_arg_rotation_split"] = True
+    parent = obj
+    helpers = []
+    for action in actions[1:]:
+        helper = bpy.data.objects.new(obj.name, None)
+        helper.empty_display_size = 0.1
+        scene_collection.objects.link(helper)
+        helper.parent = parent
+        helper.matrix_parent_inverse = Matrix.Identity(4)
+        helper.matrix_basis = Matrix.Identity(4)
+        if "rotation_quaternion" in _action_paths(action):
+            helper.rotation_mode = "QUATERNION"
+        _assign_action(helper, action)
+        helper["_iedm_identity_passthrough"] = True
+        helper["_iedm_narrow_identity_passthrough"] = True
+        if _action_has_visibility_curve(action):
+            helper["_iedm_vis_passthrough"] = True
+        helpers.append(helper)
+        parent = helper
+    if inner_static is not None and not _matrix_is_identity(inner_static):
+        helper = bpy.data.objects.new(obj.name, None)
+        helper.empty_display_size = 0.1
+        scene_collection.objects.link(helper)
+        helper.parent = parent
+        helper.matrix_basis = inner_static
+        helpers.append(helper)
+    if helpers:
+        for child in children:
+            if child not in helpers and child.parent == obj:
+                child.parent = helpers[-1]
+
+
+def _matrix_is_identity(matrix):
+    return all(
+        abs(matrix[row][column] - (1.0 if row == column else 0.0)) <= 1e-6
+        for row in range(4)
+        for column in range(4)
+    )
 
 
 def _rename_control_wrapper_mesh_pairs(graph):

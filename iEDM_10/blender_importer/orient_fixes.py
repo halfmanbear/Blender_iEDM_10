@@ -5,10 +5,96 @@ from mathutils import Matrix
 
 from .prelude import _ROOT_BASIS_FIX, _import_ctx, _log
 
-# Rz(-90°): rotates the DCS nose-forward axis to Blender +X for BT-prefix EDMs.
+# Rz(-90Â°): rotates the DCS nose-forward axis to Blender +X for BT-prefix EDMs.
 _Rz_neg90 = Matrix(((0, 1, 0, 0), (-1, 0, 0, 0), (0, 0, 1, 0), (0, 0, 0, 1)))
 # Full DCS-to-Blender world transform applied to BT-prefix content.
 _BT_CONTENT_TO_BLENDER = _Rz_neg90 @ _ROOT_BASIS_FIX
+
+
+def _has_anim_data(ob):
+    ad = getattr(ob, "animation_data", None)
+    return ad is not None and (
+        getattr(ad, "action", None) is not None
+        or len(getattr(ad, "nla_tracks", []) or []) > 0
+    )
+
+def _debug_tf_cls(ob):
+    return str(ob.get("_iedm_dbg_tf_cls", "") or "")
+
+def _is_bone_empty(ob):
+    return _debug_tf_cls(ob) in {"ArgAnimatedBone", "Bone"}
+
+def _is_prefix_empty(ob):
+    try:
+        return bool(ob.get("_iedm_bt_prefix", False))
+    except Exception:
+        return False
+
+def _matrix_is_identity(mat, eps=1e-6):
+    try:
+        ident = type(mat).Identity(4)
+        for r in range(4):
+            for c in range(4):
+                if abs(float(mat[r][c]) - float(ident[r][c])) > eps:
+                    return False
+        return True
+    except Exception:
+        return False
+
+def _has_small_uniform_scale(ob, max_scale=0.1):
+    try:
+        _, _, scale = ob.matrix_basis.decompose()
+        vals = [abs(float(scale.x)), abs(float(scale.y)), abs(float(scale.z))]
+        return max(vals) <= max_scale and min(vals) > 1e-8
+    except Exception:
+        return False
+
+def _find_bone_descendant_correction_target(mesh_obj):
+    """Return the object whose basis is authored as world space, or None."""
+    chain = []
+    cur = mesh_obj
+    bone = None
+    while cur is not None:
+        if _is_bone_empty(cur):
+            bone = cur
+            break
+        if _is_prefix_empty(cur):
+            break
+        chain.append(cur)
+        cur = getattr(cur, "parent", None)
+
+    if bone is None:
+        return None
+
+    # Prefer the highest static TransformNode wrapper below the bone.  Visibility
+    # wrappers are often animated and should remain untouched; their child mesh
+    # or transform wrapper will inherit the corrected world placement.
+    for ob in reversed(chain):
+        if getattr(ob, "type", "") != "EMPTY":
+            continue
+        if _debug_tf_cls(ob) != "TransformNode":
+            continue
+        if _has_anim_data(ob):
+            continue
+        if _matrix_is_identity(ob.matrix_basis):
+            continue
+        # The misplaced static render wrappers in this class of EDMs carry the
+        # authored model-space scale, typically 0.01.  Full-size bone descendants
+        # can be intentionally composed through their bone hierarchy and must not
+        # be moved into raw world space by this no-armature repair pass.
+        if not _has_small_uniform_scale(ob):
+            continue
+        return ob
+
+    # Fallback for render nodes parented directly to bones.
+    if (
+        not _has_anim_data(mesh_obj)
+        and not _matrix_is_identity(mesh_obj.matrix_basis)
+        and _has_small_uniform_scale(mesh_obj)
+    ):
+        return mesh_obj
+
+    return None
 
 
 def _fix_bonetransform_bone_child_render_world_positions():
@@ -36,90 +122,12 @@ def _fix_bonetransform_bone_child_render_world_positions():
 
     bpy.context.view_layer.update()
 
-    def _has_anim_data(ob):
-        ad = getattr(ob, "animation_data", None)
-        return ad is not None and (
-            getattr(ad, "action", None) is not None
-            or len(getattr(ad, "nla_tracks", []) or []) > 0
-        )
 
-    def _debug_tf_cls(ob):
-        return str(ob.get("_iedm_dbg_tf_cls", "") or "")
 
-    def _is_bone_empty(ob):
-        return _debug_tf_cls(ob) in {"ArgAnimatedBone", "Bone"}
 
-    def _is_prefix_empty(ob):
-        try:
-            return bool(ob.get("_iedm_bt_prefix", False))
-        except Exception:
-            return False
 
-    def _matrix_is_identity(mat, eps=1e-6):
-        try:
-            ident = type(mat).Identity(4)
-            for r in range(4):
-                for c in range(4):
-                    if abs(float(mat[r][c]) - float(ident[r][c])) > eps:
-                        return False
-            return True
-        except Exception:
-            return False
 
-    def _has_small_uniform_scale(ob, max_scale=0.1):
-        try:
-            _, _, scale = ob.matrix_basis.decompose()
-            vals = [abs(float(scale.x)), abs(float(scale.y)), abs(float(scale.z))]
-            return max(vals) <= max_scale and min(vals) > 1e-8
-        except Exception:
-            return False
 
-    def _find_bone_descendant_correction_target(mesh_obj):
-        """Return the object whose basis is authored as world space, or None."""
-        chain = []
-        cur = mesh_obj
-        bone = None
-        while cur is not None:
-            if _is_bone_empty(cur):
-                bone = cur
-                break
-            if _is_prefix_empty(cur):
-                break
-            chain.append(cur)
-            cur = getattr(cur, "parent", None)
-
-        if bone is None:
-            return None
-
-        # Prefer the highest static TransformNode wrapper below the bone.  Visibility
-        # wrappers are often animated and should remain untouched; their child mesh
-        # or transform wrapper will inherit the corrected world placement.
-        for ob in reversed(chain):
-            if getattr(ob, "type", "") != "EMPTY":
-                continue
-            if _debug_tf_cls(ob) != "TransformNode":
-                continue
-            if _has_anim_data(ob):
-                continue
-            if _matrix_is_identity(ob.matrix_basis):
-                continue
-            # The misplaced static render wrappers in this class of EDMs carry the
-            # authored model-space scale, typically 0.01.  Full-size bone descendants
-            # can be intentionally composed through their bone hierarchy and must not
-            # be moved into raw world space by this no-armature repair pass.
-            if not _has_small_uniform_scale(ob):
-                continue
-            return ob
-
-        # Fallback for render nodes parented directly to bones.
-        if (
-            not _has_anim_data(mesh_obj)
-            and not _matrix_is_identity(mesh_obj.matrix_basis)
-            and _has_small_uniform_scale(mesh_obj)
-        ):
-            return mesh_obj
-
-        return None
 
     fixed = 0
     skipped_animated = 0
@@ -140,7 +148,7 @@ def _fix_bonetransform_bone_child_render_world_positions():
         seen_targets.add(target_key)
 
         try:
-            # matrix_basis is in DCS/EDM world space. Apply Rz(-90°)@RBF to convert.
+            # matrix_basis is in DCS/EDM world space. Apply Rz(-90Â°)@RBF to convert.
             _basis_copy = target.matrix_basis.copy()
             _basis_loc = _basis_copy.to_translation()
             print(

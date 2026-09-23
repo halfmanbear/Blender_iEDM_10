@@ -122,35 +122,8 @@ def _apply_animated_fake_omni_brightness(ob, node, light_count, verts_per_light=
     ]
     master = lights_samples[0]
 
-    # Recover per-light delay by finding circular shift vs master curve.
-    # Shift of k samples → delay = k/n_samples * 2.0 in EDM time units,
-    # stored as vertex group weight (exporter reads weight directly as delay).
-    delays = [0.0]
-    for j in range(1, light_count):
-        samp = lights_samples[j]
-        best_shift, best_score = 0, float("inf")
-        for shift in range(n_samples):
-            score = sum(
-                (master[i] - samp[(i + shift) % n_samples]) ** 2
-                for i in range(n_samples)
-            )
-            if score < best_score:
-                best_score = score
-                best_shift = shift
-        delays.append(min(best_shift / n_samples * 2.0, 1.0))
-
-    # Assign delay weights — one vertex group; every vertex of a light (4 per
-    # quad in surface mode) carries that light's delay.
-    delay_group = ob.vertex_groups.new(name="brightness_delay")
-    vertex_count = len(ob.data.vertices)
-    for li, delay in enumerate(delays):
-        indices = [
-            vi
-            for vi in range(li * verts_per_light, (li + 1) * verts_per_light)
-            if vi < vertex_count
-        ]
-        if indices:
-            delay_group.add(indices, float(delay), "REPLACE")
+    delays = _recover_fake_light_delays(lights_samples, n_samples)
+    _assign_fake_light_delay_weights(ob, delays, verts_per_light)
 
     # Build brightness action from master curve.
     # 128 samples span Blender frames [0, 200]; frame_i = i * 200 / n_samples.
@@ -171,20 +144,24 @@ def _apply_animated_fake_omni_brightness(ob, node, light_count, verts_per_light=
             "Could not set animated light action argument: {}".format(exc), level=2
         )
 
+    _keyframe_fake_light_brightness(ob, action, master, n_samples)
+
+
+def _keyframe_fake_light_brightness(ob, action, master, sample_count):
+    """Insert linear brightness keys sampled across the two-second cycle."""
     anim_data = ob.animation_data_create()
     anim_data.action = action
-
-    frame_step = 200.0 / n_samples
-    for i, brightness in enumerate(master):
-        frame = i * frame_step
+    frame_step = 200.0 / sample_count
+    for index, brightness in enumerate(master):
         try:
             ob.EDMProps.ANIMATED_BRIGHTNESS = float(brightness)
-            ob.keyframe_insert(data_path="EDMProps.ANIMATED_BRIGHTNESS", frame=frame)
+            ob.keyframe_insert(
+                data_path="EDMProps.ANIMATED_BRIGHTNESS", frame=index * frame_step
+            )
         except Exception as exc:
             _log.debug(
                 "Could not insert animated brightness key: {}".format(exc), level=2
             )
-
     curve = action_fcurves(action).find("EDMProps.ANIMATED_BRIGHTNESS")
     if curve is not None:
         for kp in curve.keyframe_points:
@@ -196,3 +173,36 @@ def _apply_animated_fake_omni_brightness(ob, node, light_count, verts_per_light=
                 "Could not set brightness curve extrapolation: {}".format(exc),
                 level=2,
             )
+
+
+def _recover_fake_light_delays(light_samples, sample_count):
+    """Estimate each light's timing offset by matching circular sample shifts."""
+    master = light_samples[0]
+    delays = [0.0]
+    for samples in light_samples[1:]:
+        best_shift, best_score = 0, float("inf")
+        for shift in range(sample_count):
+            score = sum(
+                (master[index] - samples[(index + shift) % sample_count]) ** 2
+                for index in range(sample_count)
+            )
+            if score < best_score:
+                best_score = score
+                best_shift = shift
+        delays.append(min(best_shift / sample_count * 2.0, 1.0))
+    return delays
+
+
+def _assign_fake_light_delay_weights(ob, delays, verts_per_light):
+    """Store each light's recovered delay on its vertex group members."""
+    delay_group = ob.vertex_groups.new(name="brightness_delay")
+    vertex_count = len(ob.data.vertices)
+    for light_index, delay in enumerate(delays):
+        start = light_index * verts_per_light
+        indices = [
+            index
+            for index in range(start, start + verts_per_light)
+            if index < vertex_count
+        ]
+        if indices:
+            delay_group.add(indices, float(delay), "REPLACE")

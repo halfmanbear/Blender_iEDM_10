@@ -95,25 +95,9 @@ def _choose_skin_bind_target(
     if pos_slice is not None and (pos_slice[1] - pos_slice[0]) >= 4:
         packed_bone_index_offset = pos_slice[0] + 3
 
-    weight_sums = {}
-    if slice21:
-        for src in getattr(skin_node, "vertexData", []) or []:
-            decoded = None
-            if packed_bone_index_offset is not None and packed_bone_index_offset < len(
-                src
-            ):
-                decoded = _decode_packed_bone_indices(src[packed_bone_index_offset])
-                if not decoded or not any(
-                    0 <= int(idx) < len(skin_bones) for idx in decoded
-                ):
-                    decoded = None
-            weights = [float(x) for x in src[slice21[0] : slice21[1]]]
-            for bi, weight in enumerate(weights[:4]):
-                if weight <= 1e-6:
-                    continue
-                bone_index = int(decoded[bi]) if decoded and bi < len(decoded) else bi
-                if 0 <= bone_index < len(skin_bones):
-                    weight_sums[bone_index] = weight_sums.get(bone_index, 0.0) + weight
+    weight_sums = _skin_bone_weight_sums(
+        skin_node, slice21, packed_bone_index_offset, len(skin_bones)
+    )
 
     best_name = default_name
     best_loc = default_loc
@@ -146,6 +130,25 @@ def _choose_skin_bind_target(
 
     return default_name, default_loc
 
+def _skin_bone_weight_sums(skin_node, weight_slice, packed_index_offset, bone_count):
+    """Accumulate vertex weights by palette index, honoring packed indices."""
+    totals = {}
+    if not weight_slice:
+        return totals
+    for source in getattr(skin_node, "vertexData", []) or []:
+        decoded = None
+        if packed_index_offset is not None and packed_index_offset < len(source):
+            decoded = _decode_packed_bone_indices(source[packed_index_offset])
+            if not decoded or not any(0 <= int(idx) < bone_count for idx in decoded):
+                decoded = None
+        weights = [float(value) for value in source[weight_slice[0] : weight_slice[1]]]
+        for slot, weight in enumerate(weights[:4]):
+            if weight <= 1e-6:
+                continue
+            index = int(decoded[slot]) if decoded and slot < len(decoded) else slot
+            if 0 <= index < bone_count:
+                totals[index] = totals.get(index, 0.0) + weight
+    return totals
 
 def _localize_skin_mesh_to_bind_target(mesh_obj, bind_target_loc):
     if (
@@ -172,7 +175,6 @@ def _localize_skin_mesh_to_bind_target(mesh_obj, bind_target_loc):
     except Exception:
         return False
 
-
 def _copy_fcurve_to_action(src_curve, dst_action, dst_path, action_group):
     dst_curve = new_grouped_fcurve(
         dst_action,
@@ -195,7 +197,6 @@ def _copy_fcurve_to_action(src_curve, dst_action, dst_path, action_group):
             print(f"Warning in blender_importer/nodes/armature.py: {e}")
     dst_curve.update()
 
-
 def _action_has_fcurve(action, data_path, index=None):
     if action is None:
         return False
@@ -205,7 +206,6 @@ def _action_has_fcurve(action, data_path, index=None):
         if index is None or fcu.array_index == index:
             return True
     return False
-
 
 def _copy_bone_rotation_curves(src_action, dst_action, bone_name, rest_quat_inv):
     """Copy rotation_quaternion curves from world to bone-local space.
@@ -282,7 +282,6 @@ def _copy_bone_rotation_curves(src_action, dst_action, bone_name, rest_quat_inv)
     for dc in dst_curves:
         dc.update()
 
-
 def _merge_visibility_action_into_transform_action(
     transform_action, vis_action, obj_name
 ):
@@ -321,7 +320,6 @@ def _merge_visibility_action_into_transform_action(
         )
         _copy_fcurve_to_action(src_curve, merged, "VISIBLE", group_name)
     return merged
-
 
 def _transfer_bone_actions_to_armature(graph, arm_obj, node_to_bone_name):
     """Retarget per-node ArgAnimatedBone actions to armature pose-bone actions."""
@@ -431,6 +429,11 @@ def _transfer_bone_actions_to_armature(graph, arm_obj, node_to_bone_name):
         getattr(arm_obj, "name", None),
     )
 
+    _attach_retargeted_bone_actions(arm_obj, action_map)
+    return source_graph_nodes, source_transforms
+
+def _attach_retargeted_bone_actions(arm_obj, action_map):
+    """Attach copied bone actions to the armature using matching NLA tracks."""
     arm_obj.animation_data_create()
     ad = arm_obj.animation_data
     ad.use_nla = True
@@ -452,13 +455,11 @@ def _transfer_bone_actions_to_armature(graph, arm_obj, node_to_bone_name):
         strip.name = action.name
         strip.extrapolation = "NOTHING"
 
-    return source_graph_nodes, source_transforms
 
 
 # ---------------------------------------------------------------------------
 # Helpers lifted from _prepare_bone_import for standalone readability
 # ---------------------------------------------------------------------------
-
 
 def _bone_bind_matrix(tfnode):
     """Extract the bone's own bind-pose matrix from EDM Bone or ArgAnimatedBone."""
@@ -468,7 +469,6 @@ def _bone_bind_matrix(tfnode):
         return Matrix(tfnode.inv_base_bone_matrix)
     return None
 
-
 def _effective_root_basis_fix():
     """Return the basis fix matrix for bone bind-matrix conversion (Y-up → Z-up).
 
@@ -477,7 +477,6 @@ def _effective_root_basis_fix():
     inv(M1)@M1@M2(=RBF) = RBF — bone rests stay in the same RBF space.
     """
     return _ROOT_BASIS_FIX
-
 
 def _bone_rest_matrix_for_node(node, apply_root_fix):
     """Compute a bone's full rest matrix in Blender/armature space.
@@ -531,7 +530,6 @@ def _bone_rest_matrix_for_node(node, apply_root_fix):
         world_mat = getattr(node, "_local_bl", Matrix.Identity(4))
     return world_mat
 
-
 def _unique_bone_name(base, used_names):
     name = base or "Bone"
     if name not in used_names:
@@ -544,7 +542,6 @@ def _unique_bone_name(base, used_names):
             used_names.add(candidate)
             return candidate
         i += 1
-
 
 def _create_armature_object(bone_nodes, parent_obj):
     """Create and parent the armature object; compute basis-fix flags.
@@ -617,6 +614,102 @@ def _create_armature_object(bone_nodes, parent_obj):
 
     return arm_obj, arm_data, apply_bone_root_fix, arm_carries_basis_fix
 
+def _debug_bone_bind_matrix_summary(nodes, apply_bone_root_fix):
+    """Report which source bones carry explicit bind matrices."""
+    found = missing = 0
+    for node in nodes:
+        tf = node.transform
+        bind = _bone_bind_matrix(tf)
+        tf_type = type(tf).__name__
+        tf_name = getattr(tf, "name", "?")
+        if bind is not None:
+            found += 1
+            if not bind.is_identity:
+                rest = _bone_rest_matrix_for_node(node, apply_bone_root_fix)
+                print(
+                    "  [bone-bind] {} '{}' -> non-identity bind matrix, "
+                    "rest translation=({:.3f},{:.3f},{:.3f})".format(
+                        tf_type, tf_name, rest[0][3], rest[1][3], rest[2][3]
+                    )
+                )
+        else:
+            missing += 1
+            print(
+                "  [bone-bind] {} '{}' -> NO bind matrix (type={}, "
+                "has_bone_matrix={}, has_inv_base_bone_matrix={})".format(
+                    tf_type,
+                    tf_name,
+                    tf_type,
+                    hasattr(tf, "bone_matrix"),
+                    hasattr(tf, "inv_base_bone_matrix"),
+                )
+            )
+    print("Info: Bone bind matrices: {} found, {} missing".format(found, missing))
+
+def _create_edit_bone(node, edit_bones, node_to_bone_name, bone_nodes, apply_root_fix):
+    """Set one edit bone's rest head, tail, roll and debug metadata."""
+    bone_name = node_to_bone_name[node]
+    bone = edit_bones[bone_name]
+    rest = _bone_rest_matrix_for_node(node, apply_root_fix)
+    bind = _bone_bind_matrix(node.transform)
+    source_name = getattr(node.transform, "name", "") or type(node.transform).__name__
+    head = rest.to_translation()
+    rotation = rest.to_3x3()
+    y_axis = rotation @ Vector((0.0, 1.0, 0.0))
+    z_axis = rotation @ Vector((0.0, 0.0, 1.0))
+    if y_axis.length < 1e-8:
+        y_axis = Vector((0.0, 0.01, 0.0))
+    y_axis.normalize()
+
+    length = _edit_bone_length(node, bone_nodes, head, apply_root_fix)
+    bone.head = head
+    bone.tail = head + y_axis * max(length, 0.01)
+    if z_axis.length > 1e-8:
+        bone.align_roll(z_axis)
+    parent_name = node_to_bone_name.get(getattr(node, "parent", None))
+    source_type = type(node.transform).__name__
+    _log_bone_debug_event(
+        "bone-bind-rest",
+        {
+            "bone_name": bone_name,
+            "source_name": source_name,
+            "source_type": source_type,
+            "bind_matrix": _matrix_trs_summary(bind) if bind is not None else None,
+            "rest_matrix": _matrix_trs_summary(rest),
+            "head_src": [round(float(v), 6) for v in head],
+            "y_axis_src": [round(float(v), 6) for v in y_axis],
+            "z_axis_src": [round(float(v), 6) for v in z_axis],
+            "derived_length": round(float(max(length, 0.01)), 6),
+            "parent_bone": parent_name,
+        },
+        bone_name,
+        source_name,
+    )
+    _log_bone_debug_event(
+        "bone-rest",
+        {
+            "bone_name": bone_name,
+            "source_name": source_name,
+            "source_type": source_type,
+            "rest_matrix": _matrix_trs_summary(rest),
+            "head": [round(float(v), 6) for v in bone.head],
+            "tail": [round(float(v), 6) for v in bone.tail],
+            "parent_bone": parent_name,
+        },
+        bone_name,
+        source_name,
+    )
+
+def _edit_bone_length(node, bone_nodes, head, apply_root_fix):
+    """Use the first non-coincident child bone to derive a stable length."""
+    for child in node.children:
+        if child not in bone_nodes:
+            continue
+        child_rest = _bone_rest_matrix_for_node(child, apply_root_fix)
+        distance = (child_rest.to_translation() - head).length
+        if distance > 1e-5:
+            return distance
+    return 0.05
 
 def _build_edit_bones(arm_obj, arm_data, bone_nodes, apply_bone_root_fix):
     """Enter Blender edit mode and create bones from EDM bind/rest matrices.
@@ -649,107 +742,16 @@ def _build_edit_bones(arm_obj, arm_data, bone_nodes, apply_bone_root_fix):
             edit_bones.new(bone_name)
             node_to_bone_name[node] = bone_name
 
-        # Debug: report bind matrix detection
-        _bone_bind_found = 0
-        _bone_bind_missing = 0
-        for node in sorted_nodes:
-            tf = node.transform
-            bb = _bone_bind_matrix(tf)
-            tf_type = type(tf).__name__
-            tf_name = getattr(tf, "name", "?")
-            if bb is not None:
-                _bone_bind_found += 1
-                if not bb.is_identity:
-                    rest = _bone_rest_matrix_for_node(node, apply_bone_root_fix)
-                    print(
-                        "  [bone-bind] {} '{}' -> non-identity bind matrix, "
-                        "rest translation=({:.3f},{:.3f},{:.3f})".format(
-                            tf_type, tf_name, rest[0][3], rest[1][3], rest[2][3]
-                        )
-                    )
-            else:
-                _bone_bind_missing += 1
-                print(
-                    "  [bone-bind] {} '{}' -> NO bind matrix (type={}, "
-                    "has_bone_matrix={}, has_inv_base_bone_matrix={})".format(
-                        tf_type,
-                        tf_name,
-                        tf_type,
-                        hasattr(tf, "bone_matrix"),
-                        hasattr(tf, "inv_base_bone_matrix"),
-                    )
-                )
-        print(
-            "Info: Bone bind matrices: {} found, {} missing".format(
-                _bone_bind_found, _bone_bind_missing
-            )
-        )
+        _debug_bone_bind_matrix_summary(sorted_nodes, apply_bone_root_fix)
 
         bone_node_set = set(sorted_nodes)
         for node in sorted_nodes:
-            eb = edit_bones[node_to_bone_name[node]]
-            bone_rest = _bone_rest_matrix_for_node(node, apply_bone_root_fix)
-            bone_bind = _bone_bind_matrix(node.transform)
-            bone_name = node_to_bone_name[node]
-            tf_name = (
-                getattr(node.transform, "name", "") or type(node.transform).__name__
-            )
-
-            head = bone_rest.to_translation()
-            rot3 = bone_rest.to_3x3()
-            y_axis = rot3 @ Vector((0.0, 1.0, 0.0))
-            z_axis = rot3 @ Vector((0.0, 0.0, 1.0))
-
-            if y_axis.length < 1e-8:
-                y_axis = Vector((0.0, 0.01, 0.0))
-            y_axis.normalize()
-
-            length = 0.05
-            for child in node.children:
-                if child in bone_node_set:
-                    child_rest = _bone_rest_matrix_for_node(child, apply_bone_root_fix)
-                    child_head = child_rest.to_translation()
-                    dist = (child_head - head).length
-                    if dist > 1e-5:
-                        length = dist
-                        break
-
-            eb.head = head
-            eb.tail = head + y_axis * max(length, 0.01)
-            if z_axis.length > 1e-8:
-                eb.align_roll(z_axis)
-            _log_bone_debug_event(
-                "bone-bind-rest",
-                {
-                    "bone_name": bone_name,
-                    "source_name": tf_name,
-                    "source_type": type(node.transform).__name__,
-                    "bind_matrix": _matrix_trs_summary(bone_bind)
-                    if bone_bind is not None
-                    else None,
-                    "rest_matrix": _matrix_trs_summary(bone_rest),
-                    "head_src": [round(float(v), 6) for v in head],
-                    "y_axis_src": [round(float(v), 6) for v in y_axis],
-                    "z_axis_src": [round(float(v), 6) for v in z_axis],
-                    "derived_length": round(float(max(length, 0.01)), 6),
-                    "parent_bone": node_to_bone_name.get(getattr(node, "parent", None)),
-                },
-                bone_name,
-                tf_name,
-            )
-            _log_bone_debug_event(
-                "bone-rest",
-                {
-                    "bone_name": bone_name,
-                    "source_name": tf_name,
-                    "source_type": type(node.transform).__name__,
-                    "rest_matrix": _matrix_trs_summary(bone_rest),
-                    "head": [round(float(v), 6) for v in eb.head],
-                    "tail": [round(float(v), 6) for v in eb.tail],
-                    "parent_bone": node_to_bone_name.get(getattr(node, "parent", None)),
-                },
-                bone_name,
-                tf_name,
+            _create_edit_bone(
+                node,
+                edit_bones,
+                node_to_bone_name,
+                bone_node_set,
+                apply_bone_root_fix,
             )
 
         for node in sorted_nodes:
@@ -799,7 +801,6 @@ def _build_edit_bones(arm_obj, arm_data, bone_nodes, apply_bone_root_fix):
 
     return node_to_bone_name
 
-
 def _finalize_bone_import_ctx(
     arm_obj,
     node_to_bone_name,
@@ -841,7 +842,6 @@ def _finalize_bone_import_ctx(
 # Main entry point
 # ---------------------------------------------------------------------------
 
-
 def _apply_armature_transforms(arm_obj):
     """Apply the armature's object-level transforms into its bone rest positions."""
     if arm_obj is None:
@@ -875,7 +875,6 @@ def _apply_armature_transforms(arm_obj):
             _log.debug("Optional operation failed: {}".format(exc), level=2)
         if prev_active is not None:
             view_layer.objects.active = prev_active
-
 
 def _prepare_bone_import(graph, parent_obj=None):
     """Create a single armature for EDM Bone/ArgAnimatedBone nodes."""
@@ -912,7 +911,6 @@ def _prepare_bone_import(graph, parent_obj=None):
     )
     _apply_armature_transforms(arm_obj)
 
-
 def _bind_skin_object(mesh_obj, skin_node):
     """Attach a SkinNode mesh to imported armature with vertex groups."""
     ctx = _import_ctx.bone_import_ctx or {}
@@ -946,7 +944,6 @@ def _bind_skin_object(mesh_obj, skin_node):
         arm_mod = mesh_obj.modifiers.new(name="Armature", type="ARMATURE")
     arm_mod.object = arm_obj
 
-    name_bonus = getattr(skin_node, "name", "") or ""
     bind_target_name, bind_target_loc = _choose_skin_bind_target(
         skin_bones,
         bone_rest_matrix_by_name,
@@ -965,64 +962,7 @@ def _bind_skin_object(mesh_obj, skin_node):
     except Exception as exc:
         _log.debug("Optional operation failed: {}".format(exc), level=2)
 
-    def _skin_parent_candidates():
-        if not name_bonus:
-            return []
-        matches = []
-        for obj in list(getattr(bpy.data, "objects", []) or []):
-            if obj in {mesh_obj, arm_obj}:
-                continue
-            if getattr(obj, "type", "") == "MESH":
-                continue
-            dbg_tf_name = str(obj.get("_iedm_dbg_tf_name", "") or "")
-            dbg_tf_cls = str(obj.get("_iedm_dbg_tf_cls", "") or "")
-            if dbg_tf_name != name_bonus and getattr(obj, "name", "") != name_bonus:
-                continue
-            score = 0
-            if dbg_tf_cls == "TransformNode":
-                score += 40
-            elif dbg_tf_cls and dbg_tf_cls != "ArgVisibilityNode":
-                score += 20
-            elif dbg_tf_cls == "ArgVisibilityNode":
-                score += 5
-            if getattr(obj, "name", "") == name_bonus:
-                score += 10
-            world_loc = None
-            distance = None
-            try:
-                world_loc = obj.matrix_world.to_translation().copy()
-            except Exception:
-                world_loc = None
-            if bind_target_loc is not None and world_loc is not None:
-                try:
-                    distance = (world_loc - bind_target_loc).length
-                    score -= min(distance * 1000.0, 1000.0)
-                except Exception:
-                    distance = None
-            matches.append((score, getattr(obj, "name", ""), obj, world_loc, distance))
-        matches.sort(key=lambda item: (-item[0], item[1]))
-        return matches
-
-    candidate = None
-    candidate_rows = _skin_parent_candidates()
-    for _score, _name, obj, _world_loc, _distance in candidate_rows:
-        candidate = obj
-        break
-    if (
-        candidate
-        and candidate not in {mesh_obj, arm_obj}
-        and (mesh_obj.parent is None or mesh_obj.parent == arm_obj)
-    ):
-        mesh_obj.parent = candidate
-        mesh_obj.matrix_parent_inverse = Matrix.Identity(4)
-        mesh_obj["_iedm_skin_parent_override"] = True
-    # Preserve hierarchy to keep inherited local transforms.
-    elif mesh_obj.parent is None:
-        mesh_obj.parent = arm_obj
-    else:
-        # Preserve previously inherited world transform if Blender already
-        # attached this mesh to a wrapper object.
-        mesh_obj.matrix_parent_inverse = Matrix.Identity(4)
+    _attach_skin_mesh_to_parent(mesh_obj, arm_obj, skin_node, bind_target_loc)
 
     _localize_skin_mesh_to_bind_target(mesh_obj, bind_target_loc)
 
@@ -1033,6 +973,55 @@ def _bind_skin_object(mesh_obj, skin_node):
     )
     _bake_skin_mesh_object_transforms(mesh_obj)
 
+def _attach_skin_mesh_to_parent(mesh_obj, arm_obj, skin_node, bind_target_loc):
+    """Choose a named wrapper when available, otherwise preserve current parent."""
+    name = getattr(skin_node, "name", "") or ""
+    candidate = _find_skin_parent_candidate(mesh_obj, arm_obj, name, bind_target_loc)
+    if (
+        candidate is not None
+        and candidate not in {mesh_obj, arm_obj}
+        and (mesh_obj.parent is None or mesh_obj.parent == arm_obj)
+    ):
+        mesh_obj.parent = candidate
+        mesh_obj.matrix_parent_inverse = Matrix.Identity(4)
+        mesh_obj["_iedm_skin_parent_override"] = True
+    elif mesh_obj.parent is None:
+        mesh_obj.parent = arm_obj
+    else:
+        mesh_obj.matrix_parent_inverse = Matrix.Identity(4)
+
+def _find_skin_parent_candidate(mesh_obj, arm_obj, name, bind_target_loc):
+    """Find the best matching non-mesh wrapper for a skin object."""
+    if not name:
+        return None
+    candidates = []
+    for obj in list(getattr(bpy.data, "objects", []) or []):
+        if obj in {mesh_obj, arm_obj} or getattr(obj, "type", "") == "MESH":
+            continue
+        debug_name = str(obj.get("_iedm_dbg_tf_name", "") or "")
+        debug_type = str(obj.get("_iedm_dbg_tf_cls", "") or "")
+        if debug_name != name and getattr(obj, "name", "") != name:
+            continue
+        score = _skin_parent_candidate_score(obj, debug_type, name, bind_target_loc)
+        candidates.append((score, getattr(obj, "name", ""), obj))
+    candidates.sort(key=lambda item: (-item[0], item[1]))
+    return candidates[0][2] if candidates else None
+
+def _skin_parent_candidate_score(obj, debug_type, name, bind_target_loc):
+    """Score a potential wrapper by semantic type, exact name and bind proximity."""
+    score = {
+        "TransformNode": 40,
+        "ArgVisibilityNode": 5,
+    }.get(debug_type, 20 if debug_type else 0)
+    if getattr(obj, "name", "") == name:
+        score += 10
+    try:
+        world_loc = obj.matrix_world.to_translation()
+        if bind_target_loc is not None:
+            score -= min((world_loc - bind_target_loc).length * 1000.0, 1000.0)
+    except Exception:
+        pass
+    return score
 
 def _assign_skin_vertex_weights(
     mesh_obj, skin_node, skin_bones, group_map, channel_slices
@@ -1086,7 +1075,6 @@ def _assign_skin_vertex_weights(
                 group_map[name].add([vi], weight / total, "REPLACE")
         else:
             group_map[skin_bones[0]].add([vi], 1.0, "REPLACE")
-
 
 def _bake_skin_mesh_object_transforms(mesh_obj):
     """Bake non-identity matrix_basis into vertices so the basis becomes identity.

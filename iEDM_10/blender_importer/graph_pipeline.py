@@ -471,36 +471,8 @@ def _assign_collections(graph):
         "texture_anim": col_tex_anim,
     }
 
-    # Move _EDMFileRoot to Vehicle when all categorized children are vehicle content
-    if graph.root.blender:
-        root_name = getattr(graph.root.blender, "name", "")
-        if root_name == "_EDMFileRoot" and graph.root.blender.parent is None:
-            child_cats = set()
-            for child_obj in graph.root.blender.children:
-                cat = obj_category.get(child_obj)
-                if cat:
-                    child_cats.add(cat)
-            if "vehicle" in child_cats and "collision" not in child_cats:
-                obj_category[graph.root.blender] = "vehicle"
-
-    for obj, cat in obj_category.items():
-        target = _col_map.get(cat)
-        if target is None:
-            continue
-        for cur_col in list(obj.users_collection):
-            try:
-                cur_col.objects.unlink(obj)
-            except Exception as e:
-                _log.warn(
-                    "collection unlink '{}': {}".format(
-                        getattr(obj, "name", "<unknown>"), e
-                    ),
-                    exc=e,
-                )
-        try:
-            target.objects.link(obj)
-        except RuntimeError:
-            pass
+    _categorize_file_root(graph, obj_category)
+    _move_objects_to_categories(obj_category, _col_map)
 
     def _exclude_layer_collection(layer_collection, name):
         if layer_collection.collection.name == name:
@@ -515,8 +487,42 @@ def _assign_collections(graph):
         bpy.context.view_layer.layer_collection, "Texture_Animation"
     )
 
-    # Create exporter-compatible named LOD collections (LOD_<id>_<dist>) so that
-    # round-tripped files preserve their LOD distance assignments on re-export.
+    _create_lod_collections(graph, col_vehicle)
+
+
+def _categorize_file_root(graph, obj_category):
+    """Place an unparented file root with its vehicle children."""
+    root = getattr(getattr(graph, "root", None), "blender", None)
+    if (
+        not root
+        or getattr(root, "name", "") != "_EDMFileRoot"
+        or root.parent is not None
+    ):
+        return
+    child_categories = {obj_category.get(child) for child in root.children}
+    if "vehicle" in child_categories and "collision" not in child_categories:
+        obj_category[root] = "vehicle"
+
+
+def _move_objects_to_categories(obj_category, collection_map):
+    """Move categorized Blender objects into their target collections."""
+    for obj, category in obj_category.items():
+        target = collection_map.get(category)
+        if target is None:
+            continue
+        for current_collection in list(obj.users_collection):
+            try:
+                current_collection.objects.unlink(obj)
+            except Exception as exc:
+                _log.warn("collection unlink '{}': {}".format(obj.name, exc), exc=exc)
+        try:
+            target.objects.link(obj)
+        except RuntimeError:
+            pass
+
+def _create_lod_collections(graph, vehicle_collection):
+    """Create named collections for post-processed LOD levels."""
+    # Names retain exporter-compatible LOD distances during round-trips.
     for n in graph.nodes:
         if not getattr(n, "_lod_post_children", False):
             continue
@@ -527,12 +533,12 @@ def _assign_collections(graph):
             if not getattr(child, "blender", None):
                 continue
             col_name = "LOD_{}_{}".format(i, int(end))
-            col_lod = _get_or_create_child_col(col_vehicle, col_name)
+            col_lod = _get_or_create_child_col(vehicle_collection, col_name)
             objs_to_move = [child.blender] + list(child.blender.children_recursive)
             for obj in objs_to_move:
-                if obj.name in col_vehicle.objects:
+                if obj.name in vehicle_collection.objects:
                     try:
-                        col_vehicle.objects.unlink(obj)
+                        vehicle_collection.objects.unlink(obj)
                     except Exception as exc:
                         _log.debug("Optional operation failed: {}".format(exc), level=2)
                 if obj.name not in col_lod.objects:

@@ -141,40 +141,10 @@ def _preserve_morph_payload(blender_obj, render_node):
 
 def _decode_morph_payload_to_shape_keys(blender_obj, render_node, transform):
     payload = getattr(render_node, "_morph_payload", None)
-    if not payload or blender_obj is None or getattr(blender_obj, "type", "") != "MESH":
+    prepared = _prepare_morph_payload(blender_obj, render_node, payload)
+    if prepared is None:
         return 0
-    vertex_count = int(len(getattr(render_node, "vertexData", None) or []))
-    if vertex_count <= 0 or len(payload) % 12 != 0:
-        return 0
-    if len(getattr(blender_obj.data, "vertices", []) or []) != vertex_count:
-        return 0
-
-    vec3_count = len(payload) // 12
-    if vec3_count < vertex_count or (vec3_count % vertex_count) != 0:
-        return 0
-
-    morph_count = vec3_count // vertex_count
-    if morph_count <= 0 or morph_count > 8:
-        return 0
-
-    try:
-        floats = __import__("struct").unpack("<{}f".format(len(payload) // 4), payload)
-    except Exception:
-        return 0
-
-    if any(not math.isfinite(v) for v in floats):
-        return 0
-
-    basis_positions = [vert.co.copy() for vert in blender_obj.data.vertices]
-    if len(basis_positions) != vertex_count:
-        return 0
-
-    bbox_extent = 0.0
-    for pos in basis_positions:
-        bbox_extent = max(
-            bbox_extent, abs(float(pos.x)), abs(float(pos.y)), abs(float(pos.z))
-        )
-    delta_limit = max(10.0, bbox_extent * 10.0, 1.0)
+    vertex_count, morph_count, floats, basis_positions, delta_limit = prepared
 
     delta_transform = None
     if transform is not None:
@@ -192,25 +162,9 @@ def _decode_morph_payload_to_shape_keys(blender_obj, render_node, transform):
 
     for morph_index in range(morph_count):
         start = morph_index * vertex_count * 3
-        max_abs_delta = 0.0
-        deltas = []
-        for vertex_index in range(vertex_count):
-            offset = start + (vertex_index * 3)
-            delta = Vector((floats[offset], floats[offset + 1], floats[offset + 2]))
-            if delta_transform is not None:
-                try:
-                    delta = delta_transform @ delta
-                except Exception as exc:
-                    _log.debug(
-                        "Optional operation failed: {}".format(exc), level=2
-                    )
-            max_abs_delta = max(
-                max_abs_delta,
-                abs(float(delta.x)),
-                abs(float(delta.y)),
-                abs(float(delta.z)),
-            )
-            deltas.append(delta)
+        max_abs_delta, deltas = _decode_morph_deltas(
+            floats, start, vertex_count, delta_transform
+        )
 
         if max_abs_delta <= 1.0e-8 or max_abs_delta > delta_limit:
             continue
@@ -234,6 +188,52 @@ def _decode_morph_payload_to_shape_keys(blender_obj, render_node, transform):
         except Exception as exc:
             _log.debug("Optional operation failed: {}".format(exc), level=2)
     return decoded
+
+
+def _prepare_morph_payload(blender_obj, render_node, payload):
+    """Validate packed shape-key deltas and collect the base mesh positions."""
+    if not payload or blender_obj is None or getattr(blender_obj, "type", "") != "MESH":
+        return None
+    vertex_count = len(getattr(render_node, "vertexData", None) or [])
+    if vertex_count <= 0 or len(payload) % 12 != 0:
+        return None
+    if len(getattr(blender_obj.data, "vertices", []) or []) != vertex_count:
+        return None
+    vector_count = len(payload) // 12
+    if vector_count < vertex_count or vector_count % vertex_count:
+        return None
+    morph_count = vector_count // vertex_count
+    if not 0 < morph_count <= 8:
+        return None
+    try:
+        floats = __import__("struct").unpack("<{}f".format(len(payload) // 4), payload)
+    except Exception:
+        return None
+    if any(not math.isfinite(value) for value in floats):
+        return None
+    positions = [vertex.co.copy() for vertex in blender_obj.data.vertices]
+    extent = max(
+        (abs(float(component)) for pos in positions for component in pos),
+        default=0.0,
+    )
+    return vertex_count, morph_count, floats, positions, max(10.0, extent * 10.0)
+
+
+def _decode_morph_deltas(floats, start, vertex_count, transform):
+    """Decode and optionally transform one shape's per-vertex displacement."""
+    deltas = []
+    max_delta = 0.0
+    for vertex_index in range(vertex_count):
+        offset = start + vertex_index * 3
+        delta = Vector((floats[offset], floats[offset + 1], floats[offset + 2]))
+        if transform is not None:
+            try:
+                delta = transform @ delta
+            except Exception as exc:
+                _log.debug("Optional operation failed: {}".format(exc), level=2)
+        max_delta = max(max_delta, *(abs(float(value)) for value in delta))
+        deltas.append(delta)
+    return max_delta, deltas
 
 
 def _preserve_source_metadata(ob, node):

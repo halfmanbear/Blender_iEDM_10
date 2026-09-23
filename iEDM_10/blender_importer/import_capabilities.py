@@ -177,50 +177,9 @@ def derive_import_capabilities(edm):
     )
 
     if features.edm_version >= 10:
-        if authored_scene_root_v10 and not pure_collision_payload:
-            flags["graph_root_v10_basis_fix"] = True
-            flags["v10_root_object_basis_fix"] = True
-            flags["implicit_scene_root_basis_object"] = True
-            flags["argvis_chain_basis_fix"] = True
-
-        if features.has_root_transform_payload:
-            flags["v10_root_object_basis_fix"] = True
-
-        if features.plain_root_v10 and not pure_collision_payload:
-            flags["plain_root_render_local_basis_fix"] = True
-            flags["plain_root_visibility_basis_fix"] = True
-            flags["plain_root_connector_basis_fix"] = True
-            flags["plain_root_connector_child_basis_fix"] = True
-
-            if features.has_bones:
-                flags["bone_rest_requires_root_basis_fix"] = True
-                flags["v10_root_object_basis_fix"] = True
-                flags["implicit_scene_root_basis_object"] = True
-                flags["skin_mesh_geometry_root_basis_fix"] = True
-
-            if features.has_owner_encoded_split_renders:
-                flags["owner_encoded_render_offset_fix"] = True
-
-            if not features.has_bones and (
-                features.has_owner_encoded_split_renders
-                or (features.has_generic_render_chunks and features.has_shell_nodes)
-            ):
-                flags["auto_raw_mesh_origin_v10_split"] = True
-
-        if features.has_shell_nodes or features.has_segments_nodes:
-            if pure_collision_payload:
-                # Pure collision-only graphs already store shell/segment payloads in a
-                # rootless, Y-up object space. Convert geometry directly instead of
-                # inventing a synthetic +90 X scene object that leaves Blender objects
-                # looking rotated even though the world-space mesh is correct.
-                flags["collision_geometry_basis_fix"] = True
-            else:
-                flags["embedded_collision_scene_root_basis_object"] = True
-                flags["v10_root_object_basis_fix"] = True
-
-        if features.transform_root_type == "LodNode":
-            flags["lod_root_scene_basis_object"] = True
-            flags["v10_root_object_basis_fix"] = True
+        _add_v10_capability_flags(
+            features, flags, authored_scene_root_v10, pure_collision_payload
+        )
 
     if features.has_owner_encoded_split_renders:
         flags["owner_encoded_render_offset_fix"] = True
@@ -230,6 +189,70 @@ def derive_import_capabilities(edm):
         if flags.get("v10_root_object_basis_fix"):
             flags["skin_mesh_geometry_root_basis_fix"] = True
 
+    name, description = _capability_profile(
+        features, authored_scene_root_v10, pure_collision_payload
+    )
+
+    return ImportCapabilities(
+        name=name,
+        description=description,
+        detail=_capability_detail(features),
+        flags=flags,
+    )
+
+
+def _add_v10_capability_flags(
+    features, flags, authored_scene_root_v10, pure_collision_payload
+):
+    """Set basis-fix capabilities implied by a v10 graph's structure."""
+    if authored_scene_root_v10 and not pure_collision_payload:
+        flags["graph_root_v10_basis_fix"] = True
+        flags["v10_root_object_basis_fix"] = True
+        flags["implicit_scene_root_basis_object"] = True
+        flags["argvis_chain_basis_fix"] = True
+
+    if features.has_root_transform_payload:
+        flags["v10_root_object_basis_fix"] = True
+
+    if features.plain_root_v10 and not pure_collision_payload:
+        flags["plain_root_render_local_basis_fix"] = True
+        flags["plain_root_visibility_basis_fix"] = True
+        flags["plain_root_connector_basis_fix"] = True
+        flags["plain_root_connector_child_basis_fix"] = True
+
+        if features.has_bones:
+            flags["bone_rest_requires_root_basis_fix"] = True
+            flags["v10_root_object_basis_fix"] = True
+            flags["implicit_scene_root_basis_object"] = True
+            flags["skin_mesh_geometry_root_basis_fix"] = True
+
+        if features.has_owner_encoded_split_renders:
+            flags["owner_encoded_render_offset_fix"] = True
+
+        if not features.has_bones and (
+            features.has_owner_encoded_split_renders
+            or (features.has_generic_render_chunks and features.has_shell_nodes)
+        ):
+            flags["auto_raw_mesh_origin_v10_split"] = True
+
+    if features.has_shell_nodes or features.has_segments_nodes:
+        if pure_collision_payload:
+            # Pure collision-only graphs already store shell/segment payloads in a
+            # rootless, Y-up object space. Convert geometry directly instead of
+            # inventing a synthetic +90 X scene object that leaves Blender objects
+            # looking rotated even though the world-space mesh is correct.
+            flags["collision_geometry_basis_fix"] = True
+        else:
+            flags["embedded_collision_scene_root_basis_object"] = True
+            flags["v10_root_object_basis_fix"] = True
+
+    if features.transform_root_type == "LodNode":
+        flags["lod_root_scene_basis_object"] = True
+        flags["v10_root_object_basis_fix"] = True
+
+
+def _capability_profile(features, authored_scene_root_v10, pure_collision_payload):
+    """Describe the graph profile associated with the detected features."""
     if pure_collision_payload:
         name = "DERIVED_PURE_COLLISION_PAYLOAD"
         description = (
@@ -260,9 +283,4 @@ def derive_import_capabilities(edm):
         name = "DERIVED_AUTHORED_SCENE"
         description = "Authored scene graph with explicit root payload."
 
-    return ImportCapabilities(
-        name=name,
-        description=description,
-        detail=_capability_detail(features),
-        flags=flags,
-    )
+    return name, description

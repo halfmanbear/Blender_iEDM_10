@@ -269,121 +269,119 @@ def apply_node_transform(node, obj, used_shared_parent=False):
         else Matrix.Identity(4)
     )
     if tfnode is None and _is_connector_object(obj) and obj.parent is None:
-        try:
-            flat = obj.get("_iedm_connector_tf_matrix", None)
-            if flat is not None and len(flat) == 16:
-                connector_local = Matrix(
-                    (
-                        tuple(float(v) for v in flat[0:4]),
-                        tuple(float(v) for v in flat[4:8]),
-                        tuple(float(v) for v in flat[8:12]),
-                        tuple(float(v) for v in flat[12:16]),
-                    )
-                )
-                loc = connector_local.to_translation()
-                rot_mat = connector_local.to_3x3().to_4x4()
-                if _is_pos90_x_basis_matrix(rot_mat):
-                    rot_mat = Matrix.Identity(4)
-                elif _is_neg90_x_basis_matrix(rot_mat):
-                    rot_mat = Matrix.Identity(4)
-                if (
-                    _import_profile_flag("plain_root_connector_basis_fix")
-                    and obj.parent is None
-                    and _import_ctx.edm_version >= 10
-                    and not getattr(_import_ctx, "use_scene_root_basis_object", True)
-                ):
-                    loc = (_ROOT_BASIS_FIX @ Matrix.Translation(loc)).to_translation()
-                final_local = Matrix.Translation(loc) @ rot_mat
-        except Exception as e:
-            _log.warn(
-                "connector tf-matrix parse for '{}': {}".format(
-                    getattr(obj, "name", "<unknown>"), e
-                ),
-                exc=e,
-            )
+        final_local = _connector_fallback_local_matrix(obj, final_local)
     if isinstance(tfnode, TransformNode):
-        is_connector_obj = _is_connector_transform(tfnode, obj)
-        is_connector_wrapper = _is_plain_root_connector_wrapper(tnode, obj)
-        is_connector_child = _is_plain_root_connector_child(tnode, obj)
-        raw_local_mat = Matrix(tfnode.matrix)
-        local_mat = Matrix(raw_local_mat)
-        if is_connector_obj or is_connector_wrapper or is_connector_child:
-            if (
-                _import_profile_flag("plain_root_connector_basis_fix")
-                and obj.parent is None
-                and _import_ctx.edm_version >= 10
-                and not getattr(_import_ctx, "use_scene_root_basis_object", True)
-            ):
-                local_mat = _ROOT_BASIS_FIX @ local_mat
-            elif is_connector_child:
-                local_mat = _ROOT_BASIS_FIX @ local_mat
-            elif (
-                is_connector_wrapper
-                and obj.parent is not None
-                and _import_ctx.edm_version >= 10
-                and _is_neg90_x_basis_matrix(raw_local_mat.to_3x3().to_4x4())
-            ):
-                try:
-                    parent_rot = obj.parent.matrix_world.to_3x3().to_4x4()
-                except Exception:
-                    parent_rot = Matrix.Identity(4)
-                if _is_pos90_x_basis_matrix(parent_rot):
-                    local_mat = Matrix.Translation(raw_local_mat.to_translation())
-            if is_connector_obj:
-                local_mat = local_mat @ Matrix.Rotation(math.radians(-90.0), 4, "X")
-            elif not is_connector_wrapper and not _is_neg90_x_basis_matrix(
-                raw_local_mat.to_3x3().to_4x4()
-            ):
-                local_mat = local_mat @ Matrix.Rotation(math.radians(-90.0), 4, "X")
-        final_local = _compose_with_parent_if_enabled(obj, local_mat)
+        final_local = _transform_node_local_matrix(tnode, tfnode, obj)
     elif isinstance(tfnode, AnimatingNode):
-        if hasattr(tfnode, "zero_transform_local_matrix"):
-            final_local = _compose_with_parent_if_enabled(
-                obj, tfnode.zero_transform_local_matrix
-            )
-        elif hasattr(tfnode, "zero_transform_matrix"):
-            final_local = _compose_with_parent_if_enabled(
-                obj, tfnode.zero_transform_matrix
-            )
-        elif hasattr(tfnode, "zero_transform"):
-            loc, rot, scale = tfnode.zero_transform
-            final_local = _compose_with_parent_if_enabled(
-                obj, Matrix.LocRotScale(loc, rot, scale)
-            )
-
-        wrapper_offset = getattr(tfnode, "wrapper_rest_translation_matrix", None)
-        if wrapper_offset is not None and tnode is not None:
-            parent_graph = getattr(tnode, "parent", None)
-            parent_obj = (
-                getattr(parent_graph, "blender", None)
-                if parent_graph is not None
-                else None
-            )
-            if parent_obj is not None and not getattr(
-                tfnode, "_wrapper_rest_translation_applied", False
-            ):
-                try:
-                    parent_obj.matrix_basis = parent_obj.matrix_basis @ wrapper_offset
-                    tfnode._wrapper_rest_translation_applied = True
-                except Exception as e:
-                    _log.warn(
-                        "wrapper_rest_translation apply for '{}': {}".format(
-                            getattr(parent_obj, "name", "<unknown>"), e
-                        ),
-                        exc=e,
-                    )
+        final_local = _animated_node_local_matrix(tnode, tfnode, obj, final_local)
 
     # 2. Inherit RenderNode local offset if present
     if render and tfnode is not None and not _is_connector_object(obj):
-        m_rn = Matrix.Identity(4)
-        if hasattr(render, "pos"):
-            m_rn = Matrix.Translation(Vector(render.pos[:3]))
-        elif hasattr(render, "matrix"):
-            m_rn = Matrix(render.matrix)
-
-        if not m_rn.is_identity:
-            final_local = final_local @ m_rn
+        final_local = _inherit_render_local_offset(final_local, render)
 
     _set_local_matrix(obj, final_local, wants_quaternion_rotation)
     _debug_set_trace(tfnode, obj, type(tfnode).__name__, final_local)
     _debug_dump_parent_chain(tnode, tfnode, obj, final_local)
+
+
+def _connector_fallback_local_matrix(obj, final_local):
+    try:
+        flat = obj.get("_iedm_connector_tf_matrix", None)
+        if flat is None or len(flat) != 16:
+            return final_local
+        matrix = Matrix(
+            tuple(
+                tuple(float(value) for value in flat[offset : offset + 4])
+                for offset in (0, 4, 8, 12)
+            )
+        )
+        location = matrix.to_translation()
+        rotation = matrix.to_3x3().to_4x4()
+        if _is_pos90_x_basis_matrix(rotation) or _is_neg90_x_basis_matrix(rotation):
+            rotation = Matrix.Identity(4)
+        if (
+            _import_profile_flag("plain_root_connector_basis_fix")
+            and obj.parent is None
+            and _import_ctx.edm_version >= 10
+            and not getattr(_import_ctx, "use_scene_root_basis_object", True)
+        ):
+            location = (_ROOT_BASIS_FIX @ Matrix.Translation(location)).to_translation()
+        return Matrix.Translation(location) @ rotation
+    except Exception as exc:
+        _log.warn(
+            "connector tf-matrix parse for '{}': {}".format(
+                getattr(obj, "name", "<unknown>"), exc
+            ),
+            exc=exc,
+        )
+        return final_local
+
+
+def _transform_node_local_matrix(node, transform, obj):
+    is_connector = _is_connector_transform(transform, obj)
+    is_wrapper = _is_plain_root_connector_wrapper(node, obj)
+    is_child = _is_plain_root_connector_child(node, obj)
+    raw_matrix = Matrix(transform.matrix)
+    local_matrix = Matrix(raw_matrix)
+    if is_connector or is_wrapper or is_child:
+        if (
+            _import_profile_flag("plain_root_connector_basis_fix")
+            and obj.parent is None
+            and _import_ctx.edm_version >= 10
+            and not getattr(_import_ctx, "use_scene_root_basis_object", True)
+        ) or is_child:
+            local_matrix = _ROOT_BASIS_FIX @ local_matrix
+        elif is_wrapper and obj.parent is not None and _import_ctx.edm_version >= 10:
+            if _is_neg90_x_basis_matrix(raw_matrix.to_3x3().to_4x4()):
+                try:
+                    parent_rotation = obj.parent.matrix_world.to_3x3().to_4x4()
+                except Exception:
+                    parent_rotation = Matrix.Identity(4)
+                if _is_pos90_x_basis_matrix(parent_rotation):
+                    local_matrix = Matrix.Translation(raw_matrix.to_translation())
+        if (
+            is_connector
+            or not is_wrapper
+            and not _is_neg90_x_basis_matrix(raw_matrix.to_3x3().to_4x4())
+        ):
+            local_matrix = local_matrix @ Matrix.Rotation(math.radians(-90.0), 4, "X")
+    return _compose_with_parent_if_enabled(obj, local_matrix)
+
+
+def _animated_node_local_matrix(node, transform, obj, final_local):
+    if hasattr(transform, "zero_transform_local_matrix"):
+        final_local = _compose_with_parent_if_enabled(
+            obj, transform.zero_transform_local_matrix
+        )
+    elif hasattr(transform, "zero_transform_matrix"):
+        final_local = _compose_with_parent_if_enabled(
+            obj, transform.zero_transform_matrix
+        )
+    elif hasattr(transform, "zero_transform"):
+        location, rotation, scale = transform.zero_transform
+        final_local = _compose_with_parent_if_enabled(
+            obj, Matrix.LocRotScale(location, rotation, scale)
+        )
+    wrapper_offset = getattr(transform, "wrapper_rest_translation_matrix", None)
+    parent = getattr(getattr(node, "parent", None), "blender", None) if node else None
+    if (
+        wrapper_offset is not None
+        and parent is not None
+        and not getattr(transform, "_wrapper_rest_translation_applied", False)
+    ):
+        try:
+            parent.matrix_basis = parent.matrix_basis @ wrapper_offset
+            transform._wrapper_rest_translation_applied = True
+        except Exception as exc:
+            _log.warn("wrapper_rest_translation apply: {}".format(exc), exc=exc)
+    return final_local
+
+
+def _inherit_render_local_offset(final_local, render):
+    if hasattr(render, "pos"):
+        render_matrix = Matrix.Translation(Vector(render.pos[:3]))
+    elif hasattr(render, "matrix"):
+        render_matrix = Matrix(render.matrix)
+    else:
+        return final_local
+    return final_local @ render_matrix if not render_matrix.is_identity else final_local

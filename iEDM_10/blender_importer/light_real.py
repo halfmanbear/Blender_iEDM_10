@@ -57,65 +57,128 @@ def _import_light_properties(node, obj, light_data, light_type):
         _get_prop_any(props, "VolumeType", "volumeType")
     )
 
-    if color_static is not None:
-        light_data.color = _to_vec3(color_static, light_data.color)
-    if bright_static is not None:
+    _apply_static_light_data(
+        light_data,
+        light_type,
+        color_static,
+        bright_static,
+        dist_static,
+        spec_static,
+        phi_static,
+        theta_static,
+    )
+
+    _apply_static_light_properties(
+        obj,
+        light_type,
+        (color_arg, bright_arg, dist_arg, spec_arg, phi_arg, theta_arg),
+        (
+            soft_static,
+            vol_radius_static,
+            vol_density_static,
+            vol_near_static,
+            vol_type_static,
+        ),
+    )
+
+    # Recreate light-data animation curves for exporter parity.
+    _create_light_data_animation(
+        obj,
+        light_data,
+        light_type,
+        (
+            color_arg,
+            color_keys,
+            bright_arg,
+            bright_keys,
+            dist_arg,
+            dist_keys,
+            phi_arg,
+            phi_keys,
+            theta_arg,
+            theta_keys,
+            spec_arg,
+            spec_keys,
+            soft_arg,
+        ),
+    )
+
+    _create_light_property_animation(
+        obj,
+        (
+            soft_arg,
+            soft_keys,
+            vol_radius_arg,
+            vol_radius_keys,
+            vol_density_arg,
+            vol_density_keys,
+            vol_near_arg,
+            vol_near_keys,
+            vol_type_arg,
+        ),
+    )
+
+
+def _apply_static_light_data(
+    light_data, light_type, color, brightness, distance, specular, phi, theta
+):
+    if color is not None:
+        light_data.color = _to_vec3(color, light_data.color)
+    if brightness is not None:
         light_data.energy = _edm_light_brightness_to_blender_energy(
-            bright_static, light_type
+            brightness, light_type
         )
-    if dist_static is not None:
+    if distance is not None:
         light_data.use_custom_distance = True
-        light_data.cutoff_distance = max(0.0, _to_float(dist_static, 0.0))
-    if spec_static is not None and hasattr(light_data, "specular_factor"):
+        light_data.cutoff_distance = max(0.0, _to_float(distance, 0.0))
+    if specular is not None and hasattr(light_data, "specular_factor"):
         light_data.specular_factor = max(
-            0.0, _to_float(spec_static, light_data.specular_factor)
+            0.0, _to_float(specular, light_data.specular_factor)
         )
-
     if light_type == "SPOT":
-        if phi_static is not None:
+        if phi is not None:
             light_data.spot_size = min(
-                math.radians(170.0),
-                max(0.0, _to_float(phi_static, light_data.spot_size)),
+                math.radians(170.0), max(0.0, _to_float(phi, light_data.spot_size))
             )
-        if theta_static is not None:
+        if theta is not None:
             light_data.spot_blend = min(
-                1.0, max(0.0, _to_float(theta_static, light_data.spot_blend))
+                1.0, max(0.0, _to_float(theta, light_data.spot_blend))
             )
 
-    # Map EDM animated-property arguments into official exporter EDMProps fields.
-    if color_arg >= 0:
-        _set_edmprop(obj, "LIGHT_COLOR_ARG", int(color_arg))
-    if bright_arg >= 0:
-        _set_edmprop(obj, "LIGHT_POWER_ARG", int(bright_arg))
-    if dist_arg >= 0:
-        _set_edmprop(obj, "LIGHT_DISTANCE_ARG", int(dist_arg))
-    if spec_arg >= 0:
-        _set_edmprop(obj, "LIGHT_SPECULAR_ARG", int(spec_arg))
-    if soft_static is not None:
-        _set_edmprop(obj, "LIGHT_SOFTNESS", max(0.0, _to_float(soft_static, 0.0)))
-    if vol_radius_static is not None:
-        _set_edmprop(
-            obj,
+
+def _apply_static_light_properties(obj, light_type, args, values):
+    color_arg, bright_arg, dist_arg, spec_arg, phi_arg, theta_arg = args
+    soft, vol_radius, vol_density, vol_near, vol_type = values
+    fields = (
+        (color_arg, "LIGHT_COLOR_ARG"),
+        (bright_arg, "LIGHT_POWER_ARG"),
+        (dist_arg, "LIGHT_DISTANCE_ARG"),
+        (spec_arg, "LIGHT_SPECULAR_ARG"),
+    )
+    for argument, field in fields:
+        if argument >= 0:
+            _set_edmprop(obj, field, int(argument))
+    for value, field, convert in (
+        (soft, "LIGHT_SOFTNESS", lambda v: max(0.0, _to_float(v, 0.0))),
+        (
+            vol_radius,
             "LIGHT_VOLUME_RADIUS_FACTOR",
-            min(1.0, max(0.0, _to_float(vol_radius_static, 0.0))),
-        )
-    if vol_density_static is not None:
-        _set_edmprop(
-            obj,
+            lambda v: min(1.0, max(0.0, _to_float(v, 0.0))),
+        ),
+        (
+            vol_density,
             "LIGHT_VOLUME_DENSITY_FACTOR",
-            min(1.0, max(0.0, _to_float(vol_density_static, 0.0))),
-        )
-    if vol_near_static is not None:
-        _set_edmprop(
-            obj, "LIGHT_VOLUME_NEAR_DISTANCE", max(0.0, _to_float(vol_near_static, 0.0))
-        )
-    if vol_type_static is not None:
+            lambda v: min(1.0, max(0.0, _to_float(v, 0.0))),
+        ),
+        (vol_near, "LIGHT_VOLUME_NEAR_DISTANCE", lambda v: max(0.0, _to_float(v, 0.0))),
+    ):
+        if value is not None:
+            _set_edmprop(obj, field, convert(value))
+    if vol_type is not None:
         try:
-            vol_type_int = int(round(_to_float(vol_type_static, 4)))
             volume_types = {0: "LANDING", 1: "NAV", 2: "TAXI", 3: "BANO"}
-            _set_edmprop(
-                obj, "LIGHT_VOLUME_TYPE", volume_types.get(vol_type_int, "NONE")
-            )
+            value = int(round(_to_float(vol_type, 4)))
+            _set_edmprop(obj, "LIGHT_VOLUME_TYPE", volume_types.get(value, "NONE"))
         except Exception as e:
             print(f"Warning in blender_importer/lights.py: {e}")
     if light_type == "SPOT":
@@ -123,145 +186,132 @@ def _import_light_properties(node, obj, light_data, light_type):
         if spot_arg >= 0:
             _set_edmprop(obj, "LIGHT_SPOT_SHAPE_ARG", int(spot_arg))
 
-    # Recreate light-data animation curves for exporter parity.
-    has_anim = any(
-        keys
-        for keys in (
-            color_keys,
-            bright_keys,
-            dist_keys,
-            phi_keys,
-            theta_keys,
-            spec_keys,
+
+def _create_light_data_animation(obj, light_data, light_type, values):
+    (
+        color_arg,
+        color_keys,
+        bright_arg,
+        bright_keys,
+        dist_arg,
+        dist_keys,
+        phi_arg,
+        phi_keys,
+        theta_arg,
+        theta_keys,
+        spec_arg,
+        spec_keys,
+        soft_arg,
+    ) = values
+    if not any((color_keys, bright_keys, dist_keys, phi_keys, theta_keys, spec_keys)):
+        return
+    action = bpy.data.actions.new("Light_{}".format(obj.name))
+    action_fcurves(action, id_type="LIGHT")
+    if hasattr(action, "argument"):
+        action.argument = next(
+            (
+                a
+                for a in (
+                    color_arg,
+                    bright_arg,
+                    dist_arg,
+                    phi_arg,
+                    theta_arg,
+                    spec_arg,
+                    soft_arg,
+                )
+                if a >= 0
+            ),
+            -1,
         )
-    )
-    if has_anim:
-        action = bpy.data.actions.new("Light_{}".format(obj.name))
-        action_fcurves(action, id_type="LIGHT")
-        if hasattr(action, "argument"):
-            first_arg = next(
-                (
-                    a
-                    for a in (
-                        color_arg,
-                        bright_arg,
-                        dist_arg,
-                        phi_arg,
-                        theta_arg,
-                        spec_arg,
-                        soft_arg,
-                    )
-                    if a >= 0
-                ),
-                -1,
-            )
-            if first_arg >= 0:
-                action.argument = int(first_arg)
-
-        if color_keys:
-            for idx in range(3):
-                _add_light_keyframes(
-                    action,
-                    "color",
-                    color_keys,
-                    lambda v, c=idx: _to_vec3(v)[c],
-                    array_index=idx,
-                )
-        if bright_keys:
+    if color_keys:
+        for idx in range(3):
             _add_light_keyframes(
                 action,
-                "energy",
-                bright_keys,
-                lambda v: _edm_light_brightness_to_blender_energy(v, light_type),
+                "color",
+                color_keys,
+                lambda v, c=idx: _to_vec3(v)[c],
+                array_index=idx,
             )
-        if dist_keys:
-            light_data.use_custom_distance = True
+    if bright_keys:
+        _add_light_keyframes(
+            action,
+            "energy",
+            bright_keys,
+            lambda v: _edm_light_brightness_to_blender_energy(v, light_type),
+        )
+    if dist_keys:
+        light_data.use_custom_distance = True
+        _add_light_keyframes(
+            action, "cutoff_distance", dist_keys, lambda v: max(0.0, _to_float(v, 0.0))
+        )
+    if spec_keys and hasattr(light_data, "specular_factor"):
+        _add_light_keyframes(
+            action, "specular_factor", spec_keys, lambda v: max(0.0, _to_float(v, 0.0))
+        )
+    if light_type == "SPOT":
+        if phi_keys:
             _add_light_keyframes(
                 action,
-                "cutoff_distance",
-                dist_keys,
-                lambda v: max(0.0, _to_float(v, 0.0)),
+                "spot_size",
+                phi_keys,
+                lambda v: min(math.radians(170.0), max(0.0, _to_float(v, 0.0))),
             )
-        if spec_keys and hasattr(light_data, "specular_factor"):
+        if theta_keys:
             _add_light_keyframes(
                 action,
-                "specular_factor",
-                spec_keys,
-                lambda v: max(0.0, _to_float(v, 0.0)),
-            )
-        if light_type == "SPOT":
-            if phi_keys:
-                _add_light_keyframes(
-                    action,
-                    "spot_size",
-                    phi_keys,
-                    lambda v: min(math.radians(170.0), max(0.0, _to_float(v, 0.0))),
-                )
-            if theta_keys:
-                _add_light_keyframes(
-                    action,
-                    "spot_blend",
-                    theta_keys,
-                    lambda v: min(1.0, max(0.0, _to_float(v, 0.0))),
-                )
-
-        anim_data = light_data.animation_data_create()
-        anim_data.action = action
-
-    edmprop_anim = any(
-        keys for keys in (soft_keys, vol_radius_keys, vol_density_keys, vol_near_keys)
-    )
-    if edmprop_anim and hasattr(obj, "EDMProps"):
-        prop_action = bpy.data.actions.new("LightProps_{}".format(obj.name))
-        if hasattr(prop_action, "argument"):
-            first_arg = next(
-                (
-                    a
-                    for a in (
-                        soft_arg,
-                        vol_radius_arg,
-                        vol_density_arg,
-                        vol_near_arg,
-                        vol_type_arg,
-                    )
-                    if a >= 0
-                ),
-                -1,
-            )
-            if first_arg >= 0:
-                prop_action.argument = int(first_arg)
-
-        if soft_keys:
-            _add_edmprop_keyframes(
-                prop_action,
-                "EDMProps.LIGHT_SOFTNESS",
-                soft_keys,
-                lambda v: max(0.0, _to_float(v, 0.0)),
-            )
-        if vol_radius_keys:
-            _add_edmprop_keyframes(
-                prop_action,
-                "EDMProps.LIGHT_VOLUME_RADIUS_FACTOR",
-                vol_radius_keys,
+                "spot_blend",
+                theta_keys,
                 lambda v: min(1.0, max(0.0, _to_float(v, 0.0))),
             )
-        if vol_density_keys:
-            _add_edmprop_keyframes(
-                prop_action,
-                "EDMProps.LIGHT_VOLUME_DENSITY_FACTOR",
-                vol_density_keys,
-                lambda v: min(1.0, max(0.0, _to_float(v, 0.0))),
-            )
-        if vol_near_keys:
-            _add_edmprop_keyframes(
-                prop_action,
-                "EDMProps.LIGHT_VOLUME_NEAR_DISTANCE",
-                vol_near_keys,
-                lambda v: max(0.0, _to_float(v, 0.0)),
-            )
+    light_data.animation_data_create().action = action
 
-        # Keep object-level EDMProps animation separate from later transform /
-        # visibility action assignment on the same object.
-        if not _push_object_action_to_nla(obj, prop_action):
-            obj_anim_data = obj.animation_data_create()
-            obj_anim_data.action = prop_action
+
+def _create_light_property_animation(obj, values):
+    (
+        soft_arg,
+        soft_keys,
+        radius_arg,
+        radius_keys,
+        density_arg,
+        density_keys,
+        near_arg,
+        near_keys,
+        type_arg,
+    ) = values
+    if not any((soft_keys, radius_keys, density_keys, near_keys)) or not hasattr(
+        obj, "EDMProps"
+    ):
+        return
+    action = bpy.data.actions.new("LightProps_{}".format(obj.name))
+    if hasattr(action, "argument"):
+        action.argument = next(
+            (
+                a
+                for a in (soft_arg, radius_arg, density_arg, near_arg, type_arg)
+                if a >= 0
+            ),
+            -1,
+        )
+    for keys, path, convert in (
+        (soft_keys, "EDMProps.LIGHT_SOFTNESS", lambda v: max(0.0, _to_float(v, 0.0))),
+        (
+            radius_keys,
+            "EDMProps.LIGHT_VOLUME_RADIUS_FACTOR",
+            lambda v: min(1.0, max(0.0, _to_float(v, 0.0))),
+        ),
+        (
+            density_keys,
+            "EDMProps.LIGHT_VOLUME_DENSITY_FACTOR",
+            lambda v: min(1.0, max(0.0, _to_float(v, 0.0))),
+        ),
+        (
+            near_keys,
+            "EDMProps.LIGHT_VOLUME_NEAR_DISTANCE",
+            lambda v: max(0.0, _to_float(v, 0.0)),
+        ),
+    ):
+        if keys:
+            _add_edmprop_keyframes(action, path, keys, convert)
+    if not _push_object_action_to_nla(obj, action):
+        obj.animation_data_create().action = action
