@@ -40,9 +40,6 @@ from .node_transform import apply_node_transform
 from .nodes.armature import _prepare_bone_import
 from .nodes.core import _apply_shadeless, _process_lod_post_children, process_node
 from .nodes.diagnostics import _print_import_diagnostics
-from .orient_fixes import (
-    _fix_bonetransform_bone_child_render_world_positions,
-)
 from .orient_scale import _rewrite_oriented_scale_controls
 
 # Session orchestration fragment.
@@ -274,7 +271,6 @@ def _detect_bonetransform_prefix_compound(graph, root_tf):
     compound = MBl.Identity(4)
     node = graph.root
     found_count = 0
-    chain_nodes = []
 
     while True:
         children = getattr(node, "children", []) or []
@@ -292,14 +288,12 @@ def _detect_bonetransform_prefix_compound(graph, root_tf):
         m = Matrix(child_tf.matrix)
         m_bl = MBl([[float(m[r][c]) for c in range(4)] for r in range(4)])
         compound = compound @ m_bl
-        chain_nodes.append(child)
         found_count += 1
         node = child
 
     if found_count == 0:
         return None
 
-    _import_ctx.bonetransform_prefix_nodes = chain_nodes
     return compound
 
 
@@ -504,8 +498,6 @@ def _run_orientation_postprocess():
     # A world Euler angle cannot identify missing coordinate conversion: valid
     # authored child rotations can cancel the root basis. Preserve the graph's
     # composed transforms instead of rotating meshes and then their parents.
-    _fix_bonetransform_bone_child_render_world_positions()
-    _debug_dump_stage_objects("after_bonetransform_bone_child_render_fix")
     _restore_skin_visibility_transform_basis()
     _debug_dump_stage_objects("after_restore_skin_visibility_transform_basis")
     _resolve_skin_parent_overrides_by_bind_rest()
@@ -631,18 +623,6 @@ def read_file(filename, options=None):
         _prepare_bone_import(graph, graph.root.blender)
 
     graph.walk_tree(process_node)
-
-    # Tag Bonetransform prefix empties so orient_fix passes skip them.
-    # Their matrices must be preserved exactly for EDMFileRoot @ compound = RBF.
-    for _pnode in getattr(_import_ctx, "bonetransform_prefix_nodes", []) or []:
-        _bl = getattr(_pnode, "blender", None)
-        if _bl is not None:
-            try:
-                _bl["_iedm_bt_prefix"] = True
-            except Exception as exc:
-                _log.debug(
-                    "Optional operation failed: {}".format(exc), level=2
-                )
 
     _run_import_postprocess(edm, graph, options)
 

@@ -11,7 +11,6 @@ from ..edm_format.types import (
     AnimatingNode,
     ArgAnimationNode,
     ArgVisibilityNode,
-    TransformNode,
 )
 from ..utils import action_fcurves
 from .animation import (
@@ -427,26 +426,6 @@ def create_arganimation_actions(node):
     else:
         local_bl = local_edm
 
-    # BT-prefix no-armature: root ArgAnimatedBone nodes (direct children of the
-    # Bonetransform chain) sit at their bind-pose world position in DCS space.
-    # bt_world = Rz(-90°)@RBF (compound cancels through root_inv × BT1 × BT2), so
-    # local_bl must be ibm_inv (the DCS bind-pose world matrix) for the bone empty to
-    # land at Rz(-90°)@RBF@ibm_inv in Blender world space.
-    if (
-        type(node).__name__ == "ArgAnimatedBone"
-        and getattr(_import_ctx, "bonetransform_prefix_matrix", None) is not None
-        and getattr(_import_ctx, "file_has_bones", False)
-        and getattr(_import_ctx, "bone_import_ctx", None) is None
-        and hasattr(node, "inv_base_bone_matrix")
-        and isinstance(getattr(node, "parent", None), TransformNode)
-        and (getattr(node.parent, "name", "") or "").lower() == "bonetransform"
-    ):
-        try:
-            ibm = Matrix(node.inv_base_bone_matrix)
-            local_bl = ibm.inverted()
-        except Exception as e:
-            _log.warn("BT-prefix root-bone local_bl correction: {}".format(e), exc=e)
-
     dcLoc, dcRot, dcScale = local_bl.decompose()
     base_scale_vec = Vector(
         (node.base.scale[0], node.base.scale[1], node.base.scale[2])
@@ -502,18 +481,12 @@ def create_arganimation_actions(node):
     )
     for arg in node.get_all_args():
         frame_mapper = _anim_frame_to_scene_frame
-        include_scale = not (
-            getattr(_import_ctx, "bonetransform_prefix_matrix", None) is not None
-            and getattr(_import_ctx, "file_has_bones", False)
-            and type(node).__name__ == "ArgAnimatedBone"
-        )
         actions.append(
             _build_arganimation_action(
                 node,
                 arg,
                 local_bl,
                 frame_mapper=frame_mapper,
-                include_scale=include_scale,
             )
         )
     return actions

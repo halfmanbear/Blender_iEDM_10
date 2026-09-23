@@ -71,7 +71,6 @@ class ImportContext(threading.local):
         self.bonetransform_prefix_matrix = (
             None  # compound M1@M2@... for files with Bonetransform prefix chain
         )
-        self.bonetransform_prefix_nodes = []  # graph nodes forming the prefix chain
         self.legacy_v10_parent_compose = False
         self.file_has_bones = False
         self.use_scene_root_basis_object = True

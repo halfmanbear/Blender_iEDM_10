@@ -8,7 +8,6 @@
 #   orient_scale.py    — oriented scale decomposition and rewrite pass
 #   vis_rewrites.py    — visibility graph basis-fix passes
 #   skin_rewrites.py   — skin parent bind-rest resolution
-#   orient_fixes.py    — mesh/empty world orientation post-passes
 #   ctrl_splits.py     — multi-arg control splitting + mesh-pair renaming
 #   node_transform.py  — apply_node_transform
 

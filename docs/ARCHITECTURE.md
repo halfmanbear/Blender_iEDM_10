@@ -52,7 +52,6 @@
 | `orient_scale.py` | Oriented scale decomposition and rewrite pass; detects ArgAnimationNodes with scale+orientation keys and splits them into multiple Blender objects for proper round-trip |
 | `vis_rewrites.py` | Visibility graph basis-fix passes: fixes multi-arg visibility controls, plain root visibility basis, skin visibility transforms, inverse-scaled visibility offsets |
 | `skin_rewrites.py` | Late-stage skin parent binding using bind-rest world positions; resolves skin mesh parent overrides for proper armature attachment |
-| `orient_fixes.py` | Post-pass world orientation fixes for meshes and empties; corrects collision mesh orientation, scene root mesh/empty orientation after import |
 | `ctrl_splits.py` | Multi-arg control splitting and control/mesh-pair renaming; splits animations with multiple arguments into separate Blender objects, renames wrappers to preserve semantic names |
 | `bbox_utils.py` | Creates Blender empties for EDM bounding boxes and user boxes; reads BoundingBoxNode/UserBoxNode data and generates Empty objects with proper size, location, orientation, and EDM property stamping |
 | `session.py` | Orchestrates top-level import sequence: opens EDM via edm_format, builds TranslationGraph, derives import capabilities, runs node processing, applies post-processing passes, handles collection assignment and scene cleanup |
@@ -84,7 +83,7 @@
    - `import_capabilities.py:derive_import_capabilities()` - Detect file features and select behavior flags
    - `graph_build.py:build_graph()` - Build the `TranslationGraph` from parsed transform/render nodes
    - `nodes/core.py:process_node()` (implemented in `nodes/node_process.py`) - Create Blender objects for each graph node
-   - `graph_postprocess.py`, `vis_rewrites.py`, `orient_scale.py`, `ctrl_splits.py`, `orient_fixes.py`, `skin_rewrites.py` - Apply post-processing, visibility/control rewrites, orientation fixes, and skin parent resolution
+   - `graph_postprocess.py`, `vis_rewrites.py`, `orient_scale.py`, `ctrl_splits.py`, `skin_rewrites.py` - Apply post-processing, visibility/control rewrites, and skin parent resolution
 
 ### Key Concepts
 - **TranslationGraph**: Maps EDM transform/render nodes to Blender objects

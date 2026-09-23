@@ -91,6 +91,9 @@ def _split_multi_arg_rotation_controls(graph):
         for action in planned_actions[1:]:
             later_paths |= _action_paths(action)
         inner_static = None
+        # A later scale carrier keys absolute scale; the owner's basis only holds
+        # its currently evaluated value, so keeping it would apply scale twice.
+        kept_scale = None if "scale" in later_paths else static_scale
         if "location" in later_paths:
             # Position deltas are neither rotated nor scaled.
             # Keep static R @ S innermost.
@@ -98,10 +101,10 @@ def _split_multi_arg_rotation_controls(graph):
             inner_static = Matrix.LocRotScale(
                 None,
                 None if "rotation_quaternion" in later_paths else static_rot,
-                static_scale,
+                kept_scale,
             )
         elif "rotation_quaternion" in later_paths - _action_paths(planned_actions[0]):
-            ob.matrix_basis = Matrix.LocRotScale(static_loc, None, static_scale)
+            ob.matrix_basis = Matrix.LocRotScale(static_loc, None, kept_scale)
 
         _build_rotation_helper_chain(
             ob, planned_actions, inner_static, scene_collection
@@ -110,11 +113,16 @@ def _split_multi_arg_rotation_controls(graph):
 
 def _divide_position_rotation_actions(actions):
     """Separate arguments that animate position and rotation into distinct links."""
+    location_carriers = sum("location" in _action_paths(a) for a in actions)
     divided = []
     for action in actions:
         paths = _action_paths(action)
         sort_value = _action_chain_sort_value(action, -1)
-        if sort_value > 0 and {"location", "rotation_quaternion"} <= paths:
+        # A mixed first rotation argument only heads the chain when it is the sole
+        # position carrier. Otherwise its rotation half must stay separate so it
+        # keeps the owner's static rotation (base quat_1) instead of being re-keyed.
+        splittable = sort_value > 0 or location_carriers > 1
+        if splittable and {"location", "rotation_quaternion"} <= paths:
             position = _clone_action_filtered(
                 action, "_pos", include_paths={"location"}
             )

@@ -26,7 +26,6 @@ from .blender_importer.nodes.diagnostics import *  # noqa: F401,F403
 from .blender_importer.nodes.mesh import *  # noqa: F401,F403
 from .blender_importer.nodes.visibility import *  # noqa: F401,F403
 from .blender_importer.object_create import *  # noqa: F401,F403
-from .blender_importer.orient_fixes import *  # noqa: F401,F403
 from .blender_importer.orient_scale import *  # noqa: F401,F403
 from .blender_importer.prelude import *  # noqa: F401,F403
 from .blender_importer.session import *  # noqa: F401,F403
