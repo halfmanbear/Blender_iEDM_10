@@ -1,0 +1,281 @@
+{
+  "legacy_files": {},
+  "legacy_functions": {},
+  "ruff_findings": {
+    "iEDM_10/__init__.py": {
+      "F401": 1
+    },
+    "iEDM_10/blender_importer/animation.py": {
+      "B905": 3,
+      "I001": 1,
+      "S110": 5,
+      "S112": 1
+    },
+    "iEDM_10/blender_importer/bone_controls.py": {
+      "B905": 1,
+      "E402": 5,
+      "E501": 4,
+      "F401": 2
+    },
+    "iEDM_10/blender_importer/ctrl_splits.py": {
+      "B905": 1,
+      "C901": 1,
+      "E501": 3,
+      "I001": 1
+    },
+    "iEDM_10/blender_importer/graph_build.py": {
+      "E501": 4,
+      "I001": 1,
+      "S110": 2
+    },
+    "iEDM_10/blender_importer/graph_pipeline.py": {
+      "S112": 1
+    },
+    "iEDM_10/blender_importer/graph_postprocess.py": {
+      "F401": 2
+    },
+    "iEDM_10/blender_importer/import_capabilities.py": {
+      "C901": 1,
+      "E501": 1,
+      "F401": 2
+    },
+    "iEDM_10/blender_importer/import_logging.py": {
+      "S112": 1
+    },
+    "iEDM_10/blender_importer/import_pipeline.py": {
+      "I001": 1
+    },
+    "iEDM_10/blender_importer/light_animation.py": {
+      "C901": 1,
+      "E501": 4,
+      "S110": 5
+    },
+    "iEDM_10/blender_importer/light_fake.py": {
+      "B905": 2,
+      "C901": 1,
+      "E501": 1,
+      "S110": 1
+    },
+    "iEDM_10/blender_importer/light_materials.py": {
+      "C901": 1,
+      "S110": 2
+    },
+    "iEDM_10/blender_importer/light_real.py": {
+      "C901": 1
+    },
+    "iEDM_10/blender_importer/light_textured.py": {
+      "E501": 1,
+      "S110": 3
+    },
+    "iEDM_10/blender_importer/lights.py": {
+      "I001": 1
+    },
+    "iEDM_10/blender_importer/material_sockets.py": {
+      "S112": 2
+    },
+    "iEDM_10/blender_importer/mesh_create.py": {
+      "B007": 1,
+      "B905": 2,
+      "C901": 1,
+      "E501": 3,
+      "I001": 1
+    },
+    "iEDM_10/blender_importer/morph_objects.py": {
+      "S112": 1
+    },
+    "iEDM_10/blender_importer/node_transform.py": {
+      "C901": 1,
+      "E501": 4,
+      "I001": 1,
+      "S110": 4
+    },
+    "iEDM_10/blender_importer/nodes/core.py": {
+      "I001": 1
+    },
+    "iEDM_10/blender_importer/nodes/diagnostics.py": {
+      "C901": 1,
+      "I001": 1
+    },
+    "iEDM_10/blender_importer/nodes/node_animation.py": {
+      "C901": 1,
+      "S110": 1
+    },
+    "iEDM_10/blender_importer/nodes/node_create.py": {
+      "C901": 2
+    },
+    "iEDM_10/blender_importer/nodes/node_helpers.py": {
+      "S110": 2
+    },
+    "iEDM_10/blender_importer/nodes/node_parent.py": {
+      "C901": 1,
+      "S110": 1
+    },
+    "iEDM_10/blender_importer/nodes/node_position.py": {
+      "C901": 1,
+      "F841": 2
+    },
+    "iEDM_10/blender_importer/nodes/node_process.py": {
+      "B905": 1,
+      "S110": 2,
+      "S112": 1
+    },
+    "iEDM_10/blender_importer/nodes/node_properties.py": {
+      "C901": 2,
+      "E501": 1,
+      "S112": 6
+    },
+    "iEDM_10/blender_importer/nodes/processing.py": {
+      "I001": 1
+    },
+    "iEDM_10/blender_importer/nodes/skin_binding.py": {
+      "S110": 1
+    },
+    "iEDM_10/blender_importer/nodes/visibility.py": {
+      "C901": 1,
+      "E501": 1
+    },
+    "iEDM_10/blender_importer/orient_fixes.py": {
+      "C901": 1,
+      "E501": 3
+    },
+    "iEDM_10/blender_importer/orient_scale.py": {
+      "S112": 1
+    },
+    "iEDM_10/blender_importer/session_postprocess.py": {
+      "S112": 1
+    },
+    "iEDM_10/blender_importer/skin_rewrites.py": {
+      "C901": 1,
+      "I001": 1,
+      "S110": 1
+    },
+    "iEDM_10/blender_importer/skin_visibility.py": {
+      "S112": 2
+    },
+    "iEDM_10/edm_format/__init__.py": {
+      "F401": 4,
+      "I001": 1
+    },
+    "iEDM_10/edm_format/basereader.py": {
+      "E501": 1,
+      "I001": 1
+    },
+    "iEDM_10/edm_format/material_types.py": {
+      "E501": 1,
+      "I001": 1
+    },
+    "iEDM_10/edm_format/mathtypes.py": {
+      "E501": 1,
+      "I001": 1
+    },
+    "iEDM_10/edm_format/probe.py": {
+      "E501": 1,
+      "I001": 1
+    },
+    "iEDM_10/edm_format/types/__init__.py": {
+      "I001": 1
+    },
+    "iEDM_10/edm_format/types/core.py": {
+      "I001": 1
+    },
+    "iEDM_10/edm_format/types/core_animation.py": {
+      "E501": 2,
+      "I001": 1
+    },
+    "iEDM_10/edm_format/types/core_file.py": {
+      "B904": 1,
+      "B905": 1,
+      "C901": 1,
+      "E501": 4,
+      "I001": 1
+    },
+    "iEDM_10/edm_format/types/core_nodes.py": {
+      "E501": 2,
+      "I001": 1
+    },
+    "iEDM_10/edm_format/types/core_support.py": {
+      "B024": 1,
+      "B905": 1
+    },
+    "iEDM_10/edm_format/types/light_parsing.py": {
+      "S112": 1
+    },
+    "iEDM_10/edm_format/types/number.py": {
+      "E501": 2,
+      "I001": 1
+    },
+    "iEDM_10/io_operators.py": {
+      "E402": 1,
+      "E501": 8,
+      "F401": 1,
+      "I001": 1
+    },
+    "iEDM_10/reader.py": {
+      "I001": 1
+    },
+    "iEDM_10/rna.py": {
+      "E501": 1
+    },
+    "iEDM_10/translation.py": {
+      "E501": 1,
+      "I001": 1
+    },
+    "iEDM_10/utils.py": {
+      "E401": 1,
+      "I001": 1
+    },
+    "scripts/build_addon.py": {
+      "E501": 2,
+      "S603": 1,
+      "S607": 1
+    },
+    "tests/audit_transform_postprocess.py": {
+      "B023": 1,
+      "B905": 1,
+      "E402": 3,
+      "E501": 5,
+      "I001": 1
+    },
+    "tests/compare_reference_geometry.py": {
+      "E402": 2,
+      "E501": 1,
+      "I001": 1
+    },
+    "tests/regression_aircraft_import.py": {
+      "B905": 2,
+      "E402": 8,
+      "E501": 34,
+      "I001": 4
+    },
+    "tests/regression_animation_api.py": {
+      "I001": 2
+    },
+    "tests/regression_blender_integration.py": {
+      "E402": 4,
+      "E501": 5,
+      "I001": 2
+    },
+    "tests/regression_origin_modes.py": {
+      "B905": 1,
+      "E402": 2,
+      "E501": 5,
+      "F401": 1,
+      "I001": 1
+    },
+    "tests/regression_reported_parts.py": {
+      "B023": 1,
+      "B905": 2,
+      "E402": 2,
+      "E501": 6,
+      "E731": 1
+    },
+    "tests/regression_source_meshes.py": {
+      "B023": 1,
+      "B905": 2,
+      "E402": 2,
+      "E501": 4,
+      "E731": 1
+    }
+  },
+  "version": 1
+}

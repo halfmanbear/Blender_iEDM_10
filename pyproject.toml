@@ -1,0 +1,57 @@
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.ruff.lint]
+# E/W: pycodestyle, F: pyflakes, I: import order, B: bugbear, C90: mccabe
+# complexity, S: bandit/OpenSSF-aligned security checks.
+select = ["E", "W", "F", "I", "B", "C90", "S"]
+ignore = [
+  "S101", # assert is fine in this codebase (no assert-stripping deployment)
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Compatibility re-export coordinators: intentionally aggregate a
+# subpackage's public names via `import *` for external/legacy callers.
+# Each real consumer imports explicitly from the module that defines what
+# it needs (see docs/ARCHITECTURE.md); these two are re-export-only.
+"iEDM_10/reader.py" = ["F401", "F403"]
+"iEDM_10/blender_importer/import_pipeline.py" = ["F401"]
+"iEDM_10/edm_format/types/__init__.py" = ["F401", "F403"]
+"iEDM_10/blender_importer/prelude.py" = ["F403", "F405"]
+# Blender regression scripts add the repository root to sys.path before
+# importing the add-on, so those imports intentionally follow that bootstrap.
+"tests/audit_transform_postprocess.py" = ["E402"]
+"tests/compare_reference_geometry.py" = ["E402"]
+"tests/regression_aircraft_import.py" = ["E402"]
+"tests/regression_blender_integration.py" = ["E402"]
+"tests/regression_export_damage_mask.py" = ["E402"]
+"tests/regression_export_hold_keys.py" = ["E402"]
+"tests/regression_export_light_frames.py" = ["E402"]
+"tests/regression_export_skin_bind.py" = ["E402"]
+"tests/regression_export_uv_shift.py" = ["E402"]
+"tests/regression_origin_modes.py" = ["E402"]
+"tests/regression_reported_parts.py" = ["E402"]
+"tests/regression_source_meshes.py" = ["E402"]
+
+[tool.ruff.lint.mccabe]
+# Cyclomatic complexity, not nesting depth. 15 flags genuinely tangled
+# functions without firing on ordinary Blender-import branching code.
+max-complexity = 15
+
+[tool.ruff.format]
+indent-style = "space"
+
+[tool.mypy]
+python_version = "3.11"
+# Not strict repo-wide: bpy has no complete type stubs (fake-bpy-module is
+# partial). edm_format/ is pure Python and holds to a stricter profile below.
+warn_return_any = true
+warn_unused_ignores = true
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "edm_format.*"
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+strict = true

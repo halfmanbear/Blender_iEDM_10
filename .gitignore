@@ -1,22 +1,22 @@
-__pycache__
+__pycache__/
 *.pyc
-.python-version
-*.out
-EDMENV
-.DS_Store
-tests/*.png
 *.blend1
-iEDM_10.zip
-docs/_build
-
-# Local working notes and analysis documents
-Information/
-
-# Scan output files containing local paths
-*.txt
-
-# Claude Code local config
+.DS_Store
+.python-version
+EDMENV
+*.out
+*.log
 .claude/
 
-# Local scan/tool scripts
-tools/
+# Build output (scripts/build_addon.py)
+dist/
+
+# Personal scratch: diagnostics, scans, notes, local tools, debug scripts
+local/
+
+# Licensed ED/DCS assets - never publish
+tests/assets/
+*.edm
+*.dds
+*.tga
+*.blend
