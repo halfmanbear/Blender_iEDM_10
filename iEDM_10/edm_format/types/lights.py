@@ -267,19 +267,22 @@ class FakeSpotLightsNode(BaseNode):
         self.raw_data = [stream.read(65) for _ in range(dataCount)]
         stream.mark_type_read("model::FakeSpotLight", dataCount)
 
-        # Parse raw 65-byte entries: 8 doubles (64 bytes) + 1 byte flag
-        # Layout: pos(3) + dir(3) + size(1) + unknown(1) + flag(1 byte)
+        # model::FakeSpotLight::load (UniModelDesc 0x180001270): position vec3d,
+        # front uv (lb, rt) vec2f x2, size float, face arg uint32, back uv
+        # (lb, rt) vec2f x2, back-side flag byte. Directions are not stored
+        # per light (control links / trailing v3 payload carry them).
         self.data = []
         for raw in self.raw_data:
-            doubles = struct.unpack_from("<8d", raw, 0)
-            flag = raw[64]
             self.data.append(
                 {
-                    "position": doubles[0:3],
-                    "direction": doubles[3:6],
-                    "size": doubles[6],
-                    "unknown": doubles[7],
-                    "flag": flag,
+                    "position": struct.unpack_from("<3d", raw, 0),
+                    "uv_lb": struct.unpack_from("<2f", raw, 24),
+                    "uv_rt": struct.unpack_from("<2f", raw, 32),
+                    "size": struct.unpack_from("<f", raw, 40)[0],
+                    "face_arg": struct.unpack_from("<I", raw, 44)[0],
+                    "back_uv_lb": struct.unpack_from("<2f", raw, 48),
+                    "back_uv_rt": struct.unpack_from("<2f", raw, 56),
+                    "flag": raw[64],
                 }
             )
 

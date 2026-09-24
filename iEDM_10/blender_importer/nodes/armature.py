@@ -15,6 +15,7 @@ from ...edm_format.types import (
 )
 from ...utils import action_fcurves, new_grouped_fcurve
 from ..anim_actions import get_actions_for_node
+from ..export_skin_bind import mark_imported_rig
 from ..prelude import (
     _ROOT_BASIS_FIX,
     _import_ctx,
@@ -730,6 +731,7 @@ def _build_edit_bones(arm_obj, arm_data, bone_nodes, apply_bone_root_fix):
         bpy.ops.object.mode_set(mode="EDIT")
 
         edit_bones = arm_data.edit_bones
+        mark_imported_rig(arm_data)
         used_names = set()
         sorted_nodes = sorted(
             bone_nodes,

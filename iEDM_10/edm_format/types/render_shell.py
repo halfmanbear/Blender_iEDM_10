@@ -113,6 +113,27 @@ def _read_parent_data(stream):
             parentData.append((node, ranges[0], ranges[1]))
         return parentData
 
+def _owner_triangles(indexData, owner_values):
+    """Group whole triangles by owner in one pass.
+
+    Filtering the flat index stream and regrouping in triples would mix
+    vertices from different source triangles, so triangles stay intact. A
+    mixed-owner triangle (malformed data) goes to its majority owner to avoid
+    holes; one with three different owners is dropped.
+    """
+    count = len(owner_values)
+    grouped = {}
+    for i in range(0, len(indexData) - 2, 3):
+        tri = indexData[i : i + 3]
+        if tri[0] >= count or tri[1] >= count or tri[2] >= count:
+            continue
+        a, b, c = (owner_values[ix] for ix in tri)
+        owner = a if a in (b, c) else (b if b == c else None)
+        if owner is not None:
+            grouped.setdefault(owner, []).extend(tri)
+    return grouped
+
+
 def _classify_render_parent_data(parentData, vertexData, indexData):
     """Best-effort classification of v10 RenderNode parent attachment layouts.
 
@@ -318,6 +339,7 @@ class RenderNode(BaseNode):
         if parent_layout["mode"] == "owner_encoded":
             logger.debug("V10 owner-encoded split detected for %s", self.name)
             shared_parent = parent_layout.get("shared_parent")
+            owner_tris = _owner_triangles(self.indexData, owner_values)
             children = []
             for owner_idx, pd in enumerate(self.parentData):
                 parent = pd[0]
@@ -336,32 +358,7 @@ class RenderNode(BaseNode):
                 node.shared_parent = shared_parent
                 node.owner_index = owner_idx
                 node.split_owner_encoded = True
-                # Preserve original triangle boundaries. Filtering the flat index
-                # stream and then regrouping in triples mixes vertices from
-                # different source triangles and corrupts geometry/pivots.
-                tri_indices = []
-                mixed_owner_tris = 0
-                for i in range(0, len(self.indexData), 3):
-                    tri = self.indexData[i : i + 3]
-                    if len(tri) != 3:
-                        continue
-                    tri_owners = [
-                        owner_values[ix] for ix in tri if ix < len(owner_values)
-                    ]
-                    if len(tri_owners) != 3:
-                        continue
-                    if tri_owners[0] == tri_owners[1] == tri_owners[2] == owner_idx:
-                        tri_indices.extend(tri)
-                        continue
-                    # Fallback for malformed data: assign mixed-owner triangles to
-                    # the majority owner to avoid holes.
-                    if tri_owners.count(owner_idx) >= 2:
-                        mixed_owner_tris += 1
-                        tri_indices.extend(tri)
-                # if mixed_owner_tris:
-                #   print(f"Info: {self.name} owner {owner_idx} absorbed "
-                #         f"{mixed_owner_tris} mixed-owner triangles")
-                node.indexData = tri_indices
+                node.indexData = owner_tris.get(owner_idx, [])
                 children.append(node)
             return children
 

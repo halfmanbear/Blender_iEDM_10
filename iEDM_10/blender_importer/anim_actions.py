@@ -289,12 +289,15 @@ def _build_arganimation_action(
     include_scale=True,
     action_name=None,
     rotation_basis_local=None,
+    position_prefix_lifted=False,
 ):
     """Build a single action for one ArgAnimationNode argument on a chosen basis.
 
     Used both for the normal import path and for oriented-scale wrapper reconstruction,
     where the animated transform must be re-derived against the wrapper's actual local
-    basis instead of cloning curves from the original node.
+    basis instead of cloning curves from the original node. With
+    position_prefix_lifted, `base.matrix @ T(base.position)` lives on a parent helper,
+    so position keys are already in the parent frame.
     """
     posData = [x[1] for x in node.posData if x[0] == arg]
     rotData = [x[1] for x in node.rotData if x[0] == arg]
@@ -345,13 +348,18 @@ def _build_arganimation_action(
     leftPos = (
         # Position deltas precede the default rotation in the EDM transform.
         Matrix.Translation(static_loc) @ Matrix(node.base.matrix).to_3x3().to_4x4()
-        if posData
+        if posData and not position_prefix_lifted
         else Matrix.Identity(4)
     )
     rightPos = Matrix.Identity(4)
     base_scale_vec = Vector(
         (node.base.scale[0], node.base.scale[1], node.base.scale[2])
     )
+    # Scale keys replace the object's whole scale, so they must carry a uniform
+    # scale folded into base.matrix too (F4U-1D Bano glow nodes: 1.032).
+    matrix_scale = Matrix(node.base.matrix).to_3x3().to_scale()
+    if max(matrix_scale) - min(matrix_scale) < 1e-4 * max(matrix_scale):
+        base_scale_vec *= matrix_scale[0]
 
     def key_quat_to_blender(q):
         return _anim_quaternion_to_blender(q)

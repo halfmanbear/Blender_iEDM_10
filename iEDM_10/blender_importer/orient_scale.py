@@ -347,6 +347,7 @@ def _rewrite_oriented_scale_controls(graph):
                     include_scale=False,
                     action_name="{}_iedm_tf".format(active_action.name),
                     rotation_basis_local=rotation_basis_local,
+                    position_prefix_lifted=prerotation_parent_local is not None,
                 )
             except Exception:
                 top_action = None

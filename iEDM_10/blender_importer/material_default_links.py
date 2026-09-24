@@ -54,7 +54,8 @@ def link_default_material(
     tex5 = texture_nodes.get(5)  # damage base
     tex8 = texture_nodes.get(8)  # emissive/light texture
     tex9 = texture_nodes.get(9)  # lightmap
-    tex10 = texture_nodes.get(10) or texture_nodes.get(1)  # normal
+    tex1 = texture_nodes.get(1) or texture_nodes.get(10)  # normal
+    tex10 = texture_nodes.get(10) or tex1  # damage normal
     tex18 = texture_nodes.get(18)  # damage mask
     tex_flir = _find_texture_node_by_name_substring(texture_nodes, "flir")
 
@@ -65,10 +66,15 @@ def link_default_material(
     base_tex = None if mat_lower in _SELF_ILLUM_NO_ALBEDO else tex0
     link = _link_texture_to_group_input
     link(links, base_tex, group_node, "Base Color")
+    color = getattr(edm_material, "uniforms", {}).get("color")
+    if base_tex is None and color is not None:
+        # Textureless (color_material) meshes export the socket's own colour.
+        rgb = [float(c) for c in list(color)[:3]]
+        _set_group_socket_default(group_node, "Base Color", (*rgb, 1.0))
     link(links, base_tex, group_node, "Base Alpha*", "Alpha")
     link(links, tex3, group_node, "Decal Color")
     link(links, tex3, group_node, "Decal Alpha*", "Alpha")
-    link(links, tex10, group_node, "Normal (Non-Color)")
+    link(links, tex1, group_node, "Normal (Non-Color)")
     link(links, tex2, group_node, "RoughMet (Non-Color)")
     link(links, tex9, group_node, "LightMap (Non-Color)")
     _link_emissive(links, group_node, edm_material, mat_lower, tex0, tex8)

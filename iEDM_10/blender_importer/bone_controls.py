@@ -4,14 +4,21 @@ The helper graph uses ordinary Blender actions and constraints, so saved scenes
 continue to animate without Python handlers or the importer being installed.
 """
 
+import math
+
 import bpy
 from mathutils import Matrix
 
 from ..edm_format.types import ArgAnimationNode
 from ..utils import action_fcurves
 from .anim_actions import _scale_orientation_quaternion
-from .bone_nla import bake_bone_nla
-from .prelude import _ROOT_BASIS_FIX, _anim_frame_to_scene_frame, _import_ctx
+from .bone_nla import _SAMPLE_STEP, bake_bone_nla
+from .prelude import (
+    _ROOT_BASIS_FIX,
+    FRAME_SCALE,
+    _anim_frame_to_scene_frame,
+    _import_ctx,
+)
 
 
 def _empty(collection, name, parent=None, matrix=None):
@@ -50,7 +57,26 @@ def _affine(collection, name, parent, matrix):
     return _empty(collection, name, parent, Matrix(right.tolist()).to_4x4())
 
 
-def _keys_action(obj, arg, path, keys, convert=lambda value: value):
+def _slerp_samples(samples):
+    """Add DCS slerp values on the bake grid inside each rotation span.
+
+    Linear F-curves interpolate quaternion components, which drifts from the
+    slerp DCS applies between keys (about 2 degrees midway through a
+    120-degree span); bone_nla samples these curves on the same grid.
+    """
+    step = _SAMPLE_STEP * 2.0 / FRAME_SCALE
+    out = samples[:1]
+    for (f0, q0), (f1, q1) in zip(samples, samples[1:], strict=False):
+        if f1 > f0 and q0.rotation_difference(q1).angle > 1e-4:
+            k = math.floor(f0 / step + 1e-9) + 1
+            while k * step < f1 - 1e-9:
+                out.append((k * step, q0.slerp(q1, (k * step - f0) / (f1 - f0))))
+                k += 1
+        out.append((f1, q1))
+    return out
+
+
+def _keys_action(obj, arg, path, keys, convert=lambda value: value, slerp=False):
     action = bpy.data.actions.new(f"{arg}_{obj.name}")
     if hasattr(action, "argument"):
         action.argument = arg
@@ -64,6 +90,8 @@ def _keys_action(obj, arg, path, keys, convert=lambda value: value):
                 quat = -quat
             samples[index] = (frame, quat)
             previous = quat
+        if slerp:
+            samples = _slerp_samples(samples)
     for index in range(len(samples[0][1])):
         curve = action_fcurves(action).new(path, index=index)
         curve.extrapolation = "CONSTANT"
@@ -106,7 +134,7 @@ def _animated_node(collection, name, parent, source):
     for index, (arg, keys) in enumerate(source.rotData):
         if keys:
             parent = _empty(collection, f"{name}_rot{index}", parent)
-            _keys_action(parent, arg, "rotation_quaternion", keys)
+            _keys_action(parent, arg, "rotation_quaternion", keys, slerp=True)
     parent = _scale_chain(collection, name + "_base", parent, base.scale, base.quat_2)
     for index, (arg, (orient_keys, scale_keys)) in enumerate(source.scaleData):
         if not orient_keys and not scale_keys:

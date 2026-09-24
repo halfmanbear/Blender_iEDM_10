@@ -10,6 +10,10 @@ from bpy.props import (
 from bpy.types import Operator
 from bpy_extras.io_utils import ImportHelper
 
+from .blender_importer.export_hooks import (
+    install_export_hook,
+    remove_export_hook,
+)
 from .reader import read_file
 
 logger = logging.getLogger(__name__)
@@ -134,11 +138,20 @@ def menu_import(self, context):
     self.layout.operator(ImportEDM.bl_idname, text="DCS World (.edm)")
 
 
+def _install_export_hook():
+    install_export_hook()  # the exporter may register after this add-on
+
+
 def register():
     bpy.utils.register_class(ImportEDM)
     bpy.types.TOPBAR_MT_file_import.append(menu_import)
+    if not install_export_hook():
+        bpy.app.timers.register(_install_export_hook, first_interval=0.0)
 
 
 def unregister():
+    if bpy.app.timers.is_registered(_install_export_hook):
+        bpy.app.timers.unregister(_install_export_hook)
+    remove_export_hook()
     bpy.types.TOPBAR_MT_file_import.remove(menu_import)
     bpy.utils.unregister_class(ImportEDM)

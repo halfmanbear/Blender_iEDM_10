@@ -8,8 +8,14 @@ import re
 import bpy
 
 from ..utils import action_fcurves
+from .export_damage_mask import DAMAGE_MASK_PROP, damage_mask_payload
 from .material_creation import _create_material_node_tree
 from .material_creation import _create_material_textures as _build_material_textures
+from .material_uv_shift import (
+    _UV_SHIFT_SLOTS,
+    _keyframe_material_uv_location,
+    _uv_shift_mapping_node,
+)
 from .materials_bridge import _attach_official_material_bridge
 
 # Mapping from EDM animated-uniform names to EDMProps field names.
@@ -295,15 +301,13 @@ def _finish_material(material, mat, nodes, principled_bsdf, texture_nodes):
 _ANIM_UNIFORM_TO_SOCKET = {
     "emissiveValue": "Emissive Value",
     "selfIlluminationValue": "Emissive Value",
-    "emissiveShift": "Emissive",
     "selfIlluminationColor": "Emissive",
     "colorShift": "Base Color",
-    "diffuseShift": "Base Color",
     "aoValue": "AO Value*",
     "lightMapValue": "AO Value*",
-    "lightMapShift": "AO Value*",
     "opacityValue": "Opacity Value",
 }
+
 
 # Animated-uniform name substrings that signal UV-shift animation.
 _UV_ANIM_KEYWORDS = ("uv", "UV", "scroll", "Scroll", "move", "Move", "shift", "Shift")
@@ -396,6 +400,8 @@ def _resolve_animated_uniform_target(uniform_name):
 
 
 def _looks_like_uv_anim_uniform(uniform_name):
+    if uniform_name in _UV_SHIFT_SLOTS:
+        return True
     target = _resolve_animated_uniform_target(uniform_name)
     if target is not None:
         return target.get("category") == "uv"
@@ -513,24 +519,11 @@ def _create_material_uv_animations(mat, material, texture_nodes):
         arg = getattr(prop, "argument", None)
         if arg is None or int(arg) < 0:
             continue
+        tex_node = texture_nodes.get(_UV_SHIFT_SLOTS.get(uniform_name, 0))
+        if tex_node is None:
+            continue
 
-        # Find an existing Mapping node; create one on the albedo texture if absent.
-        mapping_node = next((n for n in nodes if n.type == "MAPPING"), None)
-        if mapping_node is None:
-            tex_node = texture_nodes.get(0)
-            if tex_node is None:
-                continue
-            mapping_node = nodes.new("ShaderNodeMapping")
-            mapping_node.location = (tex_node.location[0] - 220, tex_node.location[1])
-            mapping_node.vector_type = "POINT"
-            tex_coord = nodes.new("ShaderNodeTexCoord")
-            tex_coord.location = (
-                mapping_node.location[0] - 220,
-                mapping_node.location[1],
-            )
-            links.new(tex_coord.outputs["UV"], mapping_node.inputs["Vector"])
-            links.new(mapping_node.outputs["Vector"], tex_node.inputs["Vector"])
-
+        mapping_node = _uv_shift_mapping_node(nodes, links, tex_node)
         # Label encodes the arg number: exporter calls extract_arg_number(node.label).
         mapping_node.label = str(int(arg))
 
@@ -540,9 +533,7 @@ def _create_material_uv_animations(mat, material, texture_nodes):
 
         for framedata in keys:
             try:
-                _keyframe_material_uv_location(
-                    mat, loc_input, anim_path, framedata
-                )
+                _keyframe_material_uv_location(mat, loc_input, anim_path, framedata)
             except Exception as e:
                 print(f"Warning in material_setup._create_material_uv_animations: {e}")
 
@@ -564,21 +555,6 @@ def _keyframe_material_socket(mat, socket, anim_path, framedata):
         socket.default_value = value
     else:
         return
-    mat.node_tree.keyframe_insert(data_path=anim_path, frame=blender_frame)
-
-
-def _keyframe_material_uv_location(mat, location, anim_path, framedata):
-    """Apply one animated UV location and insert its keyframe."""
-    value = getattr(framedata, "value", None)
-    if value is None:
-        return
-    blender_frame = (float(getattr(framedata, "frame", 0.0)) + 1.0) * 100.0
-    value = tuple(float(component) for component in value)
-    if len(value) == 2:
-        value += (0.0,)
-    elif len(value) > 3:
-        value = value[:3]
-    location.default_value = value
     mat.node_tree.keyframe_insert(data_path=anim_path, frame=blender_frame)
 
 
@@ -735,6 +711,9 @@ def _preserve_material_payload(mat, material):
             separators=(",", ":"),
             sort_keys=True,
         )
+        damage_mask = damage_mask_payload(material)
+        if damage_mask is not None:
+            mat[DAMAGE_MASK_PROP] = json.dumps(damage_mask, sort_keys=True)
     except Exception as e:
         print(f"Warning in blender_importer/material_setup.py: {e}")
 

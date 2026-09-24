@@ -107,7 +107,7 @@ def _official_transparency_enum(blending):
     return {
         0: "OPAQUE",
         1: "ALPHA_BLENDING",
-        2: "ALPHA_TEST",
+        2: "Z_TEST",
         3: "SUM_BLENDING",
         4: "SUM_BLENDING_SI",
         6: "SHADOWED_BLENDING",
@@ -451,6 +451,10 @@ def _attach_official_material_bridge(mat, edm_material, texture_nodes):
         _set_group_socket_default(group_node, "Transparency", trans_mode)
     if official_name in {names["default"], names["glass"]}:
         _set_group_socket_default(group_node, "Shadow Caster", shadow_mode)
+    if official_name in {names["default"], names["deck"]}:
+        _set_group_socket_default(
+            group_node, "DecalId", int(getattr(edm_material, "decal", 0) or 0)
+        )
 
     opacity_value = _material_scalar(edm_material, "opacityValue", default=1.0)
     emissive_value = _material_scalar(
@@ -474,6 +478,8 @@ def _attach_official_material_bridge(mat, edm_material, texture_nodes):
     tex8 = texture_nodes.get(8)  # emissive/light texture
     tex9 = texture_nodes.get(9)  # lightmap or deck damage mask
     tex10 = texture_nodes.get(10) or tex1  # alternate normal slot
+    # slot 1 is the normal map; slot 10 the damage normal (fa-18c f18c2 has both)
+    tex_normal = tex1 or texture_nodes.get(10)
     tex14 = texture_nodes.get(14)  # glass filter
     tex18 = texture_nodes.get(18)  # damage mask
     tex_flir = _find_texture_node_by_name_substring(texture_nodes, "flir")
@@ -522,7 +528,9 @@ def _attach_official_material_bridge(mat, edm_material, texture_nodes):
                 group_node, "Glass Color (Color Filter)", (1.0, 1.0, 1.0, 1.0)
             )
             _set_group_socket_default(group_node, "Glass Alpha*", 1.0)
-        _link_texture_to_group_input(links, tex10, group_node, "Normal (Non-Color)")
+        _link_texture_to_group_input(
+            links, tex_normal, group_node, "Normal (Non-Color)"
+        )
         _link_texture_to_group_input(links, tex2, group_node, "RoughMet (Non-Color)")
         _link_texture_to_group_input(links, tex_flir, group_node, "Flir")
         _link_texture_to_group_input(links, tex5, group_node, "Damage Base")
@@ -536,7 +544,9 @@ def _attach_official_material_bridge(mat, edm_material, texture_nodes):
         _set_group_enum_property(group_node, "glass_type", glass_type_val)
     elif official_name == names["mirror"]:
         _link_texture_to_group_input(links, tex0, group_node, "Base Color")
-        _link_texture_to_group_input(links, tex10, group_node, "Normal (Non-Color)")
+        _link_texture_to_group_input(
+            links, tex_normal, group_node, "Normal (Non-Color)"
+        )
     else:
         _link_texture_to_group_input(links, tex0, group_node, "Emissive")
         _link_texture_to_any_group_input(

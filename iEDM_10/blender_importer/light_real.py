@@ -1,4 +1,5 @@
 import math
+from types import SimpleNamespace
 
 import bpy
 
@@ -119,6 +120,31 @@ def _import_light_properties(node, obj, light_data, light_type):
     )
 
 
+def _theta_to_spot_blend(theta, spot_size):
+    """EDM theta is the inner cone angle; pyedm writes
+    theta = 2 * atan(tan(phi / 2) * (1 - spot_blend)), so invert that."""
+    outer = math.tan(min(spot_size, math.radians(170.0)) / 2.0)
+    if outer <= 1e-9:
+        return 0.0
+    return min(1.0, max(0.0, 1.0 - math.tan(max(0.0, theta) / 2.0) / outer))
+
+
+def _clamp_at_zero_crossings(keys):
+    """Blender energy cannot go below 0 and the exporter's power curve cannot
+    take it (C-130J strobes key -1.6 -> 0 -> 4, tail lights -0.7 -> 1.3).
+    Clamping a key alone changes the fade, so a key is added where the curve
+    crosses 0: exact if DCS treats negative brightness as off."""
+    points = [(float(k.frame), _to_float(k.value, 0.0)) for k in keys]
+    out = []
+    for index, (frame, value) in enumerate(points):
+        if index:
+            f0, v0 = points[index - 1]
+            if v0 * value < 0.0:
+                out.append((f0 + (frame - f0) * v0 / (v0 - value), 0.0))
+        out.append((frame, max(0.0, value)))
+    return [SimpleNamespace(frame=f, value=v) for f, v in out]
+
+
 def _apply_static_light_data(
     light_data, light_type, color, brightness, distance, specular, phi, theta
 ):
@@ -141,8 +167,8 @@ def _apply_static_light_data(
                 math.radians(170.0), max(0.0, _to_float(phi, light_data.spot_size))
             )
         if theta is not None:
-            light_data.spot_blend = min(
-                1.0, max(0.0, _to_float(theta, light_data.spot_blend))
+            light_data.spot_blend = _theta_to_spot_blend(
+                _to_float(theta, 0.0), light_data.spot_size
             )
 
 
@@ -237,8 +263,10 @@ def _create_light_data_animation(obj, light_data, light_type, values):
         _add_light_keyframes(
             action,
             "energy",
-            bright_keys,
-            lambda v: _edm_light_brightness_to_blender_energy(v, light_type),
+            _clamp_at_zero_crossings(bright_keys),
+            lambda v: _edm_light_brightness_to_blender_energy(
+                v, light_type, animated=True
+            ),
         )
     if dist_keys:
         light_data.use_custom_distance = True
@@ -262,7 +290,7 @@ def _create_light_data_animation(obj, light_data, light_type, values):
                 action,
                 "spot_blend",
                 theta_keys,
-                lambda v: min(1.0, max(0.0, _to_float(v, 0.0))),
+                lambda v: _theta_to_spot_blend(_to_float(v, 0.0), light_data.spot_size),
             )
     light_data.animation_data_create().action = action
 

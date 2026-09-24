@@ -2,6 +2,7 @@ import itertools
 import logging
 from collections import Counter
 
+from ..basereader import decode_edm_string
 from ..probe import require_supported_import_format
 from .core_nodes import RootNode
 from .core_support import (
@@ -65,7 +66,7 @@ class EDMFile(object):
             parts = sdata.split(b"\x00")
             if parts and not parts[-1]:
                 parts = parts[:-1]  # strip trailing empty from final null terminator
-            reader.strings = [x.decode("windows-1251") for x in parts]
+            reader.strings = [decode_edm_string(x) for x in parts]
         else:
             reader.strings = None
 

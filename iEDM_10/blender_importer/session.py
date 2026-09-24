@@ -398,9 +398,10 @@ def _create_graph_root_object(graph, options, features):
 
 def _create_import_scene_boxes(edm_root, box_options):
     if box_options.any_enabled():
-        bbox_coord_fix = (
-            _ROOT_BASIS_FIX if _import_ctx.use_scene_root_basis_object else None
-        )
+        # Header boxes are in final (Y-up) EDM space and the exporter always
+        # converts Blender's Z-up world back, with or without a root basis
+        # object (f-117 has none; its boxes came back with y and z swapped).
+        bbox_coord_fix = _ROOT_BASIS_FIX
         if box_options.bounding_box and not _has_special_box("BOUNDING_BOX"):
             create_bounding_box_from_root(edm_root, coord_fix=bbox_coord_fix)
         if box_options.user_box:
@@ -594,17 +595,21 @@ def _run_import_postprocess(edm, graph, options):
     _finalize_render_origins(graph)
     from .bone_controls import build_bone_control_graph
     from .export_hold_keys import protect_hold_keys
+    from .export_hooks import install_export_hook
     from .export_matrices import evaluate_hidden_objects
     from .export_visibility import place_export_visibility
     from .exporter_frames import undo_exporter_frame_rotations
+    from .node_transform import restore_sheared_frames
     from .skin_space import bake_skins_to_armature_space
 
     undo_exporter_frame_rotations()
     build_bone_control_graph(graph)
     place_export_visibility(graph)
     bake_skins_to_armature_space()
+    restore_sheared_frames()
     protect_hold_keys()
     evaluate_hidden_objects()
+    install_export_hook()
 
 
 def read_file(filename, options=None):

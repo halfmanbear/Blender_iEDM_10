@@ -22,6 +22,8 @@ _ARG_PREFIX = re.compile(r"^(\d+)_")
 _NEUTRAL_FRAME = 100.0
 _TOLERANCE = 1e-5
 _SAMPLE_STEP = 10.0
+_REFINE_TOLERANCE = 1e-4
+_MIN_REFINE_STEP = 1.25
 _PATHS = ("location", "rotation_quaternion", "scale")
 
 
@@ -81,13 +83,55 @@ def _sample_arg(rig, arg, by_arg):
     count = int((high - low) // _SAMPLE_STEP)
     frames = sorted(keys | {low + i * _SAMPLE_STEP for i in range(1, count + 1)})
     try:
-        return _sample(rig, by_arg[arg], frames)
+        return _refine(rig, by_arg[arg], frames, _sample(rig, by_arg[arg], frames))
     finally:
         _pose_helpers(by_arg[arg], _NEUTRAL_FRAME)
 
 
-def _differs(a, b):
-    return any(abs(x - y) > _TOLERANCE for x, y in zip(a, b, strict=True))
+def _misses(a, b, middle):
+    """True when interpolating ``a``..``b`` (lerp, and slerp as DCS does for
+    rotations) misses the sampled ``middle``."""
+    _f, la, qa, sa = a
+    _f, lb, qb, sb = b
+    _f, lm, qm, sm = middle
+    if (la.lerp(lb, 0.5) - lm).length > _REFINE_TOLERANCE:
+        return True
+    if qa.slerp(qb, 0.5).rotation_difference(qm).angle > _REFINE_TOLERANCE:
+        return True
+    return _differs(sa.lerp(sb, 0.5), sm, _REFINE_TOLERANCE)
+
+
+def _refine(rig, controls, frames, samples):
+    """Bisect sample intervals whose midpoint the exported keys would miss.
+
+    A location swinging about an offset pivot follows an arc, so the 10-frame
+    grid cuts chords (fa-18c wing fold: 44% voxel hits between samples).
+    """
+    rows = {bone: dict((s[0], s) for s in values) for bone, values in samples.items()}
+    pending = [
+        (f0, f1) for f0, f1 in zip(frames, frames[1:]) if f1 - f0 > _MIN_REFINE_STEP
+    ]
+    while pending:
+        middles = [(f0 + f1) / 2.0 for f0, f1 in pending]
+        sampled = _sample(rig, controls, middles)
+        split = []
+        for index, (f0, f1) in enumerate(pending):
+            middle = middles[index]
+            if not any(
+                _misses(rows[bone][f0], rows[bone][f1], values[index])
+                for bone, values in sampled.items()
+            ):
+                continue
+            for bone, values in sampled.items():
+                rows[bone][middle] = values[index]
+            if middle - f0 > _MIN_REFINE_STEP:
+                split += [(f0, middle), (middle, f1)]
+        pending = split
+    return {bone: [by_frame[f] for f in sorted(by_frame)] for bone, by_frame in rows.items()}
+
+
+def _differs(a, b, tolerance=_TOLERANCE):
+    return any(abs(x - y) > tolerance for x, y in zip(a, b, strict=True))
 
 
 def _relative(sample, neutral, first):

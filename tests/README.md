@@ -106,6 +106,44 @@ DCS ModelViewer output.
 
 ## Blender version compatibility
 
+`regression_export_hold_keys.py` requires the installed official exporter but
+no aircraft assets. Run it with the same background/factory-startup flags on
+both Blender versions. It writes synthetic location, scale, quaternion and
+Euler hold curves through pyedm, verifies that protected hold-start keys survive
+(and unprotected ones are dropped), and bounds rotation displacement at a
+three-metre radius to 1.4 mm. Cases include balanced and negative quaternions;
+a nudge that works only near identity is insufficient. This checks finite
+examples, not DCS behavior or a universal geometry-error bound.
+
+`regression_export_damage_mask.py` also needs only the installed official
+exporter. It builds triangles with an implicit legacy volume mask (slot 5 only,
+which DCS resolves to `<damage>_map`), an explicit volume mask (slot 15) and an
+RGBA mask (slot 18), imports them, exports with `edm.export` and checks that
+volume masks come back through `setMask()` (slot 15), RGBA masks through
+`setMaskRGBA()` (slot 18), and the damage argument survives. Pass source EDMs
+after `--` to check that every source mask kind/name survives a round trip.
+This is structural only; it does not check DCS rendering.
+
+`regression_export_uv_shift.py` round-trips animated UV shifts
+(`diffuseShift`, `emissiveShift`, `decalShift`, `ambientOcclusionShift`) and
+checks each uniform, argument and key list survives `edm.export`. Pass EDMs
+after `--`; `tests/assets/Emission.edm` covers the diffuse and emissive shifts.
+DCS samples diffuse, decal and AO shifts only (`Bazar/shaders/model/common/uniforms.hlsl`);
+`emissiveShift` is kept for file parity but has no in-game effect.
+
+`regression_export_skin_bind.py` round-trips skins whose bind is not the
+arg-0 pose (default `tests/assets/Bones.edm`; pass other EDMs after `--`). It
+moves one skin argument at a time over -1..1 and deforms every skin the DCS
+way (packed index + 1, missing weight to palette[0]); each source vertex must
+have a round-trip vertex within 1 mm. Without the importer's export bind
+bridge Bones.edm is off by ~38 mm.
+
+`regression_export_light_frames.py` round-trips light nodes (default
+`tests/assets/Lighting_Real.edm`; pass other EDMs after `--`) and checks each
+light's static frame matches the source. Lights directly under the file root
+need the same Y-up basis as root meshes; without it they come back rotated
+Rx(-90) about the origin (~48 m off in Lighting_Real).
+
 Run `regression_animation_api.py` with each Blender executable using the same
 background/factory-startup flags above. It checks evaluated object/NLA/light
 animation, material curve interpolation, bone groups, and registration.

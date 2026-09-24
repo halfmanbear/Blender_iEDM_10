@@ -1,17 +1,20 @@
 """Keep hold keys alive through the official exporter's key reduction.
 
-pyedm (the exporter's native writer) drops a key when the next key has the
-same value and an earlier, non-adjacent key had that value too. A hold that
-returns to an earlier pose (A ... B, A, A, ... ) therefore loses its first
-key and the curve slides from B straight to the last A, e.g. a crew head
-bone that lost its arg 0 key came back turned by ~13 degrees at rest.
+pyedm (the exporter's native writer) drops a key that lies on the
+interpolation (slerp for rotations) between any earlier key and the next key,
+not only its neighbours. A hold that returns to an earlier pose
+(A ... B, A, A, ... ) therefore loses its first key and the curve slides from
+B straight to the last A, e.g. a crew head bone that lost its arg 0 key came
+back turned by ~13 degrees at rest; sampled sweeps lose keys the same way.
 
 Components within ~1e-4 count as equal, and the tolerance grows with the
 value (a 1e-4 change at 100 m is still dropped). The first key of each such
-hold is nudged clear of it: rotations by 1e-3 rad (0.06 degrees), locations
-and scales by 1e-3 or 1e-5 of the value, whichever is larger.
+hold is nudged clear of it: rotations by 4.5e-4 rad (0.026 degrees), locations
+and scales by 1e-3 or 1e-5 of the value, whichever is larger. Larger rotation
+nudges can visibly displace vertices far from a bone's pivot.
 """
 
+import functools
 from collections import defaultdict
 
 import bpy
@@ -21,8 +24,11 @@ from ..utils import action_fcurves
 
 _TOL = 1e-4
 _REL_TOL = 1e-5
-_NUDGE_ANGLE = 1e-3
-_NUDGE = 1e-3
+# For unit quaternions the largest component change is at least ~angle / 4.
+# Keep it above pyedm's ~1e-4 component tolerance, even for balanced quaternions.
+_NUDGE_ANGLE = 4.5e-4
+_NUDGE_LOCATION = 1e-3
+_NUDGE_SCALE = 1e-3
 _NUDGE_QUAT = Quaternion((0.0, 0.0, 1.0), _NUDGE_ANGLE)
 _PATHS = ("location", "rotation_quaternion", "rotation_euler", "scale")
 
@@ -40,13 +46,30 @@ def _channel_groups(action):
     return groups
 
 
-def _hold_starts(values):
-    """Indices pyedm would drop: equal to the next and to an earlier key."""
+def _interpolate(path, frames, values, a, b, frame):
+    f = (frame - frames[a]) / (frames[b] - frames[a])
+    if path.endswith("rotation_quaternion") and len(values[a]) == 4:
+        return list(Quaternion(values[a]).slerp(Quaternion(values[b]), f))
+    return [x + (y - x) * f for x, y in zip(values[a], values[b], strict=True)]
+
+
+def _hold_starts(path, frames, values):
+    """Indices pyedm would drop although they matter.
+
+    pyedm drops a key lying on the interpolation between ANY earlier key and
+    the next key (a hold returning to an earlier value is one case). Only keys
+    off their neighbours' interpolation change the curve when dropped: F4U-1D
+    gear strut pivot arg 5 lost 0.3 (on slerp(0.0, 0.4), 0.45 degrees off
+    slerp(0.2, 0.4)).
+    """
     starts = []
     for i in range(1, len(values) - 1):
-        if not _same(values[i], values[i + 1]) or _same(values[i - 1], values[i]):
+        on = functools.partial(
+            _interpolate, path, frames, values, b=i + 1, frame=frames[i]
+        )
+        if _same(on(a=i - 1), values[i]):
             continue
-        if any(_same(values[j], values[i]) for j in range(i - 1)):
+        if any(_same(on(a=j), values[i]) for j in range(i - 1)):
             starts.append(i)
     return starts
 
@@ -60,7 +83,8 @@ def _nudged(path, value):
         return list(euler)
     nudged = list(value)
     i = max(range(len(nudged)), key=lambda k: abs(nudged[k]))
-    nudged[i] += max(_NUDGE, _REL_TOL * abs(nudged[i]))
+    minimum = _NUDGE_SCALE if path.endswith("scale") else _NUDGE_LOCATION
+    nudged[i] += max(minimum, _REL_TOL * abs(nudged[i]))
     return nudged
 
 
@@ -77,7 +101,7 @@ def _set_key(fcurve, frame, value):
 def _protect_channel(path, fcurves):
     frames = sorted({k.co[0] for fc in fcurves for k in fc.keyframe_points})
     values = [[fc.evaluate(f) for fc in fcurves] for f in frames]
-    starts = _hold_starts(values)
+    starts = _hold_starts(path, frames, values)
     for i in starts:
         for fcurve, value in zip(fcurves, _nudged(path, values[i]), strict=True):
             _set_key(fcurve, frames[i], value)

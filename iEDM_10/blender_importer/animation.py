@@ -15,6 +15,10 @@ from .graph_pipeline import (
 from .prelude import _anim_frame_to_scene_frame, _log
 
 
+_HALF_TURN_TIE = 1e-6
+_HALF_TURN_NUDGE = 2e-6
+
+
 def _arg_anim_vector_to_blender(node, value):
     # v10 top-level pylon positions are already in Z-up (Blender) space —
     # no basis conversion needed; _anim_vector_to_blender handles the Y/Z swap.
@@ -153,14 +157,35 @@ def add_rotation_fcurves(
             curve = action_fcurves(action).new(data_path=data_path, index=i)
         curves.append(curve)
 
-    previous_quat = None
+    previous_key = None
+    previous_new = None
     previous_euler = None
     for framedata in keys:
         frame = frame_mapper(framedata.frame)
-        newRotQuat = transform_left @ quat_to_blender(framedata.value) @ transform_right
-        if previous_quat is not None and previous_quat.dot(newRotQuat) < 0.0:
-            newRotQuat = -newRotQuat
-        previous_quat = newRotQuat.copy()
+        key = quat_to_blender(framedata.value)
+        # Shortest-path signs follow the file keys: keys a half turn apart
+        # (dot 0, Essex gun barrels) keep theirs, while a dot of -1e-7
+        # (f-117-nighthawk arg 22) flips. The basis change adds ~1e-8 noise that
+        # would decide such ties, so it is snapped away before export too.
+        # Keys are not normalised: some files store non-unit keys on purpose.
+        tie = False
+        if previous_key is not None:
+            dot = previous_key.dot(key)
+            if dot < 0.0:
+                key = -key
+            tie = abs(dot) < _HALF_TURN_TIE
+        previous_key = key
+        newRotQuat = transform_left @ key @ transform_right
+        newRotQuat = Quaternion([0.0 if abs(c) < 1e-6 else c for c in newRotQuat])
+        if tie:
+            # DCS negates on dot < 0 (interpolate_quaternion_keyframes_slerp
+            # 0x180056460) and the basis change leaves the tie at +-1e-8
+            # (f-16c nose wheel arg 101: -5.7e-9 spun it backwards), so lean
+            # the key towards its predecessor; keep its norm.
+            norm = newRotQuat.magnitude
+            newRotQuat = newRotQuat + previous_new * _HALF_TURN_NUDGE
+            newRotQuat *= norm / newRotQuat.magnitude
+        previous_new = newRotQuat
 
         if use_euler:
             euler = newRotQuat.to_euler("XYZ")

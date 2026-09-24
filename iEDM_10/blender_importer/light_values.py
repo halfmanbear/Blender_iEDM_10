@@ -59,10 +59,12 @@ def _to_vec3(value, default=(1.0, 1.0, 1.0)):
         return default
 
 
-def _edm_light_brightness_to_blender_energy(brightness_value, light_type):
+def _edm_light_brightness_to_blender_energy(brightness_value, light_type, animated=False):
     """
     Invert the official exporter conversion path from Blender light energy to EDM
     Brightness property, so importing then exporting preserves values.
+    Animated keys go through light_power_to_energy, which skips the 1/(4*pi)
+    the static path applies to non-sun lights.
     """
     brightness = max(0.0, _to_float(brightness_value, 0.0))
     if brightness <= 0.0:
@@ -73,7 +75,7 @@ def _edm_light_brightness_to_blender_energy(brightness_value, light_type):
     if denom <= 0.0:
         return 0.0
     energy = base / denom
-    if light_type != "SUN":
+    if light_type != "SUN" and not animated:
         energy *= 4.0 * math.pi
     return max(0.0, energy)
 

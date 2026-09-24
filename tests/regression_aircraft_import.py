@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 import iEDM_10
 from iEDM_10 import reader
-from iEDM_10.blender_importer import orient_scale, session, vis_rewrites
+from iEDM_10.blender_importer import ctrl_splits, orient_scale, session, vis_rewrites
 from iEDM_10.blender_importer.nodes import armature
 from iEDM_10.utils import action_fcurves
 
@@ -45,14 +45,13 @@ session.build_graph = build
 
 
 def check_split(original):
-    def run(graph):
+    def run(obj, *args, **kwargs):
+        # Check the reparent operation itself. Across a whole graph pass a child
+        # can also split its own animation and intentionally redistribute basis.
         children = {
-            child: (child.parent, child.matrix_basis.copy())
-            for node in graph.nodes
-            if node.blender is not None
-            for child in node.blender.children
+            child: (child.parent, child.matrix_basis.copy()) for child in obj.children
         }
-        original(graph)
+        original(obj, *args, **kwargs)
         for child, (parent, basis) in children.items():
             if child.parent != parent:
                 error = max(
@@ -69,8 +68,8 @@ def check_split(original):
     return run
 
 
-session._split_multi_arg_rotation_controls = check_split(
-    session._split_multi_arg_rotation_controls
+ctrl_splits._build_rotation_helper_chain = check_split(
+    ctrl_splits._build_rotation_helper_chain
 )
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))

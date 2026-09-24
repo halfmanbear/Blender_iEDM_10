@@ -31,6 +31,20 @@ class EDMFormatError(IOError):
     """Raised when EDM binary data fails a structural sanity check."""
 
 
+def decode_edm_string(data: bytes) -> str:
+    """Names are UTF-8 in current files (pyedm writes UTF-8; the C-130J
+    connector "Loadmaster_Controller" has a Cyrillic C) and windows-1251 in
+    older ones. Decoding UTF-8 as 1251 turned that name into mojibake the
+    exporter then wrote back doubled, so try UTF-8 first; 1251 Cyrillic is
+    almost never valid UTF-8. latin-1 accepts every byte for the rest."""
+    for encoding in ("utf-8", "windows-1251"):
+        try:
+            return data.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return data.decode("latin-1")
+
+
 class BaseReader(object):
     filename: str
     stream: BinaryIO
@@ -164,13 +178,7 @@ class BaseReader(object):
                 raise EDMFormatError(
                     "Overly long string length found; {} at {}".format(length, prepos)
                 )
-            data = self.stream.read(length)
-            try:
-                return data.decode("windows-1251")
-            except UnicodeDecodeError:
-                # latin-1 accepts every byte value, so this cannot itself
-                # raise; it exists only to normalize non-Cyrillic bytes.
-                return data.decode("latin-1")
+            return decode_edm_string(self.stream.read(length))
 
     def read_list(self, reader: Callable[["BaseReader"], T]) -> list[T]:
         """Reads a length-prefixed list of something"""

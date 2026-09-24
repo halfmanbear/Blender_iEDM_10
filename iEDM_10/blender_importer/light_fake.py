@@ -3,7 +3,7 @@ import logging
 import math
 
 import bpy
-from mathutils import Vector
+from mathutils import Matrix, Vector
 
 from ..edm_format.mathtypes import vector_to_blender
 from .light_animation import (
@@ -18,7 +18,6 @@ from .light_geometry import (
     _create_fake_light_mesh,
     _create_fake_omni_mesh,
     _default_fake_spot_uvs,
-    _fake_light_world_from_edm,
 )
 from .light_materials import _material_for_fake_light
 from .prelude import (
@@ -49,14 +48,14 @@ def create_fake_omni_lights(node):
     uv_rt = None
     for decoded in decoded_entries:
         pos_edm = decoded.get("position", (0.0, 0.0, 0.0))
-        positions.append(_fake_light_world_from_edm(pos_edm))
+        positions.append(vector_to_blender(pos_edm))
         if size is None:
             size = decoded.get("size")
             uv_lb = decoded.get("uv_lb")
             uv_rt = decoded.get("uv_rt")
     if not positions:
         for entry in getattr(node, "data", []) or []:
-            positions.append(_fake_light_world_from_edm(entry[0:3]))
+            positions.append(vector_to_blender(entry[0:3]))
 
     if not positions:
         # No light entries — create an empty placeholder
@@ -68,8 +67,10 @@ def create_fake_omni_lights(node):
         return ob
 
     mesh, location = _create_fake_omni_mesh(name, positions)
+    # The node-transform pass later replaces the object's local matrix, so the
+    # centre lives in the vertices, which the exporter reads as light positions.
+    mesh.transform(Matrix.Translation(location))
     ob = bpy.data.objects.new(name, mesh)
-    ob.location = location
     _set_official_special_type(ob, "FAKE_LIGHT")
 
     # Assign dedicated fake omni material with correct EDM node group
@@ -82,10 +83,11 @@ def create_fake_omni_lights(node):
     if hasattr(ob, "EDMProps"):
         ob.EDMProps.SIZE = float(size) if size is not None else 3.0
         ob.EDMProps.SURFACE_MODE = False
+        # pyedm's setUV writes (u, 1 - v), like mesh UVs.
         if uv_lb is not None:
-            ob.EDMProps.UV_LB = (float(uv_lb[0]), float(uv_lb[1]))
+            ob.EDMProps.UV_LB = (float(uv_lb[0]), 1.0 - float(uv_lb[1]))
         if uv_rt is not None:
-            ob.EDMProps.UV_RT = (float(uv_rt[0]), float(uv_rt[1]))
+            ob.EDMProps.UV_RT = (float(uv_rt[0]), 1.0 - float(uv_rt[1]))
 
     if _has_animated_fake_omni_payload(node):
         _apply_animated_fake_omni_brightness(ob, node, len(positions))
@@ -167,7 +169,7 @@ def create_fake_spot_lights(node):
         mesh.materials.clear()
         mesh.materials.append(fake_mat)
 
-    _set_fake_spot_properties(ob, mode, sizes, two_sided)
+    _set_fake_spot_properties(ob, mode, sizes, two_sided, node.data[0])
     if _has_animated_fake_omni_payload(node):
         _apply_animated_fake_omni_brightness(
             ob, node, len(node.data), verts_per_light=4 if mode == "surface" else 1
@@ -250,7 +252,12 @@ def _create_fake_spot_mesh(name, mode, positions, directions, sizes):
     return _create_surface_spot_mesh(name, positions, directions, sizes)
 
 
-def _set_fake_spot_properties(ob, mode, sizes, two_sided):
+def _flip_v(uv):
+    """pyedm's setUV/setBackUV write (u, 1 - v), like mesh UVs."""
+    return (float(uv[0]), 1.0 - float(uv[1]))
+
+
+def _set_fake_spot_properties(ob, mode, sizes, two_sided, first=None):
     if not hasattr(ob, "EDMProps"):
         return
     props = ob.EDMProps
@@ -260,6 +267,11 @@ def _set_fake_spot_properties(ob, mode, sizes, two_sided):
     if mode == "surface":
         return
     front_lb, front_rt, back_lb, back_rt = _default_fake_spot_uvs(bool(two_sided))
+    first = first or {}
+    if first.get("uv_lb") is not None and first.get("uv_rt") is not None:
+        front_lb, front_rt = _flip_v(first["uv_lb"]), _flip_v(first["uv_rt"])
+    if two_sided and first.get("back_uv_lb") is not None:
+        back_lb, back_rt = _flip_v(first["back_uv_lb"]), _flip_v(first["back_uv_rt"])
     props.UV_LB = front_lb
     props.UV_RT = front_rt
     props.UV_LB_BACK = back_lb
