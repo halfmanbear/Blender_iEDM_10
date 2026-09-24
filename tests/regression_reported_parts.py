@@ -2,10 +2,14 @@
 
 Blender --background --factory-startup --python \
     tests/regression_reported_parts.py -- paths...
+
+Target object names per model are read from the git-ignored
+``local/reported_parts_targets.json``; models without an entry check nothing.
 """
 
 import contextlib
 import io
+import json
 import sys
 from pathlib import Path
 
@@ -17,16 +21,14 @@ sys.path.insert(0, str(ROOT))
 import iEDM_10
 from iEDM_10.blender_importer import session
 
-TARGETS = {
-    "su-27": ["Dummy592", "Dummy571", "Cylinder168.002", "Dummy608.002"],
-    "f-15e_suite4": ["tire_r.001", "tire_l.001", "tire_n.001"],
-    "c130j_30": [
-        "DAM_Object420115214",
-        "Ge_Disk_FR",
-        "Ge_Disk_FR001",
-        "DAM_Plane174215",
-    ],
-}
+# Per-model target object names live outside the repository, keyed by the
+# lower-case file stem: {"<model stem>": ["<object name>", ...]}.
+TARGETS_FILE = ROOT / "local" / "reported_parts_targets.json"
+TARGETS = (
+    json.loads(TARGETS_FILE.read_text(encoding="utf-8"))
+    if TARGETS_FILE.exists()
+    else {}
+)
 BASIS = Matrix(((1, 0, 0, 0), (0, 0, -1, 0), (0, 1, 0, 0), (0, 0, 0, 1)))
 
 

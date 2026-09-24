@@ -53,7 +53,7 @@ rotated by the former angle-based orientation postprocessing.
 Aircraft assets are external and never bundled. Pass paths to your own copies:
 
 ```powershell
-& 'C:\Program Files\Blender Foundation\Blender 4.5\blender.exe' --background --factory-startup --python-exit-code 1 --python tests/regression_aircraft_import.py -- '../EDM_Files/SU-27/su-27.edm' '../EDM_Files/F-15E_Suite4.EDM' '../EDM_Files/A-10.EDM' '../EDM_Files/F-117/f-117.edm'
+& 'C:\Program Files\Blender Foundation\Blender 4.5\blender.exe' --background --factory-startup --python-exit-code 1 --python tests/regression_aircraft_import.py -- '<model_a.edm>' '<model_b.edm>'
 ```
 
 Checks neutral skin vertex placement, valid bone parenting, child local transforms
@@ -82,7 +82,7 @@ Compare it with RAW to ensure changing an editing origin cannot move aircraft
 panels, lights or damage geometry:
 
 ```powershell
-& 'C:\Program Files\Blender Foundation\Blender 4.5\blender.exe' --background --factory-startup --python-exit-code 1 --python tests/regression_origin_modes.py -- '../EDM_Files/A-10.EDM' '../EDM_Files/SU-27/su-27.edm' '../EDM_Files/F-15E_Suite4.EDM' '../EDM_Files/F-117/f-117.edm'
+& 'C:\Program Files\Blender Foundation\Blender 4.5\blender.exe' --background --factory-startup --python-exit-code 1 --python tests/regression_origin_modes.py -- '<model_a.edm>' '<model_b.edm>'
 ```
 
 This compares every mesh vertex transformed by its object matrix at frame 100,
@@ -96,7 +96,7 @@ Rebuilds each static RenderNode's world transform from the parsed EDM node chain
 world vertices against Blender at frames 100, 150 and 200 (tolerance 2 mm):
 
 ```powershell
-& 'C:\Program Files\Blender Foundation\Blender 4.5\blender.exe' --background --factory-startup --python-exit-code 1 --python tests/regression_source_meshes.py -- '../EDM_Files/F-14A-135-GR.edm' '../EDM_Files/F-15E_Suite4.EDM' '../EDM_Files/SU-27/su-27.edm' '../EDM_Files/A-10.EDM' '../EDM_Files/C130J/C130J_30.edm'
+& 'C:\Program Files\Blender Foundation\Blender 4.5\blender.exe' --background --factory-startup --python-exit-code 1 --python tests/regression_source_meshes.py -- '<model_a.edm>' '<model_b.edm>'
 ```
 
 Skinned meshes and render nodes split into several Blender objects are not

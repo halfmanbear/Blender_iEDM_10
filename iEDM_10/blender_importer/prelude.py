@@ -364,9 +364,9 @@ def _canonical_control_name(name):
 def _is_nested_authored_argvis_control_pair(node):
     """Check for same-name ArgVisibility -> Arg* under another animated parent.
 
-    Example pattern in su-27_lod3.edm:
-    ArgRotationNode("Dummy670") -> ArgVisibilityNode("Dummy598")
-    -> ArgRotationNode("Dummy598")
+    Example pattern:
+    ArgRotationNode("A") -> ArgVisibilityNode("B")
+    -> ArgRotationNode("B")
 
     In these nested pairs, the inner Arg* node's non-zero base.position is the
     static offset of the middle wrapper object, while the deepest child object
@@ -614,7 +614,7 @@ def _is_connector_object(obj):
 def _is_connector_transform(tfnode, blender_obj=None):
     # A TransformNode is a connector wrapper if it's named "Connector Transform"
     # (the standard io_scene_edm export name) OR if its blender_obj is a connector
-    # empty created by create_connector() (EDMs like Su-27 use the connector's own
+    # empty created by create_connector() (some EDMs use the connector's own
     # name, e.g. "BANO_0", "GUN_POINT", "Pylon1", as the wrapper TransformNode
     # name). Apply the -90° X correction only when legacy exporter behavior is
     # positively identified.

@@ -119,8 +119,8 @@ def _choose_skin_bind_target(
             best_loc = loc
             best_distance = distance
 
-    # Most skins use the first palette bone as the wrapper/bind target.  A-10's
-    # head mesh is an exception: the first bone is a control/helper high above the
+    # Most skins use the first palette bone as the wrapper/bind target.  Some head
+    # meshes are an exception: the first bone is a control/helper high above the
     # actual weighted head/eye bind cluster.  Only override clear outliers.
     if (
         best_name != default_name
@@ -167,7 +167,7 @@ def _localize_skin_mesh_to_bind_target(mesh_obj, bind_target_loc):
         # SkinNode geometry is in skeleton space, including meshes and bind
         # anchors near the origin. Distance cannot identify a coordinate space.
         # A palette anchor can be far from its geometry; distance is not evidence
-        # that vertices are already local (for example Su-27 Object10934817).
+        # that vertices are already local.
         for vert in mesh_obj.data.vertices:
             vert.co -= bind_target_loc
         mesh_obj.data.update()
