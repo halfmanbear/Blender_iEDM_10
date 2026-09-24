@@ -1,3 +1,4 @@
+import logging
 import math
 
 from ..utils import action_fcurves
@@ -7,6 +8,8 @@ from .prelude import (
     _PBR_WATTS_TO_LUMENS,
     _anim_frame_to_scene_frame,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _extract_light_property(prop_value):
@@ -18,7 +21,8 @@ def _extract_light_property(prop_value):
     if hasattr(prop_value, "keys") and hasattr(prop_value, "argument"):
         try:
             argument = int(prop_value.argument)
-        except Exception:
+        except (TypeError, ValueError, OverflowError) as exc:
+            logger.warning("Invalid light argument; using -1: %s", exc)
             argument = -1
         keys = list(getattr(prop_value, "keys", []) or [])
         if keys:
@@ -46,7 +50,9 @@ def _get_prop_any(props, *names):
 def _to_float(value, default=0.0):
     try:
         return float(value)
-    except Exception:
+    except (TypeError, ValueError, OverflowError) as exc:
+        # Optional light properties may be absent or use legacy string values.
+        logger.warning("Invalid light scalar %r; using %r: %s", value, default, exc)
         return float(default)
 
 
@@ -55,11 +61,14 @@ def _to_vec3(value, default=(1.0, 1.0, 1.0)):
         return default
     try:
         return (float(value[0]), float(value[1]), float(value[2]))
-    except Exception:
+    except (TypeError, ValueError, OverflowError, IndexError, KeyError) as exc:
+        logger.warning("Invalid light vector %r; using %r: %s", value, default, exc)
         return default
 
 
-def _edm_light_brightness_to_blender_energy(brightness_value, light_type, animated=False):
+def _edm_light_brightness_to_blender_energy(
+    brightness_value, light_type, animated=False
+):
     """
     Invert the official exporter conversion path from Blender light energy to EDM
     Brightness property, so importing then exporting preserves values.

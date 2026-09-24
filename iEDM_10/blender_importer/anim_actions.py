@@ -1,43 +1,76 @@
-# Fragment: animation action builders for visibility and ArgAnimation nodes.
-import bpy
+"""Create and combine EDM actions; retain legacy action helper imports."""
 
-from ..edm_format.mathtypes import (
-    Matrix,
-    MatrixScale,
-    Quaternion,
-    Vector,
+import bpy as bpy
+
+from ..edm_format.mathtypes import Matrix as Matrix
+from ..edm_format.mathtypes import MatrixScale as MatrixScale
+from ..edm_format.mathtypes import Quaternion as Quaternion
+from ..edm_format.mathtypes import Vector as Vector
+from ..edm_format.types import AnimatingNode as AnimatingNode
+from ..edm_format.types import ArgAnimationNode as ArgAnimationNode
+from ..edm_format.types import ArgVisibilityNode as ArgVisibilityNode
+from ..utils import action_fcurves as action_fcurves
+from . import action_curves as _action_curves_compat
+from .action_curves import _build_arganimation_action as _build_arganimation_action
+from .action_curves import _clone_action_filtered as _clone_action_filtered
+from .action_curves import _copy_fcurve_points_local as _copy_fcurve_points_local
+from .action_values import _action_chain_sort_value as _action_chain_sort_value
+from .action_values import (
+    _compose_oriented_scale_matrix as _compose_oriented_scale_matrix,
 )
-from ..edm_format.types import (
-    AnimatingNode,
-    ArgAnimationNode,
-    ArgVisibilityNode,
+from .action_values import _frame_value_components as _frame_value_components
+from .action_values import _frame_values_close as _frame_values_close
+from .action_values import (
+    _has_nonidentity_scale_orientation_keys as _has_nonidentity_scale_orientation_keys,
 )
-from ..utils import action_fcurves
+from .action_values import (
+    _is_plain_root_unit_interval_argrot as _is_plain_root_unit_interval_argrot,
+)
+from .action_values import (
+    _needs_multi_arg_rotation_helper_split as _needs_multi_arg_rotation_helper_split,
+)
+from .action_values import (
+    _plain_root_unit_interval_rot_sets as _plain_root_unit_interval_rot_sets,
+)
+from .action_values import (
+    _scale_orientation_quaternion as _scale_orientation_quaternion,
+)
+from .action_values import (
+    _sorted_transform_actions_for_execution as _sorted_transform_actions_for_execution,
+)
+from .animation import _arg_anim_vector_to_blender as _arg_anim_vector_to_blender
 from .animation import (
-    _arg_anim_vector_to_blender,
-    _finalize_authored_transform_action,
-    _quat_is_identity,
-    add_position_fcurves,
-    add_rotation_fcurves,
-    add_scale_fcurves,
+    _finalize_authored_transform_action as _finalize_authored_transform_action,
 )
-from .graph_pipeline import (
-    _anim_quaternion_to_blender,
-    _get_action_argument,
-    _merge_actions_by_argument,
+from .animation import _quat_is_identity as _quat_is_identity
+from .animation import add_position_fcurves as add_position_fcurves
+from .animation import add_rotation_fcurves as add_rotation_fcurves
+from .animation import add_scale_fcurves as add_scale_fcurves
+from .graph_diagnostics import (
+    _anim_quaternion_to_blender as _anim_quaternion_to_blender,
 )
-from .prelude import (
-    _ROOT_BASIS_FIX,
-    _anim_frame_to_scene_frame,
-    _import_ctx,
-    _is_authored_argvis_control_pair,
-    _is_child_of_file_root,
-    _is_top_level_visibility_authored_pair,
-    _log,
-    _log_bone_debug_event,
-    _matrix_trs_summary,
-    _strip_anim_prefix,
-    _visibility_scene_keys,
+from .graph_pipeline import _get_action_argument as _get_action_argument
+from .graph_pipeline import _merge_actions_by_argument as _merge_actions_by_argument
+from .import_context import _ROOT_BASIS_FIX as _ROOT_BASIS_FIX
+from .import_context import _import_ctx as _import_ctx
+from .import_context import _log as _log
+from .import_logging import _log_bone_debug_event as _log_bone_debug_event
+from .import_logging import _matrix_trs_summary as _matrix_trs_summary
+from .node_identity import _strip_anim_prefix as _strip_anim_prefix
+from .visibility_graph import (
+    _is_authored_argvis_control_pair as _is_authored_argvis_control_pair,
+)
+from .visibility_graph import _is_child_of_file_root as _is_child_of_file_root
+from .visibility_graph import (
+    _is_top_level_visibility_authored_pair as _is_top_level_visibility_authored_pair,
+)
+from .visibility_timeline import (
+    _anim_frame_to_scene_frame as _anim_frame_to_scene_frame,
+)
+from .visibility_timeline import _visibility_scene_keys as _visibility_scene_keys
+
+_create_scale_orientation_rotation_action = (
+    _action_curves_compat._create_scale_orientation_rotation_action
 )
 
 
@@ -76,334 +109,6 @@ def create_visibility_actions(visNode):
         curve_hide_vp.update()
     return actions
 
-
-def _plain_root_unit_interval_rot_sets(node):
-    if type(node).__name__ != "ArgRotationNode":
-        return None
-    if _is_authored_argvis_control_pair(node):
-        return None
-    if not _is_child_of_file_root(node):
-        return None
-    children = getattr(node, "children", None) or []
-    vis = children[0] if children else None
-    if vis is not None and isinstance(vis, ArgVisibilityNode):
-        return None
-    rot_sets = [keys for _arg, keys in (getattr(node, "rotData", None) or []) if keys]
-    if (
-        not rot_sets
-        or getattr(node, "posData", None)
-        or getattr(node, "scaleData", None)
-    ):
-        return None
-    frames = [float(getattr(k, "frame", 0.0)) for keys in rot_sets for k in keys]
-    if not frames:
-        return None
-    if min(frames) < -1e-6 or max(frames) > 1.0 + 1e-6:
-        return None
-    if min(frames) < 0.0 - 1e-6:
-        return None
-    return rot_sets
-
-
-def _frame_value_components(value):
-    if hasattr(value, "to_matrix"):
-        return tuple(float(v) for v in value)
-    try:
-        return tuple(float(v) for v in value)
-    except Exception:
-        try:
-            return (float(value),)
-        except Exception:
-            return ()
-
-def _frame_values_close(a, b, eps=1e-5):
-    av = _frame_value_components(a)
-    bv = _frame_value_components(b)
-    if len(av) != len(bv):
-        return False
-    if not av:
-        return False
-    if all(abs(x - y) <= eps for x, y in zip(av, bv, strict=False)):
-        return True
-    if len(av) == 4:
-        return all(abs(x + y) <= eps for x, y in zip(av, bv, strict=False))
-    return False
-
-def _is_plain_root_unit_interval_argrot(node):
-    return _plain_root_unit_interval_rot_sets(node) is not None
-
-def _scale_orientation_quaternion(value):
-    if hasattr(value, "to_matrix"):
-        return value
-    comps = tuple(float(v) for v in value[:4])
-    # Scale orientation keys are stored as (x, y, z, w).
-    return Quaternion((comps[3], comps[0], comps[1], comps[2]))
-
-def _compose_oriented_scale_matrix(scale_vec, orientation_quat):
-    scale_mat = MatrixScale(Vector((scale_vec[0], scale_vec[1], scale_vec[2])))
-    orient = (
-        orientation_quat
-        if hasattr(orientation_quat, "to_matrix")
-        else Quaternion(orientation_quat)
-    )
-    if _quat_is_identity(orient):
-        return scale_mat
-    orient_mat = orient.to_matrix().to_4x4()
-    return orient_mat @ scale_mat @ orient_mat.inverted()
-
-def _action_chain_sort_value(action, default=-1):
-    if action is None:
-        return default
-    try:
-        return int(action.get("_iedm_chain_sort", default))
-    except Exception:
-        return default
-
-def _sorted_transform_actions_for_execution(actions):
-    transform_actions = list(actions or [])
-    if len(transform_actions) <= 1:
-        return transform_actions
-    return sorted(
-        transform_actions,
-        key=lambda action: (
-            _action_chain_sort_value(action, -1),
-            _get_action_argument(action) or -1,
-        ),
-        reverse=True,
-    )
-
-def _needs_multi_arg_rotation_helper_split(node):
-    tf = getattr(node, "transform", None)
-    if tf is None or not isinstance(tf, ArgAnimationNode):
-        return False
-    # A non-armature object can only hold one active Blender action. Any node driven
-    # by more than one distinct control argument - whether they all rotate, or split
-    # across pos/rot/scale like a translate-then-rotate actuator - would otherwise be
-    # pushed onto NLA tracks, which the EDM exporter only reads off ARMATURE objects.
-    args = set()
-    for attr in ("posData", "rotData", "scaleData"):
-        for arg, keys in getattr(tf, attr, None) or []:
-            if keys:
-                args.add(arg)
-    return len(args) > 1
-
-def _has_nonidentity_scale_orientation_keys(keys4):
-    for key in list(keys4 or []):
-        try:
-            quat = _scale_orientation_quaternion(key.value)
-        except Exception as exc:
-            _log.debug(
-                "Skipping invalid scale-orientation key: {}".format(exc), level=2
-            )
-            continue
-        if not _quat_is_identity(quat):
-            return True
-    return False
-
-def _copy_fcurve_points_local(src_curve, dst_curve):
-    for kp in src_curve.keyframe_points:
-        try:
-            frame = float(kp.co[0])
-            value = float(kp.co[1])
-        except Exception as exc:
-            _log.debug("Skipping invalid animation keyframe: {}".format(exc), level=2)
-            continue
-        new_kp = dst_curve.keyframe_points.insert(frame, value, options={"FAST"})
-        try:
-            new_kp.interpolation = kp.interpolation
-            new_kp.handle_left_type = kp.handle_left_type
-            new_kp.handle_right_type = kp.handle_right_type
-            new_kp.easing = kp.easing
-        except Exception as exc:
-            _log.debug(
-                "Could not copy animation keyframe metadata: {}".format(exc), level=2
-            )
-
-def _clone_action_filtered(
-    action, name_suffix="", exclude_paths=None, include_paths=None
-):
-    if action is None:
-        return None
-    exclude_paths = set(exclude_paths or [])
-    include_paths = set(include_paths or [])
-    cloned = bpy.data.actions.new("{}{}".format(action.name, name_suffix))
-    arg = _get_action_argument(action)
-    if arg is not None and hasattr(cloned, "argument"):
-        cloned.argument = int(arg)
-    copied = 0
-    for src_curve in action_fcurves(action):
-        if include_paths and src_curve.data_path not in include_paths:
-            continue
-        if src_curve.data_path in exclude_paths:
-            continue
-        dst_curve = action_fcurves(cloned).new(
-            data_path=src_curve.data_path, index=src_curve.array_index
-        )
-        _copy_fcurve_points_local(src_curve, dst_curve)
-        copied += 1
-    if copied == 0:
-        try:
-            bpy.data.actions.remove(cloned)
-        except Exception as exc:
-            _log.debug("Could not remove empty cloned action: {}".format(exc), level=2)
-        return None
-    return cloned
-
-def _create_scale_orientation_rotation_action(
-    name, keys4, frame_mapper=None, invert=False
-):
-    if not keys4:
-        return None
-    action = bpy.data.actions.new(name)
-    curves = []
-    for idx in range(4):
-        curves.append(
-            action_fcurves(action).new(data_path="rotation_quaternion", index=idx)
-        )
-    frame_mapper = frame_mapper or _anim_frame_to_scene_frame
-    previous_quat = None
-    for framedata in keys4:
-        quat = _scale_orientation_quaternion(framedata.value)
-        if invert:
-            quat = quat.conjugated()
-        if previous_quat is not None and previous_quat.dot(quat) < 0.0:
-            quat = -quat
-        previous_quat = quat.copy()
-        frame = frame_mapper(framedata.frame)
-        for curve, component in zip(curves, quat, strict=False):
-            curve.keyframe_points.add(1)
-            curve.keyframe_points[-1].co = (frame, float(component))
-            curve.keyframe_points[-1].interpolation = "LINEAR"
-    for curve in curves:
-        try:
-            curve.update()
-        except Exception as exc:
-            _log.debug("Could not update animation curve: {}".format(exc), level=2)
-    return action
-
-def _build_arganimation_action(
-    node,
-    arg,
-    basis_local,
-    frame_mapper=None,
-    include_scale=True,
-    action_name=None,
-    rotation_basis_local=None,
-    position_prefix_lifted=False,
-):
-    """Build a single action for one ArgAnimationNode argument on a chosen basis.
-
-    Used both for the normal import path and for oriented-scale wrapper reconstruction,
-    where the animated transform must be re-derived against the wrapper's actual local
-    basis instead of cloning curves from the original node. With
-    position_prefix_lifted, `base.matrix @ T(base.position)` lives on a parent helper,
-    so position keys are already in the parent frame.
-    """
-    posData = [x[1] for x in node.posData if x[0] == arg]
-    rotData = [x[1] for x in node.rotData if x[0] == arg]
-    scaleData = [x[1] for x in node.scaleData if x[0] == arg] if include_scale else []
-
-    action = bpy.data.actions.new(
-        action_name or "{}_{}".format(arg, _strip_anim_prefix(node.name or "anim"))
-    )
-    if hasattr(action, "argument"):
-        action.argument = arg
-
-    rot_arg_order = [
-        entry_arg for entry_arg, keys in (getattr(node, "rotData", None) or []) if keys
-    ]
-    rot_arg_index = {entry_arg: idx for idx, entry_arg in enumerate(rot_arg_order)}
-    if arg in rot_arg_index and len(rot_arg_order) > 1:
-        action["_iedm_chain_sort"] = int(rot_arg_index[arg])
-        action["_iedm_rotation_accum_args"] = int(len(rot_arg_order))
-
-    static_loc, static_rot, _static_scale = basis_local.decompose()
-    if rotation_basis_local is not None:
-        try:
-            _rot_loc, static_rot, _rot_scale = rotation_basis_local.decompose()
-        except Exception as exc:
-            _log.debug("Could not decompose rotation basis: {}".format(exc), level=2)
-    leftRot = static_rot
-    rightRot = Quaternion((1, 0, 0, 0))
-    if rotation_basis_local is None and basis_local.to_3x3().determinant() < 0:
-        # decompose() folds a single-axis mirror F into the rotation (R @ F);
-        # animated keys belong between R and F, not after R @ F.
-        base_scale = Vector(node.base.scale)
-        flip = Matrix.Diagonal([-1.0 if s >= 0 else 1.0 for s in base_scale])
-        if flip.determinant() > 0:
-            flip_quat = flip.to_quaternion()
-            authored = static_rot @ flip_quat.inverted()
-            rebuilt = authored.to_matrix() @ Matrix.Diagonal(base_scale)
-            target = basis_local.to_3x3()
-            if (
-                max(
-                    abs(rebuilt[r][c] - target[r][c])
-                    for r in range(3)
-                    for c in range(3)
-                )
-                < 1e-4
-            ):
-                leftRot = authored
-                rightRot = flip_quat
-    leftPos = (
-        # Position deltas precede the default rotation in the EDM transform.
-        Matrix.Translation(static_loc) @ Matrix(node.base.matrix).to_3x3().to_4x4()
-        if posData and not position_prefix_lifted
-        else Matrix.Identity(4)
-    )
-    rightPos = Matrix.Identity(4)
-    base_scale_vec = Vector(
-        (node.base.scale[0], node.base.scale[1], node.base.scale[2])
-    )
-    # Scale keys replace the object's whole scale, so they must carry a uniform
-    # scale folded into base.matrix too (F4U-1D Bano glow nodes: 1.032).
-    matrix_scale = Matrix(node.base.matrix).to_3x3().to_scale()
-    if max(matrix_scale) - min(matrix_scale) < 1e-4 * max(matrix_scale):
-        base_scale_vec *= matrix_scale[0]
-
-    def key_quat_to_blender(q):
-        return _anim_quaternion_to_blender(q)
-
-    for pos in posData:
-        add_position_fcurves(
-            action, pos, leftPos, rightPos, node=node, frame_mapper=frame_mapper
-        )
-    for rot in rotData:
-        add_rotation_fcurves(
-            action,
-            rot,
-            leftRot,
-            rightRot,
-            quat_to_blender=key_quat_to_blender,
-            frame_mapper=frame_mapper,
-            use_euler=False,
-        )
-    for sca_pair in scaleData:
-        keys3 = sca_pair[1] if isinstance(sca_pair, tuple) and len(sca_pair) > 1 else []
-        add_scale_fcurves(
-            action, keys3, frame_mapper=frame_mapper, base_scale=base_scale_vec
-        )
-
-    _log_bone_debug_event(
-        "anim-action",
-        {
-            "node_name": getattr(node, "name", "") or type(node).__name__,
-            "node_type": type(node).__name__,
-            "argument": int(arg) if isinstance(arg, int) else arg,
-            "action_name": action.name,
-            "has_pos": bool(posData),
-            "has_rot": bool(rotData),
-            "has_scale": bool(scaleData),
-            "left_rotation": [round(float(v), 6) for v in leftRot],
-            "right_rotation": [round(float(v), 6) for v in rightRot],
-            "left_position": _matrix_trs_summary(leftPos),
-            "right_position": _matrix_trs_summary(rightPos),
-        },
-        getattr(node, "name", "") or type(node).__name__,
-        action.name,
-    )
-    _finalize_authored_transform_action(action)
-    return action
 
 def create_arganimation_actions(node):
     "Creates a set of actions to represent an ArgAnimationNode"
@@ -499,6 +204,7 @@ def create_arganimation_actions(node):
         )
     return actions
 
+
 def get_actions_for_node(node):
     """Accepts a node and gets or creates actions to apply their animations"""
     if hasattr(node, "actions") and node.actions:
@@ -511,6 +217,7 @@ def get_actions_for_node(node):
             actions = create_arganimation_actions(node)
         node.actions = actions
     return actions
+
 
 def _clear_object_animation_tracks(ob):
     if ob is None:
@@ -530,6 +237,7 @@ def _clear_object_animation_tracks(ob):
     except Exception as exc:
         _log.debug("Could not clear NLA tracks: {}".format(exc), level=2)
 
+
 def _action_has_visibility_curve(action):
     if action is None:
         return False
@@ -537,6 +245,7 @@ def _action_has_visibility_curve(action):
         return action_fcurves(action).find("VISIBLE") is not None
     except Exception:
         return False
+
 
 def _build_nonarmature_action_plan(transform_actions, vis_actions):
     grouped = {}
@@ -554,6 +263,7 @@ def _build_nonarmature_action_plan(transform_actions, vis_actions):
         if merged:
             planned.append(merged[0])
     return planned
+
 
 def _collect_merged_transform_actions_for_graph_node(node, ctx=None):
     ctx = ctx or (_import_ctx.bone_import_ctx or {})
@@ -593,6 +303,7 @@ def _collect_merged_transform_actions_for_graph_node(node, ctx=None):
             if extra_tf is not tf:
                 actions.extend(get_actions_for_node(extra_tf))
     return _merge_actions_by_argument(actions)
+
 
 def _visibility_source_for_graph_node(node):
     tf = getattr(node, "transform", None)

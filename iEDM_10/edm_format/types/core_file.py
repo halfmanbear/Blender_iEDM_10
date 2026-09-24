@@ -2,8 +2,9 @@ import itertools
 import logging
 from collections import Counter
 
-from ..basereader import decode_edm_string
+from ..basereader import EDMFormatError, decode_edm_string
 from ..probe import require_supported_import_format
+from ..validation import resolve_node_indices
 from .core_nodes import RootNode
 from .core_support import (
     TrackingReader,
@@ -90,8 +91,10 @@ class EDMFile(object):
             if parent == -1:
                 node.parent = None
                 continue
-            if parent >= len(self.nodes):
-                raise IOError("Invalid node parent data")
+            if not 0 <= parent < len(self.nodes):
+                raise EDMFormatError(
+                    f"Invalid node parent index {parent}; node count {len(self.nodes)}"
+                )
 
             node.set_parent(self.nodes[parent])
 
@@ -141,6 +144,8 @@ class EDMFile(object):
                 if callable(prepare):
                     try:
                         prepare(self.nodes, self.root.materials)
+                    except EDMFormatError:
+                        raise
                     except Exception as exc:
                         logger.warning(
                             "Prepare failed for %s '%s' (%s: %s)",
@@ -226,8 +231,10 @@ class EDMFile(object):
                         node.material = None
             if hasattr(node, "bones"):
                 if node.bones and isinstance(node.bones[0], int):
-                    node.bones = [self.nodes[x] for x in node.bones]
+                    node.bones = resolve_node_indices(self.nodes, node.bones)
                 # If we have bones we have no single 'parent'. Stick it on the root.
+                if not self.nodes:
+                    raise EDMFormatError("Skin node has no transform root")
                 node.set_parent(self.nodes[0])
 
     def _validate_indexes(self, reader):

@@ -109,7 +109,9 @@ def _refine(rig, controls, frames, samples):
     """
     rows = {bone: dict((s[0], s) for s in values) for bone, values in samples.items()}
     pending = [
-        (f0, f1) for f0, f1 in zip(frames, frames[1:]) if f1 - f0 > _MIN_REFINE_STEP
+        (f0, f1)
+        for f0, f1 in zip(frames, frames[1:], strict=False)
+        if f1 - f0 > _MIN_REFINE_STEP
     ]
     while pending:
         middles = [(f0 + f1) / 2.0 for f0, f1 in pending]
@@ -127,7 +129,10 @@ def _refine(rig, controls, frames, samples):
             if middle - f0 > _MIN_REFINE_STEP:
                 split += [(f0, middle), (middle, f1)]
         pending = split
-    return {bone: [by_frame[f] for f in sorted(by_frame)] for bone, by_frame in rows.items()}
+    return {
+        bone: [by_frame[f] for f in sorted(by_frame)]
+        for bone, by_frame in rows.items()
+    }
 
 
 def _differs(a, b, tolerance=_TOLERANCE):

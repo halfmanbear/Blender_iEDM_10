@@ -1,5 +1,32 @@
 # iEDM Addon - Python Scripts Index
 
+All project Python files are at most 400 physical lines. Older entry modules
+retain compatibility exports, while implementation modules import their
+dependencies explicitly. The shared `ImportContext` instance lives in
+`blender_importer/import_context.py`; compatibility imports reference that
+same instance.
+
+## Responsibility splits
+
+| Entry module | Focused implementation modules |
+|--------------|--------------------------------|
+| `blender_importer/anim_actions.py` | `action_values.py` interprets keys and action order; `action_curves.py` builds and copies curves |
+| `blender_importer/graph_pipeline.py` | `graph_diagnostics.py` handles transform diagnostics; `graph_collections.py` assigns collections |
+| `blender_importer/material_setup.py` | `material_animation.py` handles uniform/UV animation; `material_payload.py` preserves exporter metadata |
+| `blender_importer/materials_bridge.py` | `material_mapping.py` maps material families; `material_sockets.py` resolves sockets, UV channels, and enums |
+| `blender_importer/nodes/armature.py` | `bone_actions.py`, `bone_rest.py`, `armature_build.py`, and `skin_binding.py` separate animation, rest geometry, rig creation, and skin data |
+| `blender_importer/object_create.py` | `morph_objects.py` handles morph payloads and shape keys |
+| `blender_importer/orient_scale.py` | `orient_scale_geometry.py` computes bases and creates wrappers |
+| `blender_importer/prelude.py` | `import_context.py`, `import_logging.py`, `visibility_graph.py`, `visibility_timeline.py`, `node_identity.py`, and `exporter_properties.py` own the shared helpers |
+| `blender_importer/session.py` | `session_setup.py`, `scene_root.py`, `session_postprocess.py`, and `session_visibility.py` implement import phases |
+| `blender_importer/vis_rewrites.py` | `skin_visibility.py` restores skin transforms and inverse-scale offsets |
+| `edm_format/types/lights.py` | `light_nodes.py`, `fake_spot_nodes.py`, `fake_omni_nodes.py`, `light_parsing.py`, and `light_records.py` implement readers and decoding |
+| `edm_format/types/render_shell.py` | `render_nodes.py`, `render_special_nodes.py`, and `render_payload.py` implement registered readers and binary payload helpers |
+
+Importing the original parser entry modules still registers all supported
+node readers. Regression coverage in `tests/test_module_boundaries.py`
+checks those registrations, legacy helper imports, and shared context identity.
+
 ## Root Directory (`iEDM_10/`)
 
 | File | Purpose |

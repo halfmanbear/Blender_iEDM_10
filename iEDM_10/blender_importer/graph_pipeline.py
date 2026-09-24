@@ -1,242 +1,49 @@
-# Fragment: graph debug utilities, action helpers, and collection assignment.
-# Graph construction lives in graph_build.py; bbox utilities in bbox_utils.py.
-import math
+"""Merge and attach actions; retain graph helper import paths."""
 
-import bpy
-from mathutils import Matrix, Quaternion, Vector
+import math as math
 
-from ..edm_format.types import AnimatingNode, ArgVisibilityNode, TransformNode
-from ..utils import action_fcurves
-from .prelude import _import_ctx, _is_connector_transform, _log, _transform_display_name
+import bpy as bpy
+from mathutils import Matrix as Matrix
+from mathutils import Quaternion as Quaternion
+from mathutils import Vector as Vector
 
-# ---------------------------------------------------------------------------
-# Transform debug utilities
-# ---------------------------------------------------------------------------
-
-
-def _reset_transform_debug(options):
-    options = options or {}
-    enabled = bool(options.get("debug_transforms", False))
-    raw_limit = options.get("debug_transform_limit", 200)
-    try:
-        limit = max(1, int(raw_limit))
-    except Exception:
-        limit = 200
-    name_filter = options.get("debug_transform_filter", None)
-    if isinstance(name_filter, str) and not name_filter.strip():
-        name_filter = None
-    _import_ctx.transform_debug = {
-        "enabled": enabled,
-        "filter": name_filter,
-        "limit": limit,
-        "emitted": 0,
-        "log_path": None,
-        "chain_dumped": set(),
-    }
-    if enabled:
-        filter_str = " filter='{}'".format(name_filter) if name_filter else ""
-        print("Info: Transform debug enabled{} limit={}".format(filter_str, limit))
-
-
-def _reset_mesh_origin_mode(options):
-    options = options or {}
-    mode = str(options.get("mesh_origin_mode", "APPROX")).upper()
-    if mode not in {"APPROX", "RAW"}:
-        mode = "APPROX"
-    _import_ctx.mesh_origin_mode = mode
-
-
-def _debug_node_label(node):
-    if getattr(node, "transform", None):
-        tf = node.transform
-        name = _transform_display_name(tf) or type(tf).__name__
-        return "tf:{}<{}>".format(name, type(tf).__name__)
-    if getattr(node, "render", None):
-        rn = node.render
-        name = getattr(rn, "name", "") or type(rn).__name__
-        return "rn:{}<{}>".format(name, type(rn).__name__)
-    if getattr(node, "blender", None):
-        return "bl:{}<{}>".format(node.blender.name, node.blender.type)
-    return "<ROOT>"
-
-
-def _debug_node_path(node):
-    parts = []
-    current = node
-    while current is not None:
-        parts.append(_debug_node_label(current))
-        current = getattr(current, "parent", None)
-    return " / ".join(reversed(parts))
-
-
-def _debug_fmt_vec3(vec):
-    return "({:+.6f}, {:+.6f}, {:+.6f})".format(vec.x, vec.y, vec.z)
-
-
-def _debug_fmt_rot_deg(rot):
-    euler = rot.to_euler("XYZ")
-    return "({:+.3f}, {:+.3f}, {:+.3f})".format(
-        math.degrees(euler.x), math.degrees(euler.y), math.degrees(euler.z)
-    )
-
-
-def _debug_fmt_trs(mat):
-    loc, rot, scale = mat.decompose()
-    return _debug_fmt_vec3(loc), _debug_fmt_rot_deg(rot), _debug_fmt_vec3(scale)
-
-
-def _debug_filter_terms():
-    dbg = getattr(_import_ctx, "transform_debug", {}) or {}
-    needle = dbg.get("filter")
-    if not needle:
-        return []
-    if isinstance(needle, str):
-        return [term.strip().lower() for term in needle.split(",") if term.strip()]
-    return [str(needle).strip().lower()]
-
-
-def _anim_vector_to_blender(v):
-    return Vector(v)
-
-
-def _anim_quaternion_to_blender(q):
-    return q if hasattr(q, "to_matrix") else Quaternion(q)
-
-
-def _is_neg90_x_basis_matrix(mat, eps=1e-3):
-    try:
-        target = (
-            (1.0, 0.0, 0.0),
-            (0.0, 0.0, 1.0),
-            (0.0, -1.0, 0.0),
-        )
-        for r in range(3):
-            for c in range(3):
-                if abs(float(mat[r][c]) - target[r][c]) > eps:
-                    return False
-        return True
-    except Exception:
-        return False
-
-
-def _anim_scale_components(value):
-    if len(value) < 3:
-        return (1.0, 1.0, 1.0)
-    return (value[0], value[1], value[2])
-
-
-def _expected_local_matrix(tfnode, blender_obj=None):
-    if tfnode is None:
-        return None
-    if isinstance(tfnode, TransformNode):
-        is_connector = _is_connector_transform(tfnode, blender_obj)
-        local_mat = Matrix(tfnode.matrix)
-        if is_connector:
-            local_mat = local_mat @ Matrix.Rotation(math.radians(-90.0), 4, "X")
-        if (
-            blender_obj is not None
-            and blender_obj.parent is not None
-            and _import_ctx.edm_version >= 10
-        ):
-            local_mat = blender_obj.parent.matrix_basis @ local_mat
-        return local_mat
-    if isinstance(tfnode, AnimatingNode):
-        local_mat = None
-        if hasattr(tfnode, "zero_transform_local_matrix"):
-            local_mat = tfnode.zero_transform_local_matrix
-        elif hasattr(tfnode, "zero_transform_matrix"):
-            local_mat = tfnode.zero_transform_matrix
-        elif hasattr(tfnode, "zero_transform"):
-            loc, rot, scale = tfnode.zero_transform
-            local_mat = Matrix.LocRotScale(loc, rot, scale)
-        if (
-            local_mat is not None
-            and blender_obj is not None
-            and blender_obj.parent is not None
-            and _import_ctx.edm_version >= 10
-        ):
-            local_mat = blender_obj.parent.matrix_basis @ local_mat
-        return local_mat
-    return None
-
-
-def _debug_filter_match(node, path):
-    name_filter = _import_ctx.transform_debug.get("filter")
-    if not name_filter:
-        return True
-    needle = name_filter.lower()
-    candidates = [path]
-    if getattr(node, "blender", None):
-        candidates.append(node.blender.name)
-    if getattr(node, "transform", None):
-        candidates.append(getattr(node.transform, "name", ""))
-    if getattr(node, "render", None):
-        candidates.append(getattr(node.render, "name", ""))
-    return any(needle in (item or "").lower() for item in candidates)
-
-
-def _debug_dump_node_transform(node):
-    if not _import_ctx.transform_debug.get("enabled"):
-        return
-    if _import_ctx.transform_debug["emitted"] >= _import_ctx.transform_debug["limit"]:
-        return
-    if not getattr(node, "blender", None):
-        return
-
-    path = _debug_node_path(node)
-    if not _debug_filter_match(node, path):
-        return
-
-    obj = node.blender
-    bpy.context.view_layer.update()
-
-    edm_local = _expected_local_matrix(getattr(node, "transform", None), obj)
-    blender_local = obj.matrix_local.copy()
-    blender_basis = obj.matrix_basis.copy()
-    blender_world = obj.matrix_world.copy()
-    parent_name = obj.parent.name if obj.parent else "<none>"
-
-    print("[iEDM][TFDBG] {}".format(path))
-    print("  object={} type={} parent={}".format(obj.name, obj.type, parent_name))
-
-    if edm_local is not None:
-        loc, rot, scale = _debug_fmt_trs(edm_local)
-        print("  edm_local  loc={} rot_deg={} scale={}".format(loc, rot, scale))
-    else:
-        print("  edm_local  <none>")
-
-    loc, rot, scale = _debug_fmt_trs(blender_local)
-    print("  bl_localM  loc={} rot_deg={} scale={}".format(loc, rot, scale))
-    loc, rot, scale = _debug_fmt_trs(blender_basis)
-    print("  bl_basis   loc={} rot_deg={} scale={}".format(loc, rot, scale))
-    loc, rot, scale = _debug_fmt_trs(blender_world)
-    print("  bl_world   loc={} rot_deg={} scale={}".format(loc, rot, scale))
-
-    if edm_local is not None:
-        ed_loc, ed_rot, ed_scale = edm_local.decompose()
-        bl_loc, bl_rot, bl_scale = blender_basis.decompose()
-        loc_error = (bl_loc - ed_loc).length
-        scale_error = (bl_scale - ed_scale).length
-        rot_error = math.degrees(ed_rot.rotation_difference(bl_rot).angle)
-        print(
-            "  local_err  loc={:.6g} rot_deg={:.6g} scale={:.6g}".format(
-                loc_error, rot_error, scale_error
-            )
-        )
-
-    _import_ctx.transform_debug["emitted"] += 1
-
-
-# ---------------------------------------------------------------------------
-# Semantic name mapping (populated by import capabilities)
-# ---------------------------------------------------------------------------
-
-_SEMANTIC_NAME_MAP = {}
-
-
-# ---------------------------------------------------------------------------
-# Action helpers
-# ---------------------------------------------------------------------------
+from ..edm_format.types import AnimatingNode as AnimatingNode
+from ..edm_format.types import ArgVisibilityNode as ArgVisibilityNode
+from ..edm_format.types import TransformNode as TransformNode
+from ..utils import action_fcurves as action_fcurves
+from .graph_collections import _SEMANTIC_NAME_MAP as _SEMANTIC_NAME_MAP
+from .graph_collections import _assign_collections as _assign_collections
+from .graph_collections import _categorize_file_root as _categorize_file_root
+from .graph_collections import _classify_graph_nodes as _classify_graph_nodes
+from .graph_collections import _create_lod_collections as _create_lod_collections
+from .graph_collections import _get_or_create_child_col as _get_or_create_child_col
+from .graph_collections import (
+    _inherit_graph_collection_categories as _inherit_graph_collection_categories,
+)
+from .graph_collections import (
+    _move_objects_to_categories as _move_objects_to_categories,
+)
+from .graph_diagnostics import (
+    _anim_quaternion_to_blender as _anim_quaternion_to_blender,
+)
+from .graph_diagnostics import _anim_scale_components as _anim_scale_components
+from .graph_diagnostics import _anim_vector_to_blender as _anim_vector_to_blender
+from .graph_diagnostics import _debug_dump_node_transform as _debug_dump_node_transform
+from .graph_diagnostics import _debug_filter_match as _debug_filter_match
+from .graph_diagnostics import _debug_filter_terms as _debug_filter_terms
+from .graph_diagnostics import _debug_fmt_rot_deg as _debug_fmt_rot_deg
+from .graph_diagnostics import _debug_fmt_trs as _debug_fmt_trs
+from .graph_diagnostics import _debug_fmt_vec3 as _debug_fmt_vec3
+from .graph_diagnostics import _debug_node_label as _debug_node_label
+from .graph_diagnostics import _debug_node_path as _debug_node_path
+from .graph_diagnostics import _expected_local_matrix as _expected_local_matrix
+from .graph_diagnostics import _is_neg90_x_basis_matrix as _is_neg90_x_basis_matrix
+from .graph_diagnostics import _reset_mesh_origin_mode as _reset_mesh_origin_mode
+from .graph_diagnostics import _reset_transform_debug as _reset_transform_debug
+from .import_context import _import_ctx as _import_ctx
+from .import_context import _log as _log
+from .node_identity import _is_connector_transform as _is_connector_transform
+from .node_identity import _transform_display_name as _transform_display_name
 
 
 def _get_action_argument(action):
@@ -355,194 +162,3 @@ def _push_action_to_nla(ob, action):
             exc=e,
         )
         return False
-
-
-# ---------------------------------------------------------------------------
-# Collection assignment
-# ---------------------------------------------------------------------------
-
-
-def _get_or_create_child_col(parent, name):
-    col = bpy.data.collections.get(name)
-    if col is None:
-        col = bpy.data.collections.new(name)
-    if parent is not None and col.name not in parent.children.keys():
-        parent.children.link(col)
-    return col
-
-
-def _classify_graph_nodes(graph):
-    obj_category = {}
-    for n in graph.nodes:
-        if not getattr(n, "_is_primary", False) or not n.blender:
-            continue
-        if n.render is None:
-            obj_category[n.blender] = None
-            continue
-        rtype = type(n.render).__name__
-        if rtype in ("ShellNode", "SegmentsNode"):
-            obj_category[n.blender] = "collision"
-        elif rtype == "Connector":
-            obj_category[n.blender] = "vehicle"
-        elif rtype == "RenderNode":
-            if n.blender.parent is None:
-                render_local = Matrix.Identity(4)
-                try:
-                    if getattr(n, "_local_bl", None) is not None:
-                        render_local = Matrix(n._local_bl)
-                except Exception:
-                    render_local = Matrix.Identity(4)
-                try:
-                    if hasattr(n.render, "matrix"):
-                        render_local = render_local @ Matrix(n.render.matrix)
-                    elif hasattr(n.render, "pos"):
-                        render_local = render_local @ Matrix.Translation(
-                            Vector(n.render.pos[:3])
-                        )
-                except Exception as exc:
-                    _log.debug("Optional operation failed: {}".format(exc), level=2)
-                render_name = str(getattr(n.render, "name", "") or "")
-                obj_category[n.blender] = (
-                    "texture_anim"
-                    if not render_name and render_local.is_identity
-                    else None
-                )
-            else:
-                obj_category[n.blender] = (
-                    None
-                    if isinstance(getattr(n, "transform", None), ArgVisibilityNode)
-                    else "vehicle"
-                )
-        else:
-            obj_category[n.blender] = None
-    return obj_category
-
-
-def _inherit_graph_collection_categories(graph, obj_category):
-    changed = True
-    while changed:
-        changed = False
-        for n in graph.nodes:
-            if not getattr(n, "_is_primary", False) or not n.blender:
-                continue
-            if obj_category.get(n.blender) is not None:
-                continue
-            child_cats = {obj_category.get(child) for child in n.blender.children}
-            if "collision" in child_cats and "vehicle" not in child_cats:
-                obj_category[n.blender] = "collision"
-                changed = True
-            elif "vehicle" in child_cats or "texture_anim" in child_cats:
-                obj_category[n.blender] = "vehicle"
-                changed = True
-
-    changed = True
-    while changed:
-        changed = False
-        for obj, cat in list(obj_category.items()):
-            if cat is None:
-                continue
-            for child in list(obj.children):
-                if obj_category.get(child) is not None:
-                    continue
-                is_helper = child.get("_iedm_identity_passthrough") or child.get(
-                    "_iedm_vis_passthrough"
-                )
-                if is_helper or getattr(child, "type", "") == "EMPTY":
-                    obj_category[child] = cat
-                    changed = True
-    return obj_category
-
-
-def _assign_collections(graph):
-    """Create named import collections and assign Blender objects by category."""
-    scene = bpy.context.scene
-
-    col_vehicle = _get_or_create_child_col(scene.collection, "Vehicle")
-    col_collision = _get_or_create_child_col(col_vehicle, "Collision")
-    col_tex_anim = _get_or_create_child_col(scene.collection, "Texture_Animation")
-
-    obj_category = _inherit_graph_collection_categories(
-        graph, _classify_graph_nodes(graph)
-    )
-
-    _col_map = {
-        "collision": col_collision,
-        "vehicle": col_vehicle,
-        "texture_anim": col_tex_anim,
-    }
-
-    _categorize_file_root(graph, obj_category)
-    _move_objects_to_categories(obj_category, _col_map)
-
-    def _exclude_layer_collection(layer_collection, name):
-        if layer_collection.collection.name == name:
-            layer_collection.exclude = True
-            return True
-        for child in layer_collection.children:
-            if _exclude_layer_collection(child, name):
-                return True
-        return False
-
-    _exclude_layer_collection(
-        bpy.context.view_layer.layer_collection, "Texture_Animation"
-    )
-
-    _create_lod_collections(graph, col_vehicle)
-
-
-def _categorize_file_root(graph, obj_category):
-    """Place an unparented file root with its vehicle children."""
-    root = getattr(getattr(graph, "root", None), "blender", None)
-    if (
-        not root
-        or getattr(root, "name", "") != "_EDMFileRoot"
-        or root.parent is not None
-    ):
-        return
-    child_categories = {obj_category.get(child) for child in root.children}
-    if "vehicle" in child_categories and "collision" not in child_categories:
-        obj_category[root] = "vehicle"
-
-
-def _move_objects_to_categories(obj_category, collection_map):
-    """Move categorized Blender objects into their target collections."""
-    for obj, category in obj_category.items():
-        target = collection_map.get(category)
-        if target is None:
-            continue
-        for current_collection in list(obj.users_collection):
-            try:
-                current_collection.objects.unlink(obj)
-            except Exception as exc:
-                _log.warn("collection unlink '{}': {}".format(obj.name, exc), exc=exc)
-        try:
-            target.objects.link(obj)
-        except RuntimeError:
-            pass
-
-def _create_lod_collections(graph, vehicle_collection):
-    """Create named collections for post-processed LOD levels."""
-    # Names retain exporter-compatible LOD distances during round-trips.
-    for n in graph.nodes:
-        if not getattr(n, "_lod_post_children", False):
-            continue
-        levels = getattr(getattr(n, "transform", None), "level", [])
-        for i, ((_start, end), child) in enumerate(
-            zip(levels, n.children, strict=False)
-        ):
-            if not getattr(child, "blender", None):
-                continue
-            col_name = "LOD_{}_{}".format(i, int(end))
-            col_lod = _get_or_create_child_col(vehicle_collection, col_name)
-            objs_to_move = [child.blender] + list(child.blender.children_recursive)
-            for obj in objs_to_move:
-                if obj.name in vehicle_collection.objects:
-                    try:
-                        vehicle_collection.objects.unlink(obj)
-                    except Exception as exc:
-                        _log.debug("Optional operation failed: {}".format(exc), level=2)
-                if obj.name not in col_lod.objects:
-                    try:
-                        col_lod.objects.link(obj)
-                    except Exception as exc:
-                        _log.debug("Optional operation failed: {}".format(exc), level=2)

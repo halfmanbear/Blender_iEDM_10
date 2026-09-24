@@ -51,15 +51,17 @@ must not grow. When a file or function is brought within the limit, remove its
 baseline entry; do not increase an entry to accommodate new code. The baseline
 is an inventory for migration, not a general exemption.
 
-The initial module split moved existing Ruff findings into new module paths.
-Those findings are recorded in the baseline and cannot increase. New code in
-those modules must be checked against the existing count for each Ruff rule.
+Responsibility-based module splits move existing Ruff findings to their new
+module paths. Such migrations must remove the corresponding allowance from
+the original file and must not increase the combined count for any rule.
+New code receives no additional allowance.
 
 For a necessary exception that cannot be eliminated in the current change,
 state the concrete reason and an exit condition in the review description, and
 record the specific exception in this document. Do not suppress a rule without
 an explanation. As of this standard's adoption, there are no new exceptions.
 
-The first split targets `blender_importer/nodes/core.py`,
-`blender_importer/lights.py`, and `edm_format/types/core.py`. Remaining entries
-in the baseline are the measured follow-up backlog.
+All project Python files now meet the 400-physical-line limit, and
+`legacy_files` is empty. No file-size exceptions remain. The remaining Ruff
+entries are the measured follow-up backlog; they do not exempt files from
+the size limit.

@@ -5,8 +5,6 @@ from unittest.mock import patch
 
 
 def run_prechecks(bpy, Matrix, orient_scale, vis_rewrites, session, action_fcurves):
-    from iEDM_10.blender_importer import anim_actions
-
     bpy.ops.wm.read_factory_settings(use_empty=True)
     bpy.ops.object.armature_add(location=(2, 3, 4))
     rig = bpy.context.object
@@ -56,6 +54,17 @@ def run_prechecks(bpy, Matrix, orient_scale, vis_rewrites, session, action_fcurv
         )
     assert child.parent != control and child.matrix_basis == basis
     print("PASS visibility-control child transform")
+
+    _check_visibility_thresholds(bpy, Matrix, session, action_fcurves)
+    _check_lifted_prefix(Matrix, orient_scale, action_fcurves)
+    _check_light_shear(Matrix)
+    _check_rotation_signs(bpy, action_fcurves)
+    _check_mesh_shear(bpy, Matrix)
+    _check_export_values()
+
+
+def _check_visibility_thresholds(bpy, Matrix, session, action_fcurves):
+    from iEDM_10.blender_importer import anim_actions
 
     ranges = [(0.0025, 0.0075), (-0.755, -0.25), (0.3, 0.6), (0.5, 1.01)]
     for prefix_matrix in (None, Matrix.Identity(4)):
@@ -111,9 +120,13 @@ def run_prechecks(bpy, Matrix, orient_scale, vis_rewrites, session, action_fcurv
     session._import_ctx.bonetransform_prefix_matrix = None
     print("PASS normalized argument timeline and fractional visibility thresholds")
 
+
+def _check_lifted_prefix(Matrix, orient_scale, action_fcurves):
     # Oriented-scale rebuilds lift base.matrix @ T(base.position) into a parent
     # helper; the wrapper's position keys must then not be rotated again.
     from mathutils import Euler, Vector
+
+    from iEDM_10.blender_importer import anim_actions
 
     q1 = Euler((0.3, -0.7, 1.1)).to_quaternion()
     base = SimpleNamespace(
@@ -156,6 +169,8 @@ def run_prechecks(bpy, Matrix, orient_scale, vis_rewrites, session, action_fcurv
         assert (got - want).length < 1e-6, ("lifted prefix position key", got, want)
     print("PASS lifted oriented-scale prefix position keys")
 
+
+def _check_light_shear(Matrix):
     # Sheared light frames lose shear in Blender; the beam axis (EDM +X, which
     # the exporter's Ry(+90) maps to the Blender light's -Z) must stay exact.
     from iEDM_10.blender_importer import node_transform
@@ -185,6 +200,8 @@ def run_prechecks(bpy, Matrix, orient_scale, vis_rewrites, session, action_fcurv
         assert node_transform._light_frame_keeping_beam(untouched) == untouched
     print("PASS sheared light frame keeps beam axis")
 
+
+def _check_rotation_signs(bpy, action_fcurves):
     # Shortest-path signs follow the file keys, not the basis-changed ones:
     # orthogonal keys (+/-90 degrees, dot 0) must not be flipped by basis
     # noise, or arg 0 (the midpoint) turns 180 degrees, while a file dot of
@@ -206,7 +223,9 @@ def run_prechecks(bpy, Matrix, orient_scale, vis_rewrites, session, action_fcurv
             for i in range(4)
         ]
         middle = Quaternion([c.evaluate(100.0) for c in curves]).normalized()
-        first, last = (Quaternion([c.evaluate(f) for c in curves]) for f in (0.0, 200.0))
+        first, last = (
+            Quaternion([c.evaluate(f) for c in curves]) for f in (0.0, 200.0)
+        )
         bpy.data.actions.remove(action)
         # DCS negates the second key when the stored dot is negative, so the
         # float32 keys the exporter reads must keep a positive dot.
@@ -242,6 +261,10 @@ def run_prechecks(bpy, Matrix, orient_scale, vis_rewrites, session, action_fcurv
     assert middle.z < -0.5, middle
     print("PASS half-turn rotation keys keep their file signs")
 
+
+def _check_mesh_shear(bpy, Matrix):
+    from iEDM_10.blender_importer import node_transform
+
     # A slightly sheared mesh frame (AH-6J tail rotor lever) must reach the
     # exporter's matrix_local exactly, although the basis cannot hold shear.
     frame = Matrix(
@@ -270,6 +293,10 @@ def run_prechecks(bpy, Matrix, orient_scale, vis_rewrites, session, action_fcurv
     assert frame_error() < 1e-5 and "_iedm_shear_residual" not in obj
     bpy.data.objects.remove(obj)
     print("PASS sheared mesh frame kept in matrix_parent_inverse")
+
+
+def _check_export_values():
+    import math
 
     # Light and material values must invert the exporter's own conversions.
     from iEDM_10.blender_importer import light_values

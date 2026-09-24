@@ -1,32 +1,9 @@
 {
-  "legacy_files": {
-    "iEDM_10/blender_importer/anim_actions.py": 628,
-    "iEDM_10/blender_importer/graph_pipeline.py": 548,
-    "iEDM_10/blender_importer/material_setup.py": 808,
-    "iEDM_10/blender_importer/materials_bridge.py": 556,
-    "iEDM_10/blender_importer/nodes/armature.py": 1107,
-    "iEDM_10/blender_importer/object_create.py": 415,
-    "iEDM_10/blender_importer/orient_scale.py": 538,
-    "iEDM_10/blender_importer/prelude.py": 841,
-    "iEDM_10/blender_importer/session.py": 839,
-    "iEDM_10/blender_importer/vis_rewrites.py": 543,
-    "iEDM_10/edm_format/types/lights.py": 555,
-    "iEDM_10/edm_format/types/render_shell.py": 652
-  },
+  "legacy_files": {},
   "legacy_functions": {},
   "ruff_findings": {
     "iEDM_10/__init__.py": {
       "F401": 1
-    },
-    "iEDM_10/blender_importer/anim_actions.py": {
-      "B023": 2,
-      "B905": 3,
-      "E501": 2,
-      "E731": 1,
-      "F841": 2,
-      "I001": 1,
-      "S110": 6,
-      "S112": 2
     },
     "iEDM_10/blender_importer/animation.py": {
       "B905": 3,
@@ -52,12 +29,6 @@
       "S110": 2
     },
     "iEDM_10/blender_importer/graph_pipeline.py": {
-      "B007": 1,
-      "B009": 1,
-      "B905": 1,
-      "C901": 1,
-      "I001": 1,
-      "S110": 3,
       "S112": 1
     },
     "iEDM_10/blender_importer/graph_postprocess.py": {
@@ -67,6 +38,9 @@
       "C901": 1,
       "E501": 1,
       "F401": 2
+    },
+    "iEDM_10/blender_importer/import_logging.py": {
+      "S112": 1
     },
     "iEDM_10/blender_importer/import_pipeline.py": {
       "I001": 1
@@ -96,15 +70,7 @@
     "iEDM_10/blender_importer/lights.py": {
       "I001": 1
     },
-    "iEDM_10/blender_importer/material_setup.py": {
-      "C901": 3,
-      "E501": 9,
-      "I001": 1,
-      "S110": 7
-    },
-    "iEDM_10/blender_importer/materials_bridge.py": {
-      "C901": 1,
-      "I001": 1,
+    "iEDM_10/blender_importer/material_sockets.py": {
       "S112": 2
     },
     "iEDM_10/blender_importer/mesh_create.py": {
@@ -114,18 +80,14 @@
       "E501": 3,
       "I001": 1
     },
+    "iEDM_10/blender_importer/morph_objects.py": {
+      "S112": 1
+    },
     "iEDM_10/blender_importer/node_transform.py": {
       "C901": 1,
       "E501": 4,
       "I001": 1,
       "S110": 4
-    },
-    "iEDM_10/blender_importer/nodes/armature.py": {
-      "C901": 4,
-      "E501": 15,
-      "F401": 1,
-      "I001": 1,
-      "S110": 5
     },
     "iEDM_10/blender_importer/nodes/core.py": {
       "I001": 1
@@ -165,43 +127,21 @@
     "iEDM_10/blender_importer/nodes/processing.py": {
       "I001": 1
     },
+    "iEDM_10/blender_importer/nodes/skin_binding.py": {
+      "S110": 1
+    },
     "iEDM_10/blender_importer/nodes/visibility.py": {
       "C901": 1,
       "E501": 1
-    },
-    "iEDM_10/blender_importer/object_create.py": {
-      "C901": 1,
-      "E501": 1,
-      "F401": 1,
-      "I001": 1,
-      "S110": 3,
-      "S112": 1
     },
     "iEDM_10/blender_importer/orient_fixes.py": {
       "C901": 1,
       "E501": 3
     },
     "iEDM_10/blender_importer/orient_scale.py": {
-      "C901": 1,
-      "I001": 1,
-      "S110": 2,
       "S112": 1
     },
-    "iEDM_10/blender_importer/prelude.py": {
-      "C901": 1,
-      "E402": 1,
-      "E501": 10,
-      "F401": 10,
-      "I001": 1,
-      "S110": 4,
-      "S112": 1
-    },
-    "iEDM_10/blender_importer/session.py": {
-      "C901": 1,
-      "E501": 6,
-      "F841": 1,
-      "I001": 2,
-      "S110": 2,
+    "iEDM_10/blender_importer/session_postprocess.py": {
       "S112": 1
     },
     "iEDM_10/blender_importer/skin_rewrites.py": {
@@ -209,11 +149,7 @@
       "I001": 1,
       "S110": 1
     },
-    "iEDM_10/blender_importer/vis_rewrites.py": {
-      "C901": 4,
-      "E501": 2,
-      "I001": 1,
-      "S110": 2,
+    "iEDM_10/blender_importer/skin_visibility.py": {
       "S112": 2
     },
     "iEDM_10/edm_format/__init__.py": {
@@ -261,19 +197,11 @@
       "B024": 1,
       "B905": 1
     },
-    "iEDM_10/edm_format/types/lights.py": {
-      "E501": 2,
-      "I001": 1,
-      "S110": 2,
+    "iEDM_10/edm_format/types/light_parsing.py": {
       "S112": 1
     },
     "iEDM_10/edm_format/types/number.py": {
       "E501": 2,
-      "I001": 1
-    },
-    "iEDM_10/edm_format/types/render_shell.py": {
-      "C901": 1,
-      "E501": 3,
       "I001": 1
     },
     "iEDM_10/io_operators.py": {
