@@ -593,8 +593,14 @@ def _run_import_postprocess(edm, graph, options):
     _finish_import_postprocess(edm, graph, options)
     _finalize_render_origins(graph)
     from .bone_controls import build_bone_control_graph
+    from .export_visibility import place_export_visibility
+    from .exporter_frames import undo_exporter_frame_rotations
+    from .skin_space import bake_skins_to_armature_space
 
+    undo_exporter_frame_rotations()
     build_bone_control_graph(graph)
+    place_export_visibility(graph)
+    bake_skins_to_armature_space()
 
 
 def read_file(filename, options=None):

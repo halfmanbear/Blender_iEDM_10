@@ -73,13 +73,14 @@ def _mesh_bounds_center_and_extent(mesh_obj):
 
 
 def _choose_skin_bind_target(
-    skin_bones, bone_rest_matrix_by_name, mesh_obj, skin_node, channel_slices
+    control_bone, weight_bones, bone_rest_matrix_by_name, mesh_obj, skin_node,
+    channel_slices,
 ):
     """Select the bind/rest bone used to localize absolute SkinNode vertices."""
-    if not skin_bones:
+    if not control_bone:
         return "", None
 
-    default_name = skin_bones[0]
+    default_name = control_bone
     default_matrix = bone_rest_matrix_by_name.get(default_name)
     default_loc = (
         default_matrix.to_translation() if default_matrix is not None else None
@@ -96,7 +97,7 @@ def _choose_skin_bind_target(
         packed_bone_index_offset = pos_slice[0] + 3
 
     weight_sums = _skin_bone_weight_sums(
-        skin_node, slice21, packed_bone_index_offset, len(skin_bones)
+        skin_node, slice21, packed_bone_index_offset, len(weight_bones)
     )
 
     best_name = default_name
@@ -107,7 +108,7 @@ def _choose_skin_bind_target(
     for bone_index, weight_sum in weight_sums.items():
         if weight_sum <= 0.0:
             continue
-        bone_name = skin_bones[bone_index]
+        bone_name = weight_bones[bone_index]
         mat = bone_rest_matrix_by_name.get(bone_name)
         if mat is None:
             continue
@@ -920,16 +921,16 @@ def _bind_skin_object(mesh_obj, skin_node):
     if arm_obj is None or mesh_obj is None or mesh_obj.type != "MESH":
         return
 
-    skin_bones = []
-    for bone_node in getattr(skin_node, "bones", []):
-        name = bone_name_by_transform.get(bone_node)
-        if name:
-            skin_bones.append(name)
+    palette = [bone_name_by_transform.get(b) for b in getattr(skin_node, "bones", [])]
+    skin_bones = [name for name in palette if name]
     if not skin_bones:
         return
+    # Vertex bone index i is palette[i + 1]; palette[0] is the control bone.
+    control_bone = palette[0] or skin_bones[0]
+    weight_bones = palette[1:]
 
     group_map = {}
-    for bone_name in skin_bones:
+    for bone_name in dict.fromkeys(skin_bones):
         vg = mesh_obj.vertex_groups.get(bone_name)
         if vg is None:
             vg = mesh_obj.vertex_groups.new(name=bone_name)
@@ -945,10 +946,7 @@ def _bind_skin_object(mesh_obj, skin_node):
     arm_mod.object = arm_obj
 
     bind_target_name, bind_target_loc = _choose_skin_bind_target(
-        skin_bones,
-        bone_rest_matrix_by_name,
-        mesh_obj,
-        skin_node,
+        control_bone, weight_bones, bone_rest_matrix_by_name, mesh_obj, skin_node,
         channel_slices,
     )
     try:
@@ -969,7 +967,7 @@ def _bind_skin_object(mesh_obj, skin_node):
     if not mesh_obj.data.vertices:
         return
     _assign_skin_vertex_weights(
-        mesh_obj, skin_node, skin_bones, group_map, channel_slices
+        mesh_obj, skin_node, control_bone, weight_bones, group_map, channel_slices
     )
     _bake_skin_mesh_object_transforms(mesh_obj)
 
@@ -1024,7 +1022,7 @@ def _skin_parent_candidate_score(obj, debug_type, name, bind_target_loc):
     return score
 
 def _assign_skin_vertex_weights(
-    mesh_obj, skin_node, skin_bones, group_map, channel_slices
+    mesh_obj, skin_node, control_bone, weight_bones, group_map, channel_slices
 ):
     nverts = len(mesh_obj.data.vertices)
     if nverts == 0:
@@ -1048,7 +1046,7 @@ def _assign_skin_vertex_weights(
         bone_indices = None
         if packed_bone_index_offset is not None and packed_bone_index_offset < len(src):
             decoded = _decode_packed_bone_indices(src[packed_bone_index_offset])
-            if decoded and any(0 <= int(idx) < len(skin_bones) for idx in decoded):
+            if decoded and any(0 <= int(idx) < len(weight_bones) for idx in decoded):
                 bone_indices = decoded
 
         # Merge repeated packed slots before normalizing actual influences.
@@ -1057,24 +1055,22 @@ def _assign_skin_vertex_weights(
             bone_index = (
                 int(bone_indices[bi]) if bone_indices and bi < len(bone_indices) else bi
             )
-            if not 0 <= bone_index < len(skin_bones) or weight <= 0.0:
+            in_range = 0 <= bone_index < len(weight_bones)
+            name = weight_bones[bone_index] if in_range else None
+            if not name or weight <= 0.0:
                 continue
-            name = skin_bones[bone_index]
             influences[name] = influences.get(name, 0.0) + weight
         total = sum(influences.values())
         # Match the exporter's 0.001 influence filter before normalizing.
-        if total > 0.0:
-            influences = {
-                name: weight
-                for name, weight in influences.items()
-                if weight / total >= 0.001
-            }
-            total = sum(influences.values())
-        if total > 0.0:
-            for name, weight in influences.items():
-                group_map[name].add([vi], weight / total, "REPLACE")
-        else:
-            group_map[skin_bones[0]].add([vi], 1.0, "REPLACE")
+        influences = {n: w for n, w in influences.items() if w >= 0.001 * total}
+        # Weight missing from 1.0 follows the control bone (palette[0]); the
+        # exporter caps influences at four, so only add it when it fits.
+        rest = 1.0 - sum(influences.values())
+        if rest >= 0.001 and len(influences) < 4:
+            influences[control_bone] = influences.get(control_bone, 0.0) + rest
+        total = sum(influences.values())
+        for name, weight in influences.items():
+            group_map[name].add([vi], weight / total, "REPLACE")
 
 def _bake_skin_mesh_object_transforms(mesh_obj):
     """Bake non-identity matrix_basis into vertices so the basis becomes identity.

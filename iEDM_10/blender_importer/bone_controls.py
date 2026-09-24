@@ -10,6 +10,7 @@ from mathutils import Matrix
 from ..edm_format.types import ArgAnimationNode
 from ..utils import action_fcurves
 from .anim_actions import _scale_orientation_quaternion
+from .bone_nla import bake_bone_nla
 from .prelude import _ROOT_BASIS_FIX, _anim_frame_to_scene_frame, _import_ctx
 
 
@@ -202,6 +203,9 @@ def build_bone_control_graph(graph):
     rig.data.pose_position = "POSE"
     rig["_iedm_source_pose_graph"] = True
     ctx["source_pose_objects"] = sources
+    bpy.context.view_layer.update()
+    # The exporter cannot read constraints; give it per-argument NLA strips.
+    bake_bone_nla(rig, collection)
     for obj in collection.objects:
         obj.hide_set(True)
     bpy.context.view_layer.update()

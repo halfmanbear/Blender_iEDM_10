@@ -437,7 +437,12 @@ def _create_material_socket_animations(mat, material):
     except ImportError:
         return
 
-    group_node = next((n for n in mat.node_tree.nodes if n.type == "GROUP"), None)
+    # The bridge node is usually a custom official node (type "CUSTOM"), not a
+    # plain ShaderNodeGroup; match anything that carries a group node tree.
+    group_node = next(
+        (n for n in mat.node_tree.nodes if getattr(n, "node_tree", None) is not None),
+        None,
+    )
     if group_node is None:
         return
 

@@ -4,6 +4,13 @@ import bpy
 
 from .prelude import _ensure_official_material_bridge
 
+_SELF_ILLUM_MATERIALS = {
+    "self_illum_material",
+    "transparent_self_illum_material",
+    "additive_self_illum_material",
+    "additive_self_illum_color_material",
+    "additive_self_illum_tex_material",
+}
 
 def _map_edm_material_to_official_kind(edm_material_name):
     mat = (edm_material_name or "").lower()
@@ -19,13 +26,6 @@ def _map_edm_material_to_official_kind(edm_material_name):
         "fake_omni_lights2",
         "fake_als_lights",
         "animated_fake_omni_lights2",
-        # Self-illumination materials are emissive render meshes; treat as
-        # fake_omni so the official exporter preserves the emissive kind.
-        "self_illum_material",
-        "transparent_self_illum_material",
-        "additive_self_illum_material",
-        "additive_self_illum_color_material",
-        "additive_self_illum_tex_material",
     }:
         return "fake_omni"
     if mat in {
@@ -37,6 +37,11 @@ def _map_edm_material_to_official_kind(edm_material_name):
         return "fake_spot"
     if mat in {"deck_material"}:
         return "deck"
+    # Self-illum materials are emissive render meshes. The official fake-omni
+    # path converts meshes into point lights and drops the geometry, so export
+    # them through the default material's emissive block instead.
+    if mat in _SELF_ILLUM_MATERIALS:
+        return "default"
     # Explicit default-family names resolve to "default" rather than falling
     # through, so unknown future names still get the fallback warning path.
     if mat in {
@@ -429,6 +434,11 @@ def _attach_official_material_bridge(mat, edm_material, texture_nodes):
     bridge, nodes, links, names, official_name, group_node = prepared
 
     trans_mode = _official_transparency_enum(getattr(edm_material, "blending", 0))
+    mat_lower = (getattr(edm_material, "material_name", "") or "").lower()
+    if mat_lower.startswith("additive_self_illum"):
+        # The exporter only emits additive_self_illum_* for SUM_BLENDING_SI;
+        # the file itself stores these with plain sum blending (3).
+        trans_mode = "SUM_BLENDING_SI"
     shadow_mode = _official_shadow_enum(getattr(edm_material, "shadows", None))
 
     _set_group_enum_property(group_node, "transparency", trans_mode)
@@ -472,27 +482,10 @@ def _attach_official_material_bridge(mat, edm_material, texture_nodes):
     _route_explicit_uv_channels(nodes, links, texture_nodes, tex_uv_channels)
 
     if official_name == names["default"]:
-        if 3 not in tex_uv_channels and tex3:
-            uv_node = _ensure_uv_map_node(nodes)
-            if uv_node:
-                _link_uv_to_texture_vector(links, uv_node, tex3)
-        _link_texture_to_group_input(links, tex0, group_node, "Base Color")
-        _link_texture_to_group_input(links, tex0, group_node, "Base Alpha*", "Alpha")
-        _link_texture_to_group_input(links, tex3, group_node, "Decal Color")
-        _link_texture_to_group_input(links, tex3, group_node, "Decal Alpha*", "Alpha")
-        _link_texture_to_group_input(links, tex10, group_node, "Normal (Non-Color)")
-        _link_texture_to_group_input(links, tex2, group_node, "RoughMet (Non-Color)")
-        _link_texture_to_group_input(links, tex9, group_node, "LightMap (Non-Color)")
-        _link_texture_to_group_input(links, tex8, group_node, "Emissive")
-        _link_texture_to_group_input(links, tex8, group_node, "Emissive Mask", "Alpha")
-        _link_texture_to_group_input(links, tex_flir, group_node, "Flir")
-        _link_texture_to_group_input(links, tex5, group_node, "Damage Base")
-        _link_texture_to_group_input(
-            links, tex10, group_node, "Damage Normal (Non-Color)"
-        )
-        _link_texture_to_group_input(links, tex18, group_node, "Damage Map (Non-Color)")
-        _link_texture_to_group_input(
-            links, tex18, group_node, "Damage Map Alpha", "Alpha"
+        from .material_default_links import link_default_material
+
+        link_default_material(
+            nodes, links, group_node, edm_material, texture_nodes, tex_uv_channels
         )
     elif official_name == names["deck"]:
         _link_texture_to_group_input(links, tex0, group_node, "Tiled Base Color")
@@ -537,7 +530,6 @@ def _attach_official_material_bridge(mat, edm_material, texture_nodes):
         _link_texture_to_group_input(
             links, tex18, group_node, "Damage Map Alpha", "Alpha"
         )
-        mat_lower = (getattr(edm_material, "material_name", "") or "").lower()
         glass_type_val = (
             "GLASS_COCKPIT" if mat_lower == "glass_material" else "GLASS_INSTRUMENTAL"
         )
